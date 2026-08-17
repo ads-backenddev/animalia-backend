@@ -126,10 +126,14 @@ RF-02, RF-18, RF-19.
 | `PUT` | `/api/usuarios/me` | Personaliza el perfil: foto, nombre, área geográfica y teléfono | Autenticado | `ActualizarPerfilRequest`: `nombre`, `telefono?`, `areaGeografica?`, `fotoUrl?` | `UsuarioResponse` | `200`, `400`, `401` |
 | `PATCH` | `/api/usuarios/me/idioma` | Cambia el idioma de la aplicación | Autenticado | `CambiarIdiomaRequest`: `idioma` (`es`, `en`, `ca`, `gl`, `eu`) | `UsuarioResponse` | `200`, `400`, `401` |
 | `DELETE` | `/api/usuarios/me` | Elimina la cuenta y **todos** los datos asociados, en cumplimiento del RGPD (RF-19, RNF-10) | Autenticado | — | — | `204`, `401` |
-| `GET` | `/api/usuarios/{id}` | Perfil público reducido de otro usuario: nombre, foto y área. Nunca expone email ni teléfono | Autenticado | — | `UsuarioPublicoResponse` | `200`, `401`, `404` |
 
 **Borrado RGPD:** el `DELETE` arrastra alertas, avistamientos, matches, mensajes, valoraciones,
 reportes, notificaciones y contadores de límite diario del usuario.
+
+**No hay endpoint para consultar el perfil de otro usuario.** Sería una superficie de enumeración de
+toda la base de usuarios, incompatible con RNF-10. Los datos públicos del interlocutor (nombre, foto,
+área) van embebidos en las respuestas que los necesitan: `ChatDetalleResponse`,
+`PanelProtectoraResponse` y `AlertaResponse`.
 
 ---
 
@@ -179,7 +183,9 @@ RF-08, RF-15, RF-21.
 | `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl?`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404` |
 | `GET` | `/api/avistamientos/feed` | Feed para el swipe: avistamientos candidatos ordenados por proximidad, excluyendo los ya deslizados por el usuario (RF-15) | Autenticado | — | Lista de `AvistamientoFeedResponse` | `200`, `401` |
 | `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
-| `GET` | `/api/avistamientos?alertaId={id}` | Avistamientos registrados sobre una alerta concreta | Autenticado | — | Página de `AvistamientoResponse` | `200`, `401`, `404` |
+
+Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
+`AlertaDetalleResponse` de `GET /api/alertas/{id}`.
 
 ---
 
@@ -192,9 +198,24 @@ RF-08, RF-09, RF-15, RF-24.
 | `POST` | `/api/matches` | Registra un match sobre un avistamiento o un animal en adopción, incrementa el contador diario y abre el chat asociado (RF-12) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`) | `MatchResponse`: `id`, `chatId`, `tipoPublicacion`, `createdAt` | `201`, `400`, `401`, `404`, `409`, `429` |
 | `GET` | `/api/matches/mios` | Matches realizados por el usuario autenticado | Autenticado | — | Página de `MatchResponse` | `200`, `401` |
 | `GET` | `/api/matches/limite` | Estado del límite diario, para que el cliente lo muestre antes de agotarlo | Autenticado | — | `LimiteMatchResponse`: `limiteDiario`, `consumidos`, `restantes`, `reiniciaEn` | `200`, `401` |
-| `POST` | `/api/matches/descartar` | Descarta una publicación sin interés (swipe negativo): no vuelve a aparecer en el feed y no consume cuota (RF-15) | Autenticado | `DescartarPublicacionRequest`: `publicacionId`, `tipoPublicacion` | — | `204`, `400`, `401`, `404` |
+| `POST` | `/api/matches/descartar` | Descarta una publicación sin interés (swipe negativo): no vuelve a aparecer en el feed y no consume cuota (RF-15) | Autenticado | `DescartarPublicacionRequest`: `publicacionId`, `tipoPublicacion` | — | `204`, `400`, `401`, `404`, `409` |
 
-**`409`** si el usuario ya había hecho match con esa publicación.
+### Cómo se persisten los dos sentidos del swipe
+
+Ambos endpoints escriben en la misma tabla `MATCH_REGISTRO`, distinguiéndose por el campo
+`interesado`:
+
+| Acción | `interesado` | Abre chat | Consume cuota diaria |
+|---|---|---|---|
+| `POST /api/matches` (match) | `true` | Sí | Sí |
+| `POST /api/matches/descartar` | `false` | No | No |
+
+La restricción única `(usuario_id, publicacion_id, tipo_publicacion)` garantiza un solo
+deslizamiento por usuario y publicación: es lo que permite a los feeds de
+`/api/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto, y lo que hace que un
+segundo swipe sobre la misma publicación responda `409`.
+
+**`409`** si el usuario ya había deslizado esa publicación, en cualquiera de los dos sentidos.
 
 **`429` al alcanzar el límite (RF-24)**, con mensaje informativo y momento de reinicio:
 
@@ -252,12 +273,17 @@ RF-06, RF-10, RF-23.
 | `GET` | `/api/protectoras` | Listado de protectoras `ACTIVA`. Filtro `zona` | Autenticado | — | Página de `ProtectoraResponse` | `200`, `401` |
 | `GET` | `/api/protectoras/{id}` | Detalle de una protectora con su valoración media | Autenticado | — | `ProtectoraDetalleResponse` | `200`, `401`, `404` |
 | `GET` | `/api/protectoras/{id}/animales` | Animales en adopción de esa protectora | Autenticado | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `404` |
-| `POST` | `/api/protectoras/{id}/contactar` | Abre un contacto con la protectora al encontrar un animal perdido. Con `soloLocalidad=true` la resuelve automáticamente a partir del área del usuario (RF-06) | Autenticado | `ContactarProtectoraRequest`: `mensaje`, `alertaId?`, `avistamientoId?` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
+| `POST` | `/api/protectoras/{id}/contactar` | Abre un contacto con una protectora concreta al encontrar un animal perdido (RF-06) | Autenticado | `ContactarProtectoraRequest`: `mensaje`, `alertaId?`, `avistamientoId?` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
+| `POST` | `/api/protectoras/local/contactar` | Contacta con la protectora de la localidad del usuario, resolviéndola a partir de su `areaGeografica` sin que tenga que buscarla. Es la «opción específica» que pide RF-06 | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
 | `POST` | `/api/protectoras/{id}/valoracion` | Valora la protectora de 1 a 5 estrellas tras una adopción o contacto (RF-23). Recalcula `valoracionMedia` | Autenticado | `CrearValoracionRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `201`, `400`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/protectoras/panel` | Panel de gestión de la protectora autenticada: sus animales y los usuarios que han querido contactar (RF-10) | `PROTECTORA` | — | `PanelProtectoraResponse`: `animales[]`, `contactos[]`, `valoracionMedia`, `totalAdopciones` | `200`, `401`, `403` |
 
 **`403` en valoración:** el usuario no ha tenido adopción ni contacto previo con esa protectora.
 **`409`:** ya la había valorado.
+
+**En `/local/contactar`:** `400` si el usuario no tiene `areaGeografica` fijada en su perfil, `404` si
+no hay ninguna protectora `ACTIVA` en esa zona. El segmento literal `local` tiene prioridad sobre el
+patrón `{id}`, así que ambas rutas conviven sin ambigüedad.
 
 ---
 
@@ -267,10 +293,14 @@ RF-26.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/reportes` | Reporta una publicación o un usuario indicando el motivo. Queda en estado `PENDIENTE` para su revisión | Autenticado | `CrearReporteRequest`: `tipoObjetivo` (`PUBLICACION` \| `USUARIO`), `objetivoId`, `motivo` | `ReporteResponse` | `201`, `400`, `401`, `404`, `409` |
+| `POST` | `/api/reportes` | Reporta una publicación o un usuario indicando el motivo. Queda en estado `PENDIENTE` para su revisión | Autenticado | `CrearReporteRequest`: `tipoObjetivo` (`PUBLICACION` \| `USUARIO`), `objetivoId`, `tipoContenido?`, `motivo` | `ReporteResponse` | `201`, `400`, `401`, `404`, `409` |
 
 Valores de `motivo`: `CONTENIDO_INAPROPIADO`, `SPAM`, `INFORMACION_FALSA`, `ACOSO`,
 `ANIMAL_EN_PELIGRO`, `OTRO`. **`409`** si el usuario ya había reportado ese mismo objetivo.
+
+**`tipoContenido` es obligatorio cuando `tipoObjetivo` es `PUBLICACION`** y debe omitirse cuando es
+`USUARIO`. Valores: `ALERTA`, `AVISTAMIENTO`, `ADOPCION`. Sin él, `objetivoId` sería ambiguo: hay tres
+tablas de publicaciones y el id solo es único dentro de cada una. Incumplirlo devuelve `400`.
 
 ---
 
@@ -288,7 +318,13 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 | `PATCH` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud: pasa a `RECHAZADA` | `ADMIN` | `RechazarProtectoraRequest`: `motivo?` | `ProtectoraResponse` | `200`, `401`, `403`, `404` |
 | `GET` | `/api/admin/reportes` | Reportes recibidos. Filtro `estado` (`PENDIENTE` \| `REVISADO`) | `ADMIN` | — | Página de `ReporteAdminResponse` | `200`, `401`, `403` |
 | `PATCH` | `/api/admin/reportes/{id}/revisado` | Cierra un reporte marcándolo como `REVISADO` | `ADMIN` | — | — | `204`, `401`, `403`, `404` |
-| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Elimina cualquier publicación. `tipo` es obligatorio: `ALERTA`, `AVISTAMIENTO` o `ADOPCION`, porque el id solo es único dentro de su tabla | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
+| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Elimina cualquier publicación (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
+
+**El parámetro `tipo` es obligatorio** y toma los valores del enum `TipoContenido`: `ALERTA`,
+`AVISTAMIENTO` o `ADOPCION`. Sin él la petición devuelve `400`, porque el id de una publicación solo
+es único dentro de su propia tabla y `{id}` por sí solo no identifica el recurso. No se reutiliza
+`TipoPublicacion` porque ese enum solo cubre los tipos sobre los que se puede hacer match, donde
+`ALERTA` no es válido.
 
 ---
 
@@ -300,7 +336,6 @@ RF-05.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/notificaciones` | Notificaciones del usuario, más recientes primero. Filtro `leida` | Autenticado | — | Página de `NotificacionResponse` | `200`, `401` |
 | `PATCH` | `/api/notificaciones/{id}/leida` | Marca una notificación como leída | Propietario | — | — | `204`, `401`, `403`, `404` |
-| `PATCH` | `/api/notificaciones/leidas` | Marca como leídas todas las del usuario | Autenticado | — | — | `204`, `401` |
 
 Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTECTORA_VERIFICADA`,
 `ADOPCION_CONFIRMADA`, `REPORTE_RESUELTO`.
@@ -330,7 +365,7 @@ la suscripción.
 | RF-03 | `POST /api/alertas` |
 | RF-04 | `GET /api/alertas/mapa`, canal `/ws/mapa` |
 | RF-05 | `GET /api/notificaciones`, canal `/ws/notificaciones` |
-| RF-06 | `POST /api/protectoras/{id}/contactar` |
+| RF-06 | `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar` |
 | RF-07 | `POST /api/adopcion` |
 | RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
 | RF-09 | `POST /api/matches` con `tipoPublicacion=ADOPCION` |
@@ -354,20 +389,36 @@ la suscripción.
 
 ---
 
-## 15. Endpoints inferidos, pendientes de confirmación
+## 15. Endpoints añadidos sobre el resumen de partida
 
-El resumen de partida enumeraba los recursos y sus rutas principales. Estos endpoints se han
-deducido para cubrir requisitos que, si no, se quedaban sin ruta. **Están sujetos a revisión** antes
-de implementarse:
+El resumen inicial enumeraba los recursos y sus rutas principales. Estos endpoints se añadieron para
+cubrir requisitos que, si no, se quedaban sin ruta. **Revisados y confirmados**, con las decisiones de
+modelo que hicieron falta para sostenerlos:
 
 | Endpoint | Motivo |
 |---|---|
 | `POST /api/matches/descartar` | RF-15 (swipe de descarte) no tenía ruta en el resumen |
 | `GET /api/adopcion/feed` | RF-09 + RF-15: el swipe de adopción necesita su propio feed, igual que el de avistamientos |
+| `POST /api/protectoras/local/contactar` | RF-06 pide una «opción específica» para la protectora de la localidad, que no puede resolverse con un `{id}` en la ruta porque el usuario aún no lo conoce |
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
 | `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición |
-| `GET /api/usuarios/{id}` | El chat y el panel de protectora necesitan mostrar datos del interlocutor |
-| `GET /api/avistamientos/{id}`, `GET /api/avistamientos?alertaId=` | Consultar el detalle y los avistamientos de una alerta |
+| `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
 | `POST /api/chats/{id}/mensajes`, `PATCH /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
-| `PATCH /api/notificaciones/leidas` | Comodidad de cliente; el resumen solo preveía marcar una |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |
+
+### Cambios en el modelo de datos derivados de esta revisión
+
+Dos requisitos no eran implementables con el modelo del SRS tal cual:
+
+| Cambio | Por qué |
+|---|---|
+| `MATCH_REGISTRO.interesado` (boolean) + restricción única `(usuario_id, publicacion_id, tipo_publicacion)` | RF-15 no tenía dónde persistirse: el modelo solo registraba matches positivos, así que un descarte no podía excluirse del feed entre sesiones o dispositivos |
+| Nuevo enum `TipoContenido {ALERTA, AVISTAMIENTO, ADOPCION}` y campo `REPORTE.tipoContenido` | El id de una publicación solo es único dentro de su tabla. Sin discriminador, ni el borrado del admin (RF-11) ni un reporte con `tipoObjetivo=PUBLICACION` (RF-26) identifican el recurso |
+
+### Endpoints descartados en la revisión
+
+| Endpoint | Por qué se descarta |
+|---|---|
+| `GET /api/usuarios/{id}` | Superficie de enumeración de toda la base de usuarios, incompatible con RNF-10. Los datos públicos del interlocutor van embebidos en las respuestas que los necesitan |
+| `GET /api/avistamientos?alertaId=` | Redundante: `AlertaDetalleResponse` ya incluye los avistamientos de la alerta |
+| `PATCH /api/notificaciones/leidas` | Solo comodidad de cliente, y `leidas` es un segmento literal en la posición donde su ruta hermana espera un id |
