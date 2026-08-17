@@ -1,0 +1,58 @@
+# Entorno de desarrollo local: API + PostgreSQL con PostGIS.
+# Arranque:  docker compose up -d --build
+# Logs:      docker compose logs -f app
+# Parada:    docker compose down          (down -v borra tambien los datos)
+
+services:
+
+  db:
+    # Imagen oficial de PostGIS: trae la extension ya instalada y habilitada en
+    # la base de datos por defecto, necesaria para los campos Point.
+    image: postgis/postgis:16-3.4
+    container_name: rescate-animal-db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-rescate_animal}
+      POSTGRES_USER: ${DB_USER:-rescate}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-rescate}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # La app espera a que la base de datos acepte conexiones, no solo a que
+      # el contenedor este arrancado.
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rescate} -d ${DB_NAME:-rescate_animal}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rescate-animal-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # El host es el nombre del servicio, no localhost.
+      DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-rescate_animal}
+      DB_USER: ${DB_USER:-rescate}
+      DB_PASSWORD: ${DB_PASSWORD:-rescate}
+      JWT_SECRET: ${JWT_SECRET:-cambiar-este-secreto-solo-valido-para-desarrollo-local-1234567890}
+      JPA_DDL_AUTO: ${JPA_DDL_AUTO:-update}
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-default}
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

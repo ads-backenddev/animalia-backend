@@ -1,0 +1,4 @@
+# DTOs de entrada de la API (bodies de peticiones).
+# Se crearán endpoint por endpoint siguiendo docs/api-rest.md y la skill
+# nuevo-endpoint. Este archivo solo mantiene el paquete bajo control de
+# versiones mientras está vacío.

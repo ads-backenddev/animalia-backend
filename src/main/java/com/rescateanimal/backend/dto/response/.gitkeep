@@ -1,0 +1,3 @@
+# DTOs de salida de la API. Los controllers devuelven siempre estos objetos,
+# nunca entidades JPA. Se crearán endpoint por endpoint siguiendo
+# docs/api-rest.md y la skill nuevo-endpoint.
