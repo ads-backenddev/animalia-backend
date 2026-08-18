@@ -74,20 +74,32 @@ docker compose up -d
 > cambias las credenciales después, hace falta `docker compose down -v` (que **borra los datos**) para
 > que tengan efecto.
 
+**Si ya tienes PostgreSQL instalado en tu máquina**, tendrá ocupado el 5432 y el contenedor no podrá
+publicar ese puerto. Compruébalo con:
+
+```powershell
+netstat -ano | findstr :5432
+Get-Service postgresql*
+```
+
+En ese caso pon `DB_PORT=5433` en el `.env` y usa el mismo puerto en la URL del paso siguiente. No
+sirve conectarse al PostgreSQL nativo: no lleva PostGIS, y las columnas `geometry(Point,4326)` de
+`Alerta` y `Avistamiento` fallarían al crear el esquema.
+
 ### 2. Configurar el perfil `local` de la aplicación
 
 Spring Boot **no lee ficheros `.env`**: ese fichero solo lo consume Docker Compose. Las credenciales
 de la aplicación van en `src/main/resources/application-local.properties`, que está en `.gitignore`:
 
 ```properties
-spring.datasource.url=jdbc:postgresql://localhost:5432/rescate_animal
+spring.datasource.url=jdbc:postgresql://localhost:5433/rescate_animal
 spring.datasource.username=<el mismo DB_USER del .env>
 spring.datasource.password=<el mismo DB_PASSWORD del .env>
 server.port=8081
 ```
 
 Las credenciales **deben coincidir** con las del `.env`, porque son las que usó Docker al crear la
-base de datos.
+base de datos, y el puerto de la URL debe ser el mismo `DB_PORT`.
 
 ### 3. Arrancar la aplicación
 
