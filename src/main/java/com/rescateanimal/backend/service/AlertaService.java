@@ -9,6 +9,7 @@ import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Usuario;
@@ -26,6 +27,8 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -53,6 +56,9 @@ public class AlertaService {
     private final double radioDuplicadosMetros;
     private final int ventanaDuplicadosHoras;
 
+    /** Tope del filtro de área del mapa: sin él, "radio=20000000" lo pide todo. */
+    private final double radioMapaMaximoMetros;
+
     /** Un GeometryFactory es inmutable y seguro entre hilos: basta con uno. */
     private final GeometryFactory geometryFactory =
             new GeometryFactory(new PrecisionModel(), SRID_WGS84);
@@ -62,13 +68,15 @@ public class AlertaService {
                          NotificacionService notificacionService,
                          SimpMessagingTemplate mensajeria,
                          @Value("${app.alertas.radio-duplicados-metros}") double radioDuplicadosMetros,
-                         @Value("${app.alertas.ventana-duplicados-horas}") int ventanaDuplicadosHoras) {
+                         @Value("${app.alertas.ventana-duplicados-horas}") int ventanaDuplicadosHoras,
+                         @Value("${app.alertas.radio-mapa-maximo-metros}") double radioMapaMaximoMetros) {
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.mensajeria = mensajeria;
         this.radioDuplicadosMetros = radioDuplicadosMetros;
         this.ventanaDuplicadosHoras = ventanaDuplicadosHoras;
+        this.radioMapaMaximoMetros = radioMapaMaximoMetros;
     }
 
     // ---------------------------------------------------------------------
@@ -101,8 +109,9 @@ public class AlertaService {
         Alerta guardada = alertaRepository.save(alerta);
 
         // Efectos derivados de la publicación: aviso a la zona (RF-05) y refresco
-        // del mapa de quienes lo tengan abierto (RF-04).
-        notificacionService.notificarAlertaCercana(guardada);
+        // del mapa de quienes lo tengan abierto (RF-04). Ninguno de los dos puede
+        // tumbar la publicación: la alerta ya está guardada y es lo que importa.
+        notificarZona(guardada);
         publicarEnMapa(EventoMapaResponse.Accion.ALTA, guardada);
 
         return aAlertaResponse(guardada);
@@ -111,6 +120,14 @@ public class AlertaService {
     /**
      * Detección de alertas duplicadas (RF-25): misma especie, radio de 500 m y
      * ventana de 24 h, los tres a la vez.
+     *
+     * LIMITACIÓN CONOCIDA: comprobar y guardar no son atómicos. Dos peticiones
+     * simultáneas sobre la misma zona pueden pasar las dos la comprobación antes
+     * de que ninguna confirme, y publicarse ambas. Cerrarlo exige un bloqueo
+     * consultivo de PostgreSQL por especie y zona, o una restricción en la propia
+     * base de datos; se ha dejado fuera porque el escenario —dos vecinos dando de
+     * alta el mismo animal en el mismo segundo— es poco probable y el coste de
+     * fallar es una alerta repetida, no un dato corrupto.
      */
     private void comprobarQueNoEsDuplicada(CrearAlertaRequest peticion) {
         LocalDateTime desde = LocalDateTime.now().minusHours(ventanaDuplicadosHoras);
@@ -144,13 +161,48 @@ public class AlertaService {
     // Consultas (RF-04)
     // ---------------------------------------------------------------------
 
-    /** Alertas activas y geolocalizadas, para pintar el mapa interactivo. */
+    /**
+     * Alertas activas y geolocalizadas, para pintar el mapa interactivo (RF-04).
+     *
+     * Los tres parámetros acotan el mapa al área que el usuario está viendo y van
+     * juntos o no van: con solo dos de ellos no hay círculo que consultar. Sin
+     * ellos se devuelven todas las alertas activas, que es lo razonable mientras
+     * el volumen sea pequeño pero deja de serlo a escala nacional; por eso el
+     * cliente debería mandarlos siempre.
+     */
     @Transactional(readOnly = true)
-    public List<AlertaMapaResponse> listarParaMapa() {
-        return alertaRepository.findByEstadoAndUltimaUbicacionIsNotNull(EstadoAlerta.ACTIVA)
-                .stream()
-                .map(this::aAlertaMapaResponse)
-                .toList();
+    public List<AlertaMapaResponse> listarParaMapa(Double latitud, Double longitud, Double radioMetros) {
+        List<Alerta> alertas;
+        if (latitud == null && longitud == null && radioMetros == null) {
+            alertas = alertaRepository.findByEstadoAndUltimaUbicacionIsNotNull(EstadoAlerta.ACTIVA);
+        } else {
+            // Validar antes de llamar, no dentro de la llamada: Java evalúa los
+            // argumentos de izquierda a derecha, así que un lat o lng nulo
+            // reventaría al desempaquetarlo antes de llegar a la validación.
+            double radio = validarArea(latitud, longitud, radioMetros);
+            alertas = alertaRepository.buscarActivasCerca(latitud, longitud, radio);
+        }
+
+        return alertas.stream().map(this::aAlertaMapaResponse).toList();
+    }
+
+    /** Comprueba el filtro de área y devuelve el radio ya validado. */
+    private double validarArea(Double latitud, Double longitud, Double radioMetros) {
+        if (latitud == null || longitud == null || radioMetros == null) {
+            throw new ParametrosInvalidosException(
+                    "Los parámetros lat, lng y radio deben indicarse los tres o ninguno");
+        }
+        if (latitud < -90 || latitud > 90) {
+            throw new ParametrosInvalidosException("La latitud debe estar entre -90 y 90");
+        }
+        if (longitud < -180 || longitud > 180) {
+            throw new ParametrosInvalidosException("La longitud debe estar entre -180 y 180");
+        }
+        if (radioMetros <= 0 || radioMetros > radioMapaMaximoMetros) {
+            throw new ParametrosInvalidosException(
+                    "El radio debe ser mayor que cero y como mucho " + radioMapaMaximoMetros + " metros");
+        }
+        return radioMetros;
     }
 
     /** Alertas del usuario autenticado, en cualquier estado. */
@@ -193,22 +245,65 @@ public class AlertaService {
     // ---------------------------------------------------------------------
 
     /**
-     * Emite el evento en el canal del mapa. Un fallo de la mensajería no debe
-     * tumbar la operación: la alerta ya está guardada y es lo que importa; el
-     * cliente la vería igualmente al recargar el mapa.
+     * Avisa a la zona sin arriesgar la publicación.
+     *
+     * NotificacionService abre su propia transacción (REQUIRES_NEW), de modo que
+     * un fallo suyo no marca como "rollback only" la transacción que acaba de
+     * guardar la alerta; aquí solo queda registrarlo. Sin las dos piezas —la
+     * transacción aparte y este catch— un error creando notificaciones haría
+     * fracasar un RF-03 perfectamente válido por culpa de un RF-05.
+     */
+    private void notificarZona(Alerta alerta) {
+        try {
+            notificacionService.notificarAlertaCercana(alerta);
+        } catch (RuntimeException e) {
+            log.error("No se pudieron crear las notificaciones de la alerta {}", alerta.getId(), e);
+        }
+    }
+
+    /**
+     * Emite el evento en el canal del mapa, ya confirmada la transacción.
+     *
+     * El envío se aplaza al commit a propósito: enviándolo dentro de la
+     * transacción, un cliente podía recibir el ALTA y pedir el mapa antes de que
+     * la fila fuera visible para las demás conexiones, y ver un mapa sin la
+     * alerta que le acababan de anunciar. Peor aún, si la transacción terminaba
+     * en rollback el evento ya estaba emitido y no había forma de retirarlo.
+     *
+     * El DTO se construye ahora, con la entidad todavía gestionada, y no dentro
+     * de la retrollamada, donde el contexto de persistencia ya se está cerrando.
+     *
+     * Un fallo de la mensajería tampoco debe tumbar la operación: la alerta ya
+     * está guardada y el cliente la vería igualmente al recargar el mapa.
      */
     private void publicarEnMapa(EventoMapaResponse.Accion accion, Alerta alerta) {
         if (alerta.getUltimaUbicacion() == null) {
             return;
         }
+        EventoMapaResponse evento = EventoMapaResponse.builder()
+                .accion(accion)
+                .alerta(aAlertaMapaResponse(alerta))
+                .build();
+        Long alertaId = alerta.getId();
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    enviarAlMapa(evento, accion, alertaId);
+                }
+            });
+        } else {
+            enviarAlMapa(evento, accion, alertaId);
+        }
+    }
+
+    private void enviarAlMapa(EventoMapaResponse evento, EventoMapaResponse.Accion accion, Long alertaId) {
         try {
-            mensajeria.convertAndSend(CANAL_MAPA, EventoMapaResponse.builder()
-                    .accion(accion)
-                    .alerta(aAlertaMapaResponse(alerta))
-                    .build());
+            mensajeria.convertAndSend(CANAL_MAPA, evento);
         } catch (RuntimeException e) {
             log.error("No se pudo emitir el evento {} de la alerta {} en {}",
-                    accion, alerta.getId(), CANAL_MAPA, e);
+                    accion, alertaId, CANAL_MAPA, e);
         }
     }
 

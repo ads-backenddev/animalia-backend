@@ -148,7 +148,7 @@ RF-03, RF-04, RF-14, RF-25.
 | `GET` | `/api/alertas/{id}` | Detalle de una alerta con sus avistamientos asociados | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
 | `PUT` | `/api/alertas/{id}` | Modifica una alerta propia | Propietario | `ActualizarAlertaRequest`: mismos campos que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404` |
 | `DELETE` | `/api/alertas/{id}` | Retira una alerta propia: pasa a estado `ELIMINADA` y desaparece del mapa | Propietario | — | — | `204`, `401`, `403`, `404` |
-| `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento` | `200`, `400`, `401` |
+| `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**; `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado | Autenticado | — | Página de `AlertaResponse` | `200`, `401` |
 | `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14) | Propietario | — | `AlertaResponse` | `200`, `401`, `403`, `404` |
 

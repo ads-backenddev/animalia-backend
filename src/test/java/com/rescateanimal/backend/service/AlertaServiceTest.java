@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Usuario;
@@ -52,6 +53,7 @@ class AlertaServiceTest {
 
     private static final double RADIO_METROS = 500.0;
     private static final int VENTANA_HORAS = 24;
+    private static final double RADIO_MAPA_MAXIMO = 50_000.0;
 
     /** Puerta del Sol, Madrid. */
     private static final double LAT = 40.4168;
@@ -71,7 +73,7 @@ class AlertaServiceTest {
     @BeforeEach
     void prepararServicio() {
         alertaService = new AlertaService(alertaRepository, usuarioRepository,
-                notificacionService, mensajeria, RADIO_METROS, VENTANA_HORAS);
+                notificacionService, mensajeria, RADIO_METROS, VENTANA_HORAS, RADIO_MAPA_MAXIMO);
     }
 
     // ---------------------------------------------------------------------
@@ -225,15 +227,64 @@ class AlertaServiceTest {
         }
 
         @Test
-        @DisplayName("El mapa solo pide alertas ACTIVA con ubicación")
+        @DisplayName("Si falla la creación de notificaciones la alerta se publica igual")
+        void unFalloDeNotificacionesNoTumbaLaPublicacion() {
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+                    .thenReturn(Optional.empty());
+            when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
+            when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+            doThrow(new IllegalStateException("no se pudo guardar la notificación"))
+                    .when(notificacionService).notificarAlertaCercana(any());
+
+            AlertaResponse respuesta = alertaService.publicar(peticion(), 1L);
+
+            assertThat(respuesta).isNotNull();
+            // El aviso a la zona (RF-05) es una consecuencia, no un requisito de
+            // la publicación (RF-03): el mapa se refresca de todos modos.
+            verify(mensajeria).convertAndSend(eq(AlertaService.CANAL_MAPA), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Sin filtro de área el mapa solo pide alertas ACTIVA con ubicación")
         void elMapaFiltraPorEstadoActiva() {
             when(alertaRepository.findByEstadoAndUltimaUbicacionIsNotNull(EstadoAlerta.ACTIVA))
                     .thenReturn(List.of(alertaExistente(1L)));
 
-            var resultado = alertaService.listarParaMapa();
+            var resultado = alertaService.listarParaMapa(null, null, null);
 
             assertThat(resultado).hasSize(1);
             verify(alertaRepository).findByEstadoAndUltimaUbicacionIsNotNull(EstadoAlerta.ACTIVA);
+        }
+
+        @Test
+        @DisplayName("Con lat, lng y radio el mapa se acota con la consulta espacial")
+        void elMapaAcotaPorArea() {
+            when(alertaRepository.buscarActivasCerca(LAT, LNG, 2000.0))
+                    .thenReturn(List.of(alertaExistente(1L)));
+
+            var resultado = alertaService.listarParaMapa(LAT, LNG, 2000.0);
+
+            assertThat(resultado).hasSize(1);
+            verify(alertaRepository).buscarActivasCerca(LAT, LNG, 2000.0);
+            verify(alertaRepository, never()).findByEstadoAndUltimaUbicacionIsNotNull(any());
+        }
+
+        @Test
+        @DisplayName("Un filtro de área incompleto se rechaza en vez de ignorarse")
+        void elFiltroDeAreaIncompletoSeRechaza() {
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, LNG, null))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, null, 2000.0))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+        }
+
+        @Test
+        @DisplayName("Un radio por encima del tope se rechaza: no vale pedir el país entero")
+        void elRadioTieneTope() {
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, LNG, RADIO_MAPA_MAXIMO + 1))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, LNG, 0.0))
+                    .isInstanceOf(ParametrosInvalidosException.class);
         }
     }
 

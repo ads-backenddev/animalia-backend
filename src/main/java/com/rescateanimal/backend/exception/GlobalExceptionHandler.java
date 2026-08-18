@@ -87,6 +87,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // Excepciones de negocio
     // ---------------------------------------------------------------------
 
+    /** 400 — combinación de parámetros de consulta que no tiene sentido. */
+    @ExceptionHandler(ParametrosInvalidosException.class)
+    public ResponseEntity<ErrorResponse> parametrosInvalidos(ParametrosInvalidosException ex,
+                                                             WebRequest request) {
+        return respuesta(HttpStatus.BAD_REQUEST, "PARAMETRO_INVALIDO", ex.getMessage(), request);
+    }
+
     /** 400 — token de restablecimiento manipulado, caducado o ya usado (RF-17). */
     @ExceptionHandler(TokenInvalidoException.class)
     public ResponseEntity<ErrorResponse> tokenInvalido(TokenInvalidoException ex, WebRequest request) {

@@ -28,6 +28,31 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
     List<Alerta> findByUsuarioIdOrderByCreatedAtDesc(Long usuarioId);
 
     /**
+     * Alertas activas dentro de un radio, para el mapa acotado al área que el
+     * usuario está viendo (RF-04). Evita mandar al móvil las alertas de todo el
+     * país, que es lo que RNF-02 no puede permitirse con 100 usuarios a la vez.
+     *
+     * Mismo criterio de medida que buscarSimilar: geography, es decir metros
+     * reales, y el índice GiST de db/indices-postgis.sql es el que la sostiene.
+     */
+    @Query(value = """
+            SELECT a.*
+            FROM alerta a
+            WHERE a.estado = 'ACTIVA'
+              AND a.ultima_ubicacion IS NOT NULL
+              AND ST_DWithin(
+                    CAST(a.ultima_ubicacion AS geography),
+                    CAST(ST_SetSRID(ST_MakePoint(:longitud, :latitud), 4326) AS geography),
+                    :radioMetros)
+            ORDER BY ST_Distance(
+                    CAST(a.ultima_ubicacion AS geography),
+                    CAST(ST_SetSRID(ST_MakePoint(:longitud, :latitud), 4326) AS geography))
+            """, nativeQuery = true)
+    List<Alerta> buscarActivasCerca(@Param("latitud") double latitud,
+                                    @Param("longitud") double longitud,
+                                    @Param("radioMetros") double radioMetros);
+
+    /**
      * Busca una alerta que haga duplicada a la que se quiere publicar (RF-25):
      * misma especie, dentro del radio indicado y con avistamiento posterior a la
      * fecha dada. Devuelve la más cercana.

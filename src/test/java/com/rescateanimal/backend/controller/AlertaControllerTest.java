@@ -6,6 +6,7 @@ import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
@@ -147,6 +148,20 @@ class AlertaControllerTest {
         }
 
         @Test
+        @DisplayName("Sin descripción -> 400: el contrato la exige")
+        void sinDescripcionDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"especie":"perro","fechaAvistamiento":"%s",
+                                     "ubicacion":{"latitud":40.4168,"longitud":-3.7038}}
+                                    """.formatted(LocalDateTime.now().minusHours(2)
+                                    .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errores.descripcion").exists());
+        }
+
+        @Test
         @DisplayName("Latitud fuera de rango -> 400 señalando el campo anidado")
         void latitudFueraDeRangoDevuelve400() throws Exception {
             mockMvc.perform(post("/api/alertas")
@@ -200,21 +215,57 @@ class AlertaControllerTest {
     class Listados {
 
         @Test
-        @DisplayName("GET /mapa -> 200 con los marcadores")
+        @DisplayName("GET /mapa sin filtro -> 200 con los marcadores")
         void mapaDevuelve200() throws Exception {
-            when(alertaService.listarParaMapa()).thenReturn(List.of(AlertaMapaResponse.builder()
-                    .id(42L)
-                    .especie("perro")
-                    .ubicacion(new UbicacionResponse(40.4168, -3.7038))
-                    .fechaAvistamiento(LocalDateTime.now().minusHours(2))
-                    .estado(EstadoAlerta.ACTIVA)
-                    .build()));
+            when(alertaService.listarParaMapa(null, null, null))
+                    .thenReturn(List.of(AlertaMapaResponse.builder()
+                            .id(42L)
+                            .especie("perro")
+                            .ubicacion(new UbicacionResponse(40.4168, -3.7038))
+                            .fechaAvistamiento(LocalDateTime.now().minusHours(2))
+                            .estado(EstadoAlerta.ACTIVA)
+                            .build()));
 
             mockMvc.perform(get("/api/alertas/mapa"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(1)))
                     .andExpect(jsonPath("$[0].id").value(42))
                     .andExpect(jsonPath("$[0].ubicacion.longitud").value(-3.7038));
+        }
+
+        @Test
+        @DisplayName("GET /mapa?lat&lng&radio -> 200 y el filtro llega al service")
+        void mapaConAreaDevuelve200() throws Exception {
+            when(alertaService.listarParaMapa(40.4168, -3.7038, 2000.0)).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/alertas/mapa")
+                            .param("lat", "40.4168")
+                            .param("lng", "-3.7038")
+                            .param("radio", "2000"))
+                    .andExpect(status().isOk());
+
+            verify(alertaService).listarParaMapa(40.4168, -3.7038, 2000.0);
+        }
+
+        @Test
+        @DisplayName("GET /mapa con un filtro de área incompleto -> 400")
+        void mapaConAreaIncompletaDevuelve400() throws Exception {
+            when(alertaService.listarParaMapa(any(), any(), any()))
+                    .thenThrow(new ParametrosInvalidosException(
+                            "Los parámetros lat, lng y radio deben indicarse los tres o ninguno"));
+
+            mockMvc.perform(get("/api/alertas/mapa").param("lat", "40.4168").param("lng", "-3.7038"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /mapa con un lat que no es un número -> 400, no 500")
+        void mapaConLatNoNumericaDevuelve400() throws Exception {
+            mockMvc.perform(get("/api/alertas/mapa")
+                            .param("lat", "norte").param("lng", "-3.7038").param("radio", "2000"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
         }
 
         @Test

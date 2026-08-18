@@ -21,6 +21,11 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class CrearAlertaRequest {
 
+    /**
+     * Obligatoria según el contrato (docs/api-rest.md §4): sin una descripción,
+     * quien vea el marcador en el mapa no puede reconocer al animal.
+     */
+    @NotBlank(message = "la descripción es obligatoria")
     @Size(max = 2000, message = "la descripción no puede superar los 2000 caracteres")
     private String descripcion;
 

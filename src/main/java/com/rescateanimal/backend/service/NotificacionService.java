@@ -9,6 +9,7 @@ import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -39,8 +40,16 @@ public class NotificacionService {
      * ejemplo, todos los usuarios a menos de 5 km de la alerta— exigiría añadir
      * una coordenada a USUARIO o geocodificar el área, que es un cambio de
      * modelo pendiente de acordar.
+     *
+     * TRANSACCIÓN PROPIA (REQUIRES_NEW): esta es una consecuencia de publicar una
+     * alerta, no parte de publicarla. Compartiendo transacción con
+     * AlertaService.publicar, un fallo aquí marcaría esa transacción como
+     * "rollback only" y la alerta —que ya estaba guardada y es lo que el usuario
+     * pidió— se perdería. La entidad que llega ya tiene cargados su id y su
+     * autor, así que no hace falta inicializar nada perezoso desde esta
+     * transacción nueva.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int notificarAlertaCercana(Alerta alerta) {
         String area = alerta.getUsuario().getAreaGeografica();
         if (area == null || area.isBlank()) {

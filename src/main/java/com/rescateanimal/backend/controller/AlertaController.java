@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -52,10 +53,20 @@ public class AlertaController {
         return ResponseEntity.created(ubicacion).body(creada);
     }
 
-    /** GET /api/alertas/mapa -> 200. Alertas ACTIVA geolocalizadas (RF-04). */
+    /**
+     * GET /api/alertas/mapa -> 200, 400, 401
+     *
+     * Alertas ACTIVA geolocalizadas (RF-04). Los tres parámetros acotan el mapa
+     * al área visible y se indican los tres o ninguno; sin ellos devuelve todas
+     * las alertas activas.
+     */
     @GetMapping("/mapa")
-    public ResponseEntity<List<AlertaMapaResponse>> listarParaMapa() {
-        return ResponseEntity.ok(alertaService.listarParaMapa());
+    public ResponseEntity<List<AlertaMapaResponse>> listarParaMapa(
+            @RequestParam(name = "lat", required = false) Double latitud,
+            @RequestParam(name = "lng", required = false) Double longitud,
+            @RequestParam(name = "radio", required = false) Double radioMetros) {
+
+        return ResponseEntity.ok(alertaService.listarParaMapa(latitud, longitud, radioMetros));
     }
 
     /** GET /api/alertas/mis-alertas -> 200. Alertas del usuario autenticado. */
