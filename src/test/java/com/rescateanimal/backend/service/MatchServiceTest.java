@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
+import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -298,9 +299,7 @@ class MatchServiceTest {
         @DisplayName("Nadie desliza su propia publicación: abriría un chat consigo mismo")
         void noSePuedeDeslizarLoPropio() {
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AUTOR_AVISTAMIENTO))
-                    .isInstanceOf(OperacionNoPermitidaException.class)
-                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
-                            .isEqualTo("PUBLICACION_PROPIA"));
+                    .isInstanceOf(PublicacionPropiaException.class);
 
             verify(matchRegistroRepository, never()).save(any());
         }

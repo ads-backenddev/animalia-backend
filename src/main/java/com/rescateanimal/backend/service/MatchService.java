@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
+import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Avistamiento;
@@ -94,8 +95,7 @@ public class MatchService {
         if (avistamiento.getUsuario().getId().equals(usuarioId)) {
             // Sin esto, un match sobre lo propio abriría un chat de uno consigo
             // mismo. El feed ya los excluye; esto cubre la llamada directa.
-            throw new OperacionNoPermitidaException("PUBLICACION_PROPIA",
-                    "No puedes deslizar una publicación tuya");
+            throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
         }
 
         if (matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(

@@ -223,7 +223,7 @@ class MatchFlujoCompletoTest {
     void rechazosDeDominio() throws Exception {
         // El testigo intentando deslizar su propio avistamiento.
         HttpResponse<String> propio = deslizar(tokenTestigo, avistamientos.get(0), true);
-        assertThat(propio.statusCode()).isEqualTo(400);
+        assertThat(propio.statusCode()).isEqualTo(403);
         assertThat(JsonPath.<String>read(propio.body(), "$.codigo")).isEqualTo("PUBLICACION_PROPIA");
 
         // Alerta inexistente al registrar un avistamiento.
