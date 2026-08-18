@@ -13,6 +13,7 @@ import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.LimiteMatchDiario;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -96,6 +97,16 @@ public class MatchService {
             // Sin esto, un match sobre lo propio abriría un chat de uno consigo
             // mismo. El feed ya los excluye; esto cubre la llamada directa.
             throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
+        }
+
+        if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
+            // Mismo motivo que el caso de arriba: el feed filtra por alerta
+            // ACTIVA, pero nada impide llamar al endpoint con el id de un
+            // avistamiento cuya alerta se cerró después de mostrarse la tarjeta.
+            // Sin esta comprobación se abriría un chat y se avisaría al dueño por
+            // un animal que ya apareció, gastándole además un match del día.
+            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta de este avistamiento ya no está activa: el animal ya apareció");
         }
 
         if (matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(

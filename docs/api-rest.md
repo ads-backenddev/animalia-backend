@@ -242,6 +242,12 @@ cualquiera de los dos sentidos. Lo garantiza la restricción única
 `(usuario_id, publicacion_id, tipo_publicacion)`, que es la misma que permite a los feeds de
 `/api/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto.
 
+**`400` con código `ALERTA_NO_ACTIVA`** si la alerta de la que cuelga el avistamiento ya se cerró,
+en cualquiera de los dos sentidos del deslizamiento. El feed filtra por alerta `ACTIVA`, pero el
+dueño puede cerrarla mientras el cliente tiene la tarjeta en pantalla; sin esta comprobación se
+abriría un chat y se avisaría al dueño por un animal que ya apareció, gastando además un match del
+día. Es el mismo código que devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
+
 **`400` con código `TIPO_PUBLICACION_NO_DISPONIBLE`** si se pide `tipoPublicacion: ADOPCION`: por
 ahora solo se admite `AVISTAMIENTO`; las adopciones llegarán con su propio bloque.
 

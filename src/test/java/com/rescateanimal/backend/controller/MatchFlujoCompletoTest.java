@@ -219,7 +219,7 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
-    @DisplayName("Nadie desliza lo suyo, y sobre una alerta cerrada no se admiten avistamientos")
+    @DisplayName("Nadie desliza lo suyo, y una alerta cerrada no admite ni avistamientos ni swipes")
     void rechazosDeDominio() throws Exception {
         // El testigo intentando deslizar su propio avistamiento.
         HttpResponse<String> propio = deslizar(tokenTestigo, avistamientos.get(0), true);
@@ -243,6 +243,19 @@ class MatchFlujoCompletoTest {
                 """.formatted(alertaId));
         assertThat(cerrada.statusCode()).isEqualTo(400);
         assertThat(JsonPath.<String>read(cerrada.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
+
+        // Tampoco se desliza sobre ellos: el feed ya no los ofrece, pero el
+        // curioso puede tener una tarjeta vieja en pantalla y llamar igualmente.
+        HttpResponse<String> swipeTardio = deslizar(tokenCurioso, avistamientos.get(1), true);
+        assertThat(swipeTardio.statusCode()).isEqualTo(400);
+        assertThat(JsonPath.<String>read(swipeTardio.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
+
+        // Y no dejó rastro: sin registro, y sin gastarle un match del día.
+        assertThat(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                idCurioso, avistamientos.get(1),
+                com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO)).isFalse();
+        assertThat(numero(enviar("GET", "/api/matches/limite", tokenCurioso, null).body(), "$.consumidos"))
+                .isZero();
 
         // Y el feed se vacía: sus avistamientos colgaban de una alerta ya cerrada.
         assertThat(idsDelFeed(tokenCurioso)).doesNotContainAnyElementsOf(avistamientos);

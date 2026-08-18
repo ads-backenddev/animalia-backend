@@ -14,6 +14,7 @@ import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.LimiteMatchDiario;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
@@ -305,6 +306,50 @@ class MatchServiceTest {
         }
 
         @Test
+        @DisplayName("Sobre una alerta ya cerrada no se desliza: el animal apareció")
+        void noSeDeslizaSobreUnaAlertaCerrada() {
+            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ALERTA_NO_ACTIVA"));
+
+            // Ni registro, ni chat, ni aviso a nadie por un animal ya encontrado.
+            verify(matchRegistroRepository, never()).save(any());
+            verifyNoInteractions(chatRepository);
+            verifyNoInteractions(notificacionService);
+        }
+
+        @Test
+        @DisplayName("La alerta cerrada se comprueba antes de gastar cuota")
+        void laAlertaCerradaNoGastaCuota() {
+            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class);
+
+            verifyNoInteractions(limiteMatchDiarioRepository);
+        }
+
+        @Test
+        @DisplayName("El descarte sobre una alerta cerrada también se rechaza")
+        void elDescarteSobreAlertaCerradaTambienSeRechaza() {
+            // Se bloquean los dos sentidos, igual que con la publicación propia:
+            // la tarjeta está muerta y el 400 le dice al cliente que refresque el
+            // feed, en vez de aceptar en silencio un descarte que ya no aporta nada.
+            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class);
+
+            verify(matchRegistroRepository, never()).save(any());
+        }
+
+        @Test
         @DisplayName("ADOPCION todavía no se admite y se dice explícitamente")
         void elTipoAdopcionTodaviaNoSeAdmite() {
             CrearMatchRequest peticion = new CrearMatchRequest(
@@ -360,8 +405,13 @@ class MatchServiceTest {
     }
 
     private static Avistamiento avistamiento() {
+        return avistamiento(EstadoAlerta.ACTIVA);
+    }
+
+    private static Avistamiento avistamiento(EstadoAlerta estadoDeLaAlerta) {
         Alerta alerta = new Alerta();
         alerta.setId(55L);
+        alerta.setEstado(estadoDeLaAlerta);
         alerta.setUsuario(usuario(ID_DUENYO_ALERTA));
 
         Avistamiento avistamiento = new Avistamiento();
