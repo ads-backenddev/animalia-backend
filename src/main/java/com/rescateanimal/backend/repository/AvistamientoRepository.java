@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -50,4 +51,22 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
                                                 @Param("estadoAlerta") EstadoAlerta estadoAlerta,
                                                 @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
                                                 Pageable pageable);
+
+    /**
+     * Avistamientos con su autor y su alerta ya cargados, buscados por id.
+     *
+     * Lo usa el chat (RF-12): el otro participante de una conversación es el
+     * autor del avistamiento deslizado, y la cabecera del chat muestra además de
+     * qué alerta colgaba. Recibe una colección para que el listado de chats
+     * resuelva todos sus avistamientos de una vez y no uno por conversación
+     * (N+1); MATCH_REGISTRO.publicacion_id no es una clave ajena, así que no hay
+     * asociación que pudiera traerlos con un JOIN FETCH desde el chat.
+     */
+    @Query("""
+            SELECT a FROM Avistamiento a
+            JOIN FETCH a.usuario
+            JOIN FETCH a.alerta
+            WHERE a.id IN :ids
+            """)
+    List<Avistamiento> buscarConAutorYAlerta(@Param("ids") Collection<Long> ids);
 }
