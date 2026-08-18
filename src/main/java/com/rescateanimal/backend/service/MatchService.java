@@ -140,9 +140,12 @@ public class MatchService {
         chat.setMatch(guardado);
         Chat chatGuardado = chatRepository.save(chat);
 
-        // Avisa a quien perdió al animal de que alguien reconoce su avistamiento.
+        // Avisa a quien registró el avistamiento de que alguien reconoce a ese
+        // animal. El destinatario es el otro participante del chat que se acaba
+        // de abrir, no el dueño de la alerta: quien desliza suele ser ese mismo
+        // dueño, y avisarle sería avisar a quien acaba de hacer el match.
         notificacionService.notificarNuevoMatch(
-                avistamiento.getAlerta().getUsuario(), guardado.getId(), usuarioId);
+                avistamiento.getUsuario(), guardado.getId(), usuarioId);
 
         log.info("Match {} del usuario {} sobre el avistamiento {}; chat {}",
                 guardado.getId(), usuarioId, peticion.getPublicacionId(), chatGuardado.getId());

@@ -209,7 +209,7 @@ RF-08, RF-09, RF-15, RF-24.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: incrementa el contador diario, abre el chat asociado (RF-12) y avisa al dueño de la alerta. Con `false` es un descarte (RF-15) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
+| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: incrementa el contador diario, abre el chat asociado (RF-12) y avisa al autor del avistamiento. Con `false` es un descarte (RF-15) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
 | `GET` | `/api/matches/mios` | Matches del usuario autenticado, más recientes primero. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
 | `GET` | `/api/matches/limite` | Estado del límite diario, para que el cliente lo muestre antes de agotarlo | Autenticado | — | `LimiteMatchResponse` | `200`, `401` |
 
@@ -220,8 +220,13 @@ se distinguen en la tabla `MATCH_REGISTRO`:
 
 | `interesado` | Significado | Abre chat | Notifica | Consume cuota diaria |
 |---|---|---|---|---|
-| `true` | Match (RF-08) | Sí | Sí, `NUEVO_MATCH` al dueño de la alerta | Sí |
+| `true` | Match (RF-08) | Sí | Sí, `NUEVO_MATCH` al autor del avistamiento | Sí |
 | `false` | Descarte (RF-15) | No | No | No |
+
+**El `NUEVO_MATCH` va al autor del avistamiento, no al dueño de la alerta.** Son los dos extremos del
+chat que el match abre (§7): quien desliza y quien publicó lo deslizado. El dueño de la alerta es
+normalmente quien desliza —el feed solo le esconde sus propios avistamientos, no los que otros
+registran sobre su alerta—, así que notificarle a él era avisar a quien acababa de hacer el match.
 
 `interesado` es obligatorio y no tiene valor por defecto: dejarlo implícito convertiría un cuerpo
 incompleto en un match involuntario. `chatId` solo viaja en la respuesta cuando hay match; en un
