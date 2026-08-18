@@ -118,6 +118,19 @@ curl http://localhost:8081/actuator/health
 # {"status":"UP"}
 ```
 
+### 4. Correo de pruebas (opcional)
+
+`docker compose up -d` levanta también **Mailpit**, un servidor SMTP de mentira que no entrega nada:
+acepta todos los correos y los muestra en una bandeja web. Sirve para comprobar el enlace de
+recuperación de contraseña (RF-17) sin escribir a una dirección real.
+
+- SMTP: `localhost:1025` — es el `MAIL_PORT` del `.env` y el valor por defecto de la aplicación.
+- Bandeja de entrada: <http://localhost:8025>
+
+Sin él, la aplicación arranca igual; el envío falla en segundo plano y solo queda registrado en el
+log, porque `EmailService` no propaga el error (si lo hiciera, el flujo de recuperación revelaría
+qué correos están registrados).
+
 ### Comandos útiles de Docker
 
 ```bash
@@ -146,9 +159,22 @@ sin tocar el fichero, exporta las variables de entorno o usa el perfil `local`.
 
 ```bash
 ./mvnw clean compile            # compilar
-./mvnw test                     # ejecutar los tests
 ./mvnw clean package            # generar el jar en target/
 ```
+
+Los tests necesitan la base de datos levantada y el perfil `local`, porque dos de ellos arrancan el
+contexto de Spring contra PostGIS: `BackendApplicationTests` y `AlertaMapaTiempoRealTest`. Este
+último es la prueba de extremo a extremo del mapa —publica una alerta, la recibe por el WebSocket,
+comprueba el `409` del duplicado y la cierra— y la detección de duplicados se apoya en `ST_DWithin`,
+que solo existe en PostGIS:
+
+```bash
+.\mvnw.cmd test "-DargLine=-Dspring.profiles.active=local"    # Windows
+./mvnw test -DargLine=-Dspring.profiles.active=local          # Linux / macOS
+```
+
+El resto de pruebas (services, controllers con MockMvc, seguridad) no tocan la base de datos y se
+pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 
 ## Variables de entorno
 
@@ -230,6 +256,13 @@ git merge --no-ff feature/publicar-alertas
 
 ## Estado actual
 
-Fase de *scaffolding*: estructura de paquetes, entidades JPA, infraestructura Docker y contrato de la
-API. La lógica de negocio y la autenticación JWT se implementan en la fase siguiente, endpoint por
-endpoint sobre `docs/api-rest.md`.
+| Bloque | Estado |
+|---|---|
+| Estructura por capas, 12 entidades JPA, infraestructura Docker, contrato en `docs/api-rest.md` | Terminado |
+| Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
+| Alertas de mascota perdida, mapa en tiempo real por STOMP y detección de duplicados (RF-03, RF-04, RF-14, RF-25) | Terminado |
+| Notificaciones de zona (RF-05) | Solo persistencia; el envío *push* se conectará cuando exista la app Android que lo consuma |
+| Avistamientos, matches, chat, adopción, protectoras, reportes y panel de administración | Pendiente |
+
+El resto de endpoints se implementa uno a uno sobre `docs/api-rest.md`, que sigue siendo el contrato
+de referencia.

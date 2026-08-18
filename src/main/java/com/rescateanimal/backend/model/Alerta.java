@@ -9,6 +9,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -29,7 +30,14 @@ import java.time.LocalDateTime;
  * alertas duplicadas en un radio de 500 m en las últimas 24 h (RF-25).
  */
 @Entity
-@Table(name = "alerta")
+@Table(name = "alerta", indexes = {
+        // Las dos consultas del mapa filtran por estado, y la de duplicados
+        // ademas por especie; PostgreSQL no indexa las claves ajenas por si solo,
+        // asi que usuario_id tambien necesita el suyo para /mis-alertas.
+        @Index(name = "idx_alerta_estado", columnList = "estado"),
+        @Index(name = "idx_alerta_especie", columnList = "especie"),
+        @Index(name = "idx_alerta_usuario", columnList = "usuario_id")
+})
 @Getter
 @Setter
 @NoArgsConstructor

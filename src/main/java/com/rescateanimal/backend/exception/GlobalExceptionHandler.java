@@ -87,6 +87,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     // Excepciones de negocio
     // ---------------------------------------------------------------------
 
+    /** 400 — combinación de parámetros de consulta que no tiene sentido. */
+    @ExceptionHandler(ParametrosInvalidosException.class)
+    public ResponseEntity<ErrorResponse> parametrosInvalidos(ParametrosInvalidosException ex,
+                                                             WebRequest request) {
+        return respuesta(HttpStatus.BAD_REQUEST, "PARAMETRO_INVALIDO", ex.getMessage(), request);
+    }
+
     /** 400 — token de restablecimiento manipulado, caducado o ya usado (RF-17). */
     @ExceptionHandler(TokenInvalidoException.class)
     public ResponseEntity<ErrorResponse> tokenInvalido(TokenInvalidoException ex, WebRequest request) {
@@ -126,6 +133,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> emailDuplicado(EmailYaRegistradoException ex,
                                                         WebRequest request) {
         return respuesta(HttpStatus.CONFLICT, "EMAIL_DUPLICADO", ex.getMessage(), request);
+    }
+
+    /**
+     * 409 — ya hay una alerta equivalente en la zona (RF-25).
+     *
+     * El cuerpo incluye la alerta existente: el requisito pide redirigir al
+     * ciudadano hacia ella, no solo impedirle publicar.
+     */
+    @ExceptionHandler(AlertaDuplicadaException.class)
+    public ResponseEntity<ErrorResponse> alertaDuplicada(AlertaDuplicadaException ex,
+                                                         WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.CONFLICT, "ALERTA_DUPLICADA",
+                ex.getMessage(), ruta(request));
+        cuerpo.setAlertaExistente(ex.getAlertaExistente());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(cuerpo);
     }
 
     /**

@@ -35,4 +35,10 @@ public class ErrorResponse {
 
     /** Solo en errores de validación: campo rechazado -> motivo. */
     private Map<String, String> errores;
+
+    /**
+     * Solo en el 409 por alerta duplicada (RF-25): la alerta ya existente a la
+     * que hay que redirigir al ciudadano.
+     */
+    private AlertaDuplicadaResponse alertaExistente;
 }
