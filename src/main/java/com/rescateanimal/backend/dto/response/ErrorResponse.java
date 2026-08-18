@@ -41,4 +41,10 @@ public class ErrorResponse {
      * que hay que redirigir al ciudadano.
      */
     private AlertaDuplicadaResponse alertaExistente;
+
+    /** Solo en el 429 por cuota diaria agotada (RF-24). */
+    private Integer limiteDiario;
+
+    /** Solo en el 429: medianoche del día siguiente, cuando vuelve a haber cuota. */
+    private LocalDateTime reiniciaEn;
 }

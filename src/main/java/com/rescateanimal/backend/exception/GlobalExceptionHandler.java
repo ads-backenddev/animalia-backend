@@ -94,6 +94,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.BAD_REQUEST, "PARAMETRO_INVALIDO", ex.getMessage(), request);
     }
 
+    /** 400 — la operación no encaja en el dominio (deslizar lo propio, tipo no soportado). */
+    @ExceptionHandler(OperacionNoPermitidaException.class)
+    public ResponseEntity<ErrorResponse> operacionNoPermitida(OperacionNoPermitidaException ex,
+                                                              WebRequest request) {
+        return respuesta(HttpStatus.BAD_REQUEST, ex.getCodigo(), ex.getMessage(), request);
+    }
+
     /** 400 — token de restablecimiento manipulado, caducado o ya usado (RF-17). */
     @ExceptionHandler(TokenInvalidoException.class)
     public ResponseEntity<ErrorResponse> tokenInvalido(TokenInvalidoException ex, WebRequest request) {
@@ -112,6 +119,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> cuentaNoAutorizada(CuentaNoAutorizadaException ex,
                                                             WebRequest request) {
         return respuesta(HttpStatus.FORBIDDEN, ex.getCodigo(), ex.getMessage(), request);
+    }
+
+    /** 403 — nadie desliza su propia publicación, ni para match ni para descarte. */
+    @ExceptionHandler(PublicacionPropiaException.class)
+    public ResponseEntity<ErrorResponse> publicacionPropia(PublicacionPropiaException ex,
+                                                           WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "PUBLICACION_PROPIA", ex.getMessage(), request);
     }
 
     /** 403 — rol insuficiente para el endpoint, lanzado por @PreAuthorize. */
@@ -148,6 +162,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ex.getMessage(), ruta(request));
         cuerpo.setAlertaExistente(ex.getAlertaExistente());
         return ResponseEntity.status(HttpStatus.CONFLICT).body(cuerpo);
+    }
+
+    /** 409 — el usuario ya había deslizado esa publicación (RF-08, RF-15). */
+    @ExceptionHandler(PublicacionYaDeslizadaException.class)
+    public ResponseEntity<ErrorResponse> publicacionYaDeslizada(PublicacionYaDeslizadaException ex,
+                                                                WebRequest request) {
+        return respuesta(HttpStatus.CONFLICT, "SWIPE_DUPLICADO", ex.getMessage(), request);
+    }
+
+    /**
+     * 429 — cuota diaria de matches agotada (RF-24).
+     *
+     * El cuerpo lleva el límite y el momento de reinicio: el requisito pide
+     * decirle al usuario que podrá continuar al día siguiente, y el cliente no
+     * debería tener que deducir esa hora por su cuenta.
+     */
+    @ExceptionHandler(LimiteMatchesAlcanzadoException.class)
+    public ResponseEntity<ErrorResponse> limiteAlcanzado(LimiteMatchesAlcanzadoException ex,
+                                                         WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_MATCHES_ALCANZADO",
+                ex.getMessage(), ruta(request));
+        cuerpo.setLimiteDiario(ex.getLimiteDiario());
+        cuerpo.setReiniciaEn(ex.getReiniciaEn());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
     }
 
     /**

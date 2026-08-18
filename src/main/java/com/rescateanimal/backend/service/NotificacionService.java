@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Lógica de notificaciones: alta, listado y marcado como leídas (RF-05).
@@ -68,6 +69,35 @@ public class NotificacionService {
         log.info("Alerta {}: creadas {} notificaciones de tipo ALERTA_CERCANA",
                 alerta.getId(), notificaciones.size());
         return notificaciones.size();
+    }
+
+    /**
+     * Avisa a quien publicó la alerta de que alguien ha hecho match con un
+     * avistamiento suyo (RF-08). referenciaId apunta al match, que es desde
+     * donde el cliente llega al chat.
+     *
+     * Aquí NO se usa REQUIRES_NEW, al contrario que en notificarAlertaCercana:
+     * un match del que el destinatario nunca se entera no sirve de nada, así
+     * que la notificación forma parte de la operación y comparte su suerte. La
+     * alerta, en cambio, es útil por sí sola aunque falle el aviso a la zona.
+     *
+     * @return la notificación creada, o vacío si el destinatario es el propio
+     *         autor del deslizamiento: nadie necesita que le avisen de lo que
+     *         acaba de hacer.
+     */
+    @Transactional
+    public Optional<Notificacion> notificarNuevoMatch(Usuario destinatario, Long matchId,
+                                                      Long autorDelDeslizamientoId) {
+        if (destinatario.getId().equals(autorDelDeslizamientoId)) {
+            log.debug("Match {}: el destinatario es quien deslizó, no se notifica", matchId);
+            return Optional.empty();
+        }
+
+        Notificacion notificacion = notificacionRepository.save(
+                crear(destinatario, TipoNotificacion.NUEVO_MATCH, matchId));
+        log.info("Match {}: creada notificación NUEVO_MATCH para el usuario {}",
+                matchId, destinatario.getId());
+        return Optional.of(notificacion);
     }
 
     private Notificacion crear(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {

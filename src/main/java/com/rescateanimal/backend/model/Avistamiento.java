@@ -6,6 +6,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -23,7 +24,14 @@ import java.time.LocalDateTime;
  * existente (RF-21). Alimenta el feed de swipe y el sistema de match (RF-08).
  */
 @Entity
-@Table(name = "avistamiento")
+@Table(name = "avistamiento", indexes = {
+        // El feed filtra por el autor (para excluir los propios) y ordena por
+        // fecha; el detalle de una alerta los busca por alerta_id. PostgreSQL no
+        // indexa las claves ajenas por su cuenta.
+        @Index(name = "idx_avistamiento_alerta", columnList = "alerta_id"),
+        @Index(name = "idx_avistamiento_usuario", columnList = "usuario_id"),
+        @Index(name = "idx_avistamiento_created_at", columnList = "created_at")
+})
 @Getter
 @Setter
 @NoArgsConstructor
