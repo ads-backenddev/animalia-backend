@@ -150,7 +150,7 @@ RF-03, RF-04, RF-14, RF-25.
 | `DELETE` | `/api/alertas/{id}` | Retira una alerta propia: pasa a estado `ELIMINADA` y desaparece del mapa | Propietario | — | — | `204`, `401`, `403`, `404` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado | Autenticado | — | Página de `AlertaResponse` | `200`, `401` |
-| `PATCH` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA` y deja de notificarse en el mapa (RF-14) | Propietario | — | `AlertaResponse` | `200`, `401`, `403`, `404` |
+| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14) | Propietario | — | `AlertaResponse` | `200`, `401`, `403`, `404` |
 
 ### Detección de alertas duplicadas (RF-25)
 
@@ -344,15 +344,22 @@ Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTE
 
 ## 13. Canales WebSocket (STOMP)
 
-Conexión al endpoint STOMP con el JWT en el handshake (cabecera `Authorization` o parámetro
-`token`). Un usuario solo puede suscribirse a canales propios; en caso contrario el servidor cierra
-la suscripción.
+Hay **un único endpoint** de conexión, `/ws`; lo que distingue a cada canal es el destino STOMP al
+que el cliente se suscribe. El JWT viaja en el handshake, en la cabecera `Authorization: Bearer` o
+en el parámetro `token` —esta segunda vía existe porque la API WebSocket de los navegadores no
+permite añadir cabeceras—. Sin token válido el servidor responde `401` y no llega a abrirse la
+conexión: lo comprueba `JwtHandshakeInterceptor`.
 
-| Canal | Dirección | Descripción | Auth | Payload |
+```
+ws://<host>/ws?token=<jwt>     prefijo de suscripción: /topic, /queue
+                               prefijo de envío:       /app
+```
+
+| Destino | Dirección | Descripción | Auth | Payload |
 |---|---|---|---|---|
-| `/ws/chat/{id}` | Bidireccional | Mensajería en tiempo real de una conversación (RF-12) | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
-| `/ws/notificaciones` | Servidor → cliente | Notificaciones del usuario, incluidas las alertas registradas en su área geográfica (RF-05) | Autenticado | `NotificacionResponse` |
-| `/ws/mapa` | Servidor → cliente | Altas, cambios de estado y cierres de alertas para refrescar el mapa sin recargar (RF-04). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | `AlertaMapaResponse` + `accion`: `ALTA` \| `ACTUALIZACION` \| `CIERRE` |
+| `/topic/mapa` | Servidor → cliente | Altas, cambios de estado y cierres de alertas para refrescar el mapa sin recargar (RF-04). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | `EventoMapaResponse`: `accion` (`ALTA` \| `ACTUALIZACION` \| `CIERRE`) + `alerta` (`AlertaMapaResponse`) |
+| `/topic/chat/{id}` | Bidireccional (envío a `/app/chat/{id}`) | Mensajería en tiempo real de una conversación (RF-12). **Pendiente de implementar** | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
+| `/user/queue/notificaciones` | Servidor → cliente | Notificaciones del usuario, incluidas las alertas registradas en su área geográfica (RF-05). **Pendiente de implementar**: hoy las notificaciones solo se persisten y se consultan por `GET /api/notificaciones` | Autenticado | `NotificacionResponse` |
 
 ---
 
@@ -363,17 +370,17 @@ la suscripción.
 | RF-01 | `POST /api/auth/registro/ciudadano`, `POST /api/auth/registro/protectora` |
 | RF-02 | `PUT /api/usuarios/me` |
 | RF-03 | `POST /api/alertas` |
-| RF-04 | `GET /api/alertas/mapa`, canal `/ws/mapa` |
-| RF-05 | `GET /api/notificaciones`, canal `/ws/notificaciones` |
+| RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
+| RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` |
 | RF-06 | `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar` |
 | RF-07 | `POST /api/adopcion` |
 | RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
 | RF-09 | `POST /api/matches` con `tipoPublicacion=ADOPCION` |
 | RF-10 | `GET /api/protectoras/panel` |
 | RF-11 | Todo `/api/admin` |
-| RF-12 | `/api/chats/**`, canal `/ws/chat/{id}` |
+| RF-12 | `/api/chats/**`, destino `/topic/chat/{id}` |
 | RF-13 | `POST /api/auth/login` |
-| RF-14 | `PATCH /api/alertas/{id}/cerrar` |
+| RF-14 | `PUT /api/alertas/{id}/cerrar` |
 | RF-15 | `POST /api/matches/descartar`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
