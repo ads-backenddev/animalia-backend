@@ -449,7 +449,7 @@ y entrega el mensaje **solo** a la conexión de ese usuario, aunque todos se sus
 | RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |
 | RF-13 | `POST /api/auth/login` |
 | RF-14 | `PUT /api/alertas/{id}/cerrar` |
-| RF-15 | `POST /api/matches/descartar`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
+| RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
 | RF-18 | `PATCH /api/usuarios/me/idioma` |
@@ -472,7 +472,7 @@ modelo que hicieron falta para sostenerlos:
 
 | Endpoint | Motivo |
 |---|---|
-| `POST /api/matches/descartar` | RF-15 (swipe de descarte) no tenía ruta en el resumen |
+| Campo `interesado` en `POST /api/matches` | RF-15 (swipe de descarte) no tenía ruta en el resumen. Se resolvió con un campo en el endpoint existente, no con una ruta aparte: match y descarte son el mismo gesto en dos direcciones y comparten tabla, restricción única y validaciones (§6) |
 | `GET /api/adopcion/feed` | RF-09 + RF-15: el swipe de adopción necesita su propio feed, igual que el de avistamientos |
 | `POST /api/protectoras/local/contactar` | RF-06 pide una «opción específica» para la protectora de la localidad, que no puede resolverse con un `{id}` en la ruta porque el usuario aún no lo conoce |
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
