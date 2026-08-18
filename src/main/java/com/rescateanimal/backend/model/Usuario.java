@@ -66,6 +66,18 @@ public class Usuario {
     @Column(nullable = false)
     private Boolean activo;
 
+    /**
+     * Momento del último cambio de contraseña (RF-17).
+     *
+     * Actúa como corte de validez de los tokens: cualquier JWT emitido antes de
+     * esta marca se rechaza. Así, restablecer la contraseña cierra de inmediato
+     * todas las sesiones abiertas —el caso de uso real de RF-17 es una cuenta
+     * comprometida— y un enlace de recuperación ya utilizado no vuelve a servir
+     * aunque la aplicación se reinicie.
+     */
+    @Column(name = "password_changed_at")
+    private LocalDateTime passwordChangedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
