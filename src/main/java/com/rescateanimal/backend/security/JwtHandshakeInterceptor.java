@@ -67,6 +67,13 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             }
 
             // Queda accesible desde los handlers de mensajes de la sesión.
+            //
+            // PENDIENTE: esto no convierte al usuario en el Principal de la
+            // sesión STOMP, y el prefijo /user/ (que usará
+            // /user/queue/notificaciones, RF-05) se resuelve contra ese
+            // Principal. Antes de implementarlo hay que sobrescribir
+            // determineUser en un DefaultHandshakeHandler. Para /topic/mapa no
+            // hace falta: es difusión a cualquier autenticado.
             attributes.put(ATRIBUTO_USUARIO, usuario);
             log.debug("Handshake WebSocket aceptado para el usuario {}", usuario.getId());
             return true;

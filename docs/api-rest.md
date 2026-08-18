@@ -358,8 +358,20 @@ ws://<host>/ws?token=<jwt>     prefijo de suscripción: /topic, /queue
 | Destino | Dirección | Descripción | Auth | Payload |
 |---|---|---|---|---|
 | `/topic/mapa` | Servidor → cliente | Altas, cambios de estado y cierres de alertas para refrescar el mapa sin recargar (RF-04). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | `EventoMapaResponse`: `accion` (`ALTA` \| `ACTUALIZACION` \| `CIERRE`) + `alerta` (`AlertaMapaResponse`) |
-| `/topic/chat/{id}` | Bidireccional (envío a `/app/chat/{id}`) | Mensajería en tiempo real de una conversación (RF-12). **Pendiente de implementar** | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
+| `/topic/chat/{chatId}` | Bidireccional (envío a `/app/chat/{chatId}`) | Mensajería en tiempo real de una conversación (RF-12). **Pendiente de implementar** | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
 | `/user/queue/notificaciones` | Servidor → cliente | Notificaciones del usuario, incluidas las alertas registradas en su área geográfica (RF-05). **Pendiente de implementar**: hoy las notificaciones solo se persisten y se consultan por `GET /api/notificaciones` | Autenticado | `NotificacionResponse` |
+
+El prefijo `/user/` no es una ruta más: Spring lo resuelve contra el `Principal` de la sesión STOMP
+y entrega el mensaje **solo** a la conexión de ese usuario, aunque todos se suscriban literalmente a
+`/user/queue/notificaciones`. El servidor envía con
+`convertAndSendToUser(usuario, "/queue/notificaciones", …)`.
+
+> Para que ese prefijo funcione, la sesión WebSocket necesita un `Principal`.
+> `JwtHandshakeInterceptor` deja hoy el `UsuarioPrincipal` en los atributos de la sesión, que basta
+> para `/topic/mapa` (difusión a cualquier autenticado) pero no para `/user/…`. Antes de implementar
+> RF-05 y RF-12 hay que propagarlo, sobrescribiendo `determineUser` en un `DefaultHandshakeHandler`.
+> El chat, además, necesita comprobar en la suscripción que quien se suscribe a
+> `/topic/chat/{chatId}` es participante de ese chat: el destino es público entre autenticados.
 
 ---
 
@@ -378,7 +390,7 @@ ws://<host>/ws?token=<jwt>     prefijo de suscripción: /topic, /queue
 | RF-09 | `POST /api/matches` con `tipoPublicacion=ADOPCION` |
 | RF-10 | `GET /api/protectoras/panel` |
 | RF-11 | Todo `/api/admin` |
-| RF-12 | `/api/chats/**`, destino `/topic/chat/{id}` |
+| RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |
 | RF-13 | `POST /api/auth/login` |
 | RF-14 | `PUT /api/alertas/{id}/cerrar` |
 | RF-15 | `POST /api/matches/descartar`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
