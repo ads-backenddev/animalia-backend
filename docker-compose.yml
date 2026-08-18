@@ -40,5 +40,25 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  mailpit:
+    # Servidor SMTP de pruebas: acepta cualquier correo y en lugar de entregarlo
+    # lo muestra en una bandeja web. Sirve para comprobar a mano que el flujo de
+    # recuperacion de contrasena (RF-17) genera el email y el enlace correctos,
+    # sin mandar nada a una direccion real.
+    image: axllent/mailpit:latest
+    container_name: rescate-animal-mailpit
+    ports:
+      # SMTP: coincide con MAIL_PORT del .env y con el default de la aplicacion.
+      - "${MAIL_PORT:-1025}:1025"
+      # Bandeja de entrada web: http://localhost:8025
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+      # Sin autenticacion ni TLS: es un contenedor local de desarrollo, y asi
+      # coincide con spring.mail.properties.mail.smtp.auth=false.
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    restart: unless-stopped
+
 volumes:
   postgres-data:

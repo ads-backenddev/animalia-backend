@@ -57,10 +57,13 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**").permitAll()
                         // Sonda del healthcheck de Docker Compose (RNF-06).
                         .requestMatchers("/actuator/health").permitAll()
-                        // Cerrado hasta que WebSocketConfig implemente la validación del
-                        // JWT en el handshake (docs/api-rest.md §13). No abrir esta ruta
-                        // antes que aquello: dejaría el chat y el mapa sin autenticar.
-                        .requestMatchers("/ws/**").authenticated()
+                        // El handshake del WebSocket no pasa por este filtro: los
+                        // navegadores no pueden poner la cabecera Authorization al
+                        // abrir la conexión, asi que el token viaja como parámetro.
+                        // Quien lo valida es JwtHandshakeInterceptor, que rechaza con
+                        // 401 la conexión sin token válido (docs/api-rest.md §13).
+                        // Esta ruta NO debe abrirse si aquel interceptor se retira.
+                        .requestMatchers("/ws/**").permitAll()
                         .anyRequest().authenticated())
 
                 // Sin token válido se responde 401 seco, en vez del formulario de

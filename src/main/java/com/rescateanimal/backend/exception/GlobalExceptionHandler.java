@@ -129,6 +129,21 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * 409 — ya hay una alerta equivalente en la zona (RF-25).
+     *
+     * El cuerpo incluye la alerta existente: el requisito pide redirigir al
+     * ciudadano hacia ella, no solo impedirle publicar.
+     */
+    @ExceptionHandler(AlertaDuplicadaException.class)
+    public ResponseEntity<ErrorResponse> alertaDuplicada(AlertaDuplicadaException ex,
+                                                         WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.CONFLICT, "ALERTA_DUPLICADA",
+                ex.getMessage(), ruta(request));
+        cuerpo.setAlertaExistente(ex.getAlertaExistente());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(cuerpo);
+    }
+
+    /**
      * 409 — choque contra una restricción única de la base de datos.
      *
      * Cubre la ventana entre comprobar que un email está libre e insertarlo: con
