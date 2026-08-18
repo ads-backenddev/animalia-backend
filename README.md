@@ -46,53 +46,89 @@ El contrato completo de la API está en [`docs/api-rest.md`](docs/api-rest.md).
 
 ## Requisitos previos
 
-- **Con Docker:** Docker y Docker Compose. No hace falta nada más.
-- **Sin Docker:** JDK 17 y un PostgreSQL 16 con la extensión PostGIS habilitada.
+- JDK 17.
+- Docker y Docker Compose **para la base de datos**. Alternativamente, un PostgreSQL 16 propio con la
+  extensión PostGIS habilitada.
 
-## Arranque en local con Docker Compose
+## Arranque en local
 
-1. Copia el fichero de variables de entorno y ajusta los valores:
+El flujo de desarrollo es: **la base de datos en Docker, la aplicación desde IntelliJ**. El
+`docker-compose.yml` levanta únicamente PostgreSQL; el `Dockerfile` se conserva solo para el
+despliegue en Railway.
 
-   ```bash
-   cp .env.example .env
-   ```
+### 1. Levantar la base de datos
 
-   Como mínimo cambia `DB_PASSWORD` y `JWT_SECRET`. Para generar un secreto:
+Copia la plantilla de variables de entorno y ajusta los valores:
 
-   ```bash
-   openssl rand -base64 48
-   ```
+```bash
+cp .env.example .env
+```
 
-2. Levanta la API y la base de datos:
+Como mínimo cambia `DB_USER` y `DB_PASSWORD`. Luego:
 
-   ```bash
-   docker compose up -d --build
-   ```
+```bash
+docker compose up -d
+```
 
-   El servicio `app` espera a que PostgreSQL esté listo (`healthcheck` con `pg_isready`), así que el
-   primer arranque tarda algo más.
+> `POSTGRES_USER` y `POSTGRES_PASSWORD` solo se aplican **al crear el volumen por primera vez**. Si
+> cambias las credenciales después, hace falta `docker compose down -v` (que **borra los datos**) para
+> que tengan efecto.
 
-3. Comprueba que responde:
+**Si ya tienes PostgreSQL instalado en tu máquina**, tendrá ocupado el 5432 y el contenedor no podrá
+publicar ese puerto. Compruébalo con:
 
-   ```bash
-   curl http://localhost:8080/actuator/health
-   # {"status":"UP"}
-   ```
+```powershell
+netstat -ano | findstr :5432
+Get-Service postgresql*
+```
 
-4. Comandos útiles:
+En ese caso pon `DB_PORT=5433` en el `.env` y usa el mismo puerto en la URL del paso siguiente. No
+sirve conectarse al PostgreSQL nativo: no lleva PostGIS, y las columnas `geometry(Point,4326)` de
+`Alerta` y `Avistamiento` fallarían al crear el esquema.
 
-   ```bash
-   docker compose logs -f app     # seguir los logs de la API
-   docker compose restart app     # reiniciar solo la API
-   docker compose down            # parar, conservando los datos
-   docker compose down -v         # parar y BORRAR los datos de la base
-   ```
+### 2. Configurar el perfil `local` de la aplicación
 
-La API queda en `http://localhost:8080` y la base de datos en `localhost:5432`.
+Spring Boot **no lee ficheros `.env`**: ese fichero solo lo consume Docker Compose. Las credenciales
+de la aplicación van en `src/main/resources/application-local.properties`, que está en `.gitignore`:
 
-## Arranque sin Docker
+```properties
+spring.datasource.url=jdbc:postgresql://localhost:5433/rescate_animal
+spring.datasource.username=<el mismo DB_USER del .env>
+spring.datasource.password=<el mismo DB_PASSWORD del .env>
+server.port=8081
+```
 
-Con un PostgreSQL propio, crea la base de datos y habilita PostGIS:
+Las credenciales **deben coincidir** con las del `.env`, porque son las que usó Docker al crear la
+base de datos, y el puerto de la URL debe ser el mismo `DB_PORT`.
+
+### 3. Arrancar la aplicación
+
+En IntelliJ: *Run > Edit Configurations…* y en **Active profiles** escribe `local`. O por línea de
+comandos:
+
+```bash
+.\mvnw.cmd spring-boot:run "-Dspring-boot.run.profiles=local"   # Windows
+./mvnw spring-boot:run -Dspring-boot.run.profiles=local         # Linux / macOS
+```
+
+Comprueba que responde:
+
+```bash
+curl http://localhost:8081/actuator/health
+# {"status":"UP"}
+```
+
+### Comandos útiles de Docker
+
+```bash
+docker compose logs -f db      # seguir los logs de PostgreSQL
+docker compose down            # parar, conservando los datos
+docker compose down -v         # parar y BORRAR los datos de la base
+```
+
+## Arranque con un PostgreSQL propio, sin Docker
+
+Crea la base de datos y habilita PostGIS:
 
 ```sql
 CREATE DATABASE rescate_animal;
@@ -100,16 +136,11 @@ CREATE DATABASE rescate_animal;
 CREATE EXTENSION IF NOT EXISTS postgis;
 ```
 
-Luego arranca la aplicación:
-
-```bash
-./mvnw spring-boot:run          # Linux / macOS
-.\mvnw.cmd spring-boot:run      # Windows
-```
+Luego apunta `application-local.properties` a esa instancia y arranca como en el paso 3.
 
 Los valores por defecto de `application.properties` apuntan a
 `jdbc:postgresql://localhost:5432/rescate_animal` con usuario y contraseña `rescate`. Para cambiarlos
-sin tocar el fichero, exporta las variables de entorno.
+sin tocar el fichero, exporta las variables de entorno o usa el perfil `local`.
 
 ### Compilar y probar
 
@@ -136,8 +167,15 @@ sin tocar el fichero, exporta las variables de entorno.
 En el perfil `prod` los secretos **no tienen valor por defecto**: si falta una variable, la
 aplicación no arranca en lugar de usar una credencial de desarrollo.
 
-Ningún secreto se versiona. El fichero `.env` está en `.gitignore`; `.env.example` es solo la
-plantilla.
+Ningún secreto se versiona. Están en `.gitignore` tanto `.env` (que lee Docker Compose) como
+`src/main/resources/application-local.properties` (que lee la aplicación). El único fichero de
+configuración versionado con credenciales es `.env.example`, y solo lleva marcadores de posición.
+
+| Fichero | Lo lee | ¿Se versiona? |
+|---|---|---|
+| `.env` | Docker Compose, para crear la base de datos | No |
+| `.env.example` | Nadie: es la plantilla de `.env` | Sí, sin credenciales reales |
+| `application-local.properties` | Spring Boot con el perfil `local` | No |
 
 ## Convención de commits
 
