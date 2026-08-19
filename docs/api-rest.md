@@ -209,7 +209,7 @@ RF-08, RF-09, RF-15, RF-24.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: incrementa el contador diario, abre el chat asociado (RF-12) y avisa al autor del avistamiento. Con `false` es un descarte (RF-15) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
+| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: incrementa el contador diario, abre el chat asociado (RF-12) y avisa a quien publicó lo deslizado. Con `false` es un descarte (RF-15) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
 | `GET` | `/api/matches/mios` | Matches del usuario autenticado, más recientes primero. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
 | `GET` | `/api/matches/limite` | Estado del límite diario, para que el cliente lo muestre antes de agotarlo | Autenticado | — | `LimiteMatchResponse` | `200`, `401` |
 
@@ -253,12 +253,32 @@ dueño puede cerrarla mientras el cliente tiene la tarjeta en pantalla; sin esta
 abriría un chat y se avisaría al dueño por un animal que ya apareció, gastando además un match del
 día. Es el mismo código que devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
 
-**`400` con código `TIPO_PUBLICACION_NO_DISPONIBLE`** si se pide `tipoPublicacion: ADOPCION`: por
-ahora solo se admite `AVISTAMIENTO`; las adopciones llegarán con su propio bloque.
+**`400` con código `ANIMAL_NO_DISPONIBLE`** si el animal en adopción deslizado ya está `ADOPTADO`.
+Es el equivalente de `ALERTA_NO_ACTIVA` en el otro tipo de publicación: la tarjeta pudo mostrarse
+antes de que la protectora confirmara la adopción, y sin esta comprobación se abriría una
+conversación sobre una adopción ya consumada gastando un match del día.
 
 El orden de las comprobaciones importa: la cuota se consume en último lugar, después de validar
 todo lo demás. Al revés, un swipe repetido —que acaba en `409`— le habría gastado al usuario un
-match del día.
+match del día. Dentro de la validación de la publicación, `PUBLICACION_PROPIA` se comprueba antes
+que el estado: a quien desliza algo suyo ya cerrado se le dice que es suyo, no que está cerrado.
+
+### Los dos tipos de publicación
+
+`tipoPublicacion` decide en qué tabla vive `publicacionId` —es una referencia polimórfica sin clave
+ajena, así que el mismo id existe en las dos— y, con ella, quién es el otro extremo del chat que
+abre el match:
+
+| `tipoPublicacion` | Publicación | Otro participante del chat y destinatario del aviso | Estado que la inhabilita |
+|---|---|---|---|
+| `AVISTAMIENTO` | `AVISTAMIENTO` (RF-08) | `AVISTAMIENTO.usuario`, el autor del avistamiento | Su alerta no está `ACTIVA` |
+| `ADOPCION` | `ANIMAL_ADOPCION` (RF-09) | `ANIMAL_ADOPCION.protectora.usuario`, la cuenta de la protectora | El animal está `ADOPTADO` |
+
+En los dos casos la regla del aviso es la misma: se notifica a quien **no** deslizó. En adopción eso
+significa que una protectora recibe el `NUEVO_MATCH` cuando un ciudadano muestra interés por uno de
+sus animales, y que una protectora no puede deslizar los suyos —lo rechaza `PUBLICACION_PROPIA`,
+igual que cualquier otro contenido propio—. El resto del recorrido es común a los dos tipos: cuota
+diaria, restricción única y apertura del chat no distinguen de qué publicación se trate.
 
 ### Estado del límite diario
 
@@ -305,7 +325,20 @@ RF-12.
 | `PUT` | `/api/chats/{id}/mensajes/leidos` | Marca como leídos todos los mensajes recibidos en la conversación | Participante | — | — | `204`, `401`, `403`, `404` |
 
 `Participante` significa que el usuario autenticado es una de las dos partes del match que generó el
-chat; en caso contrario `403`.
+chat; en caso contrario `403`. Quién es la segunda parte depende del tipo de publicación deslizada
+(§6): el autor del avistamiento, o la cuenta de la protectora dueña del animal en adopción.
+
+`ChatDetalleResponse` lleva `tipoPublicacion` y, según su valor, **uno** de los dos grupos de campos
+de contexto; el otro se omite del JSON:
+
+| `tipoPublicacion` | Campos presentes |
+|---|---|
+| `AVISTAMIENTO` | `avistamientoId`, `avistamientoFotoUrl`, `avistamientoDescripcion`, `alertaId`, `alertaEspecie`, `alertaFotoUrl`, `alertaEstado` |
+| `ADOPCION` | `animalId`, `animalNombre`, `animalEspecie`, `animalFotoUrl`, `animalEstado`, `protectoraId`, `protectoraNombre` |
+
+Un chat cuya publicación ya no existe —una protectora puede retirar un animal del catálogo en
+cualquier momento— se omite del listado en vez de tumbarlo entero, y responde `404` al pedir su
+detalle, que es donde ese chat concreto es lo que se ha pedido.
 
 El marcado de leídos es `PUT` y no `PATCH` porque no modifica un subconjunto de campos de un
 recurso: fija por completo el estado «todo lo recibido está leído», y repetirlo deja la conversación
@@ -327,11 +360,57 @@ RF-07, RF-09, RF-20, RF-22.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/adopcion` | Catálogo paginado de animales `DISPONIBLE`. Filtros de RF-22: `especie`, `tamanyo` (`PEQUENO` \| `MEDIANO` \| `GRANDE`), `zona` | Autenticado | — | Página de `AnimalAdopcionResponse` | `200`, `400`, `401` |
 | `GET` | `/api/adopcion/{id}` | Detalle de un animal con los datos de su protectora | Autenticado | — | `AnimalAdopcionDetalleResponse` | `200`, `401`, `404` |
-| `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los ya deslizados (RF-09, RF-15) | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `401` |
-| `POST` | `/api/adopcion` | Publica un animal en adopción | `PROTECTORA` | `CrearAnimalRequest`: `nombre`, `especie`, `tamanyo`, `descripcion`, `fotoUrl?`, `zonaGeografica` | `AnimalAdopcionResponse` | `201`, `400`, `401`, `403` |
-| `PUT` | `/api/adopcion/{id}` | Modifica un animal de la propia protectora | `PROTECTORA` + Propietario | `ActualizarAnimalRequest` | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los ya deslizados (RF-09, RF-15). **Pendiente de implementar**: hoy el swipe se alimenta del catálogo paginado | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `401` |
+| `POST` | `/api/adopcion` | Publica un animal en adopción | `PROTECTORA` | `CrearAnimalRequest`: `nombre`, `especie`, `tamanyo`, `descripcion`, `fotoUrl`, `zonaGeografica` | `AnimalAdopcionResponse` | `201`, `400`, `401`, `403` |
+| `PUT` | `/api/adopcion/{id}` | Modifica un animal de la propia protectora | `PROTECTORA` + Propietario | `ActualizarAnimalRequest`: mismos campos que la creación | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
 | `DELETE` | `/api/adopcion/{id}` | Retira un animal del catálogo | `PROTECTORA` + Propietario | — | — | `204`, `401`, `403`, `404` |
-| `PATCH` | `/api/adopcion/{id}/adoptado` | Confirma la adopción: el animal pasa a estado `ADOPTADO` (RF-20) | `PROTECTORA` + Propietario | `ConfirmarAdopcionRequest`: `usuarioAdoptanteId?` | `AnimalAdopcionResponse` | `200`, `401`, `403`, `404` |
+| `PUT` | `/api/adopcion/{id}/adoptado` | Confirma la adopción: el animal pasa a estado `ADOPTADO` (RF-20) | `PROTECTORA` + Propietario | — | `AnimalAdopcionResponse` | `200`, `401`, `403`, `404` |
+
+### Permisos: el rol no basta
+
+Los cuatro endpoints de gestión exigen **dos** cosas, y solo la primera cabe en una anotación:
+
+- **El rol `PROTECTORA`**, que impone `@PreAuthorize`. Un `CIUDADANO` recibe `403` con código
+  `ACCESO_DENEGADO` sin que la petición llegue al service.
+- **Ser la protectora dueña de ese animal**, que depende del recurso pedido y resuelve el service.
+  Una protectora que toca el animal de otra recibe `403` con código `ANIMAL_AJENO`.
+
+Es `403` y no `404` porque el animal existe y el catálogo es público entre autenticados: `GET
+/api/adopcion/{id}` ya confirma su existencia, así que ocultarlo aquí no escondería nada. Un animal
+que de verdad no existe sigue siendo `404`.
+
+`403` con código `SIN_PROTECTORA` cubre una cuenta con rol `PROTECTORA` cuya ficha de protectora no
+existe. No debería ocurrir —el registro crea las dos juntas— pero sin la comprobación saldría un
+`500`.
+
+### Filtros del catálogo (RF-22)
+
+Los tres son opcionales y **combinables entre sí**: se aplican en la misma consulta, de modo que
+`?especie=perro&tamanyo=PEQUENO&zona=Madrid` devuelve la intersección. Un filtro vacío
+(`?especie=`) se trata como filtro ausente.
+
+| Filtro | Comparación |
+|---|---|
+| `especie` | Igualdad sin distinguir mayúsculas: es texto libre que escribe la protectora |
+| `tamanyo` | Valor exacto del enum; cualquier otro valor da `400` |
+| `zona` | Contiene, sin distinguir mayúsculas: `Madrid` encuentra `Madrid, Carabanchel` |
+
+El catálogo devuelve **solo animales `DISPONIBLE`**; el estado no es un filtro que el cliente pueda
+cambiar. Un animal `ADOPTADO` desaparece del listado pero conserva su detalle, para quien llegue
+desde un enlace o desde un chat abierto antes de la adopción.
+
+### Confirmación de la adopción (RF-20)
+
+Es `PUT` y no `PATCH` por el mismo motivo que `/api/chats/{id}/mensajes/leidos` (§7): no modifica un
+subconjunto de campos sino que fija por completo el estado del animal, y repetirlo lo deja igual. No
+lleva cuerpo: `ANIMAL_ADOPCION` no tiene dónde guardar quién adoptó, así que un `usuarioAdoptanteId`
+sería un dato que se recibe y se tira.
+
+La transición es de ida: no hay vuelta a `DISPONIBLE`. Si una adopción se cae, lo que corresponde es
+publicar el animal de nuevo, para no dejar los matches del ciclo anterior colgando de una ficha que
+ya no describe el mismo caso. Editar un animal ya adoptado sí se permite —corregir una foto o una
+descripción no cambia su disponibilidad—, pero el `PUT` de edición no lleva el estado en el cuerpo,
+así que tampoco puede reabrirlo por esa vía.
 
 ---
 
@@ -488,7 +567,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
 | RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` |
 | RF-06 | `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar` |
-| RF-07 | `POST /api/adopcion` |
+| RF-07 | `POST`, `PUT` y `DELETE` sobre `/api/adopcion` |
 | RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
 | RF-09 | `POST /api/matches` con `tipoPublicacion=ADOPCION` |
 | RF-10 | `GET /api/protectoras/panel` |
@@ -501,7 +580,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
 | RF-18 | `PATCH /api/usuarios/me/idioma` |
 | RF-19 | `DELETE /api/usuarios/me` |
-| RF-20 | `PATCH /api/adopcion/{id}/adoptado` |
+| RF-20 | `PUT /api/adopcion/{id}/adoptado` |
 | RF-21 | `POST /api/avistamientos` (campo `fotoUrl`) |
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
 | RF-23 | `POST /api/protectoras/{id}/valoracion` |
