@@ -134,6 +134,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "CHAT_AJENO", ex.getMessage(), request);
     }
 
+    /** 403 — el animal en adopción pertenece a otra protectora (RF-07). */
+    @ExceptionHandler(AnimalAjenoException.class)
+    public ResponseEntity<ErrorResponse> animalAjeno(AnimalAjenoException ex, WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "ANIMAL_AJENO", ex.getMessage(), request);
+    }
+
     /** 403 — rol insuficiente para el endpoint, lanzado por @PreAuthorize. */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> accesoDenegado(AccessDeniedException ex, WebRequest request) {
