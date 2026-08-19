@@ -302,10 +302,20 @@ RF-12.
 | `GET` | `/api/chats/{id}` | Detalle de una conversación: interlocutor y publicación que la originó | Participante | — | `ChatDetalleResponse` | `200`, `401`, `403`, `404` |
 | `GET` | `/api/chats/{id}/mensajes` | Histórico paginado de mensajes, del más reciente al más antiguo | Participante | — | Página de `MensajeResponse` | `200`, `401`, `403`, `404` |
 | `POST` | `/api/chats/{id}/mensajes` | Envía un mensaje. Alternativa REST al WebSocket, para clientes sin conexión STOMP activa | Participante | `EnviarMensajeRequest`: `contenido` | `MensajeResponse` | `201`, `400`, `401`, `403`, `404` |
-| `PATCH` | `/api/chats/{id}/mensajes/leidos` | Marca como leídos todos los mensajes recibidos en la conversación | Participante | — | — | `204`, `401`, `403`, `404` |
+| `PUT` | `/api/chats/{id}/mensajes/leidos` | Marca como leídos todos los mensajes recibidos en la conversación | Participante | — | — | `204`, `401`, `403`, `404` |
 
 `Participante` significa que el usuario autenticado es una de las dos partes del match que generó el
 chat; en caso contrario `403`.
+
+El marcado de leídos es `PUT` y no `PATCH` porque no modifica un subconjunto de campos de un
+recurso: fija por completo el estado «todo lo recibido está leído», y repetirlo deja la conversación
+exactamente igual. Solo alcanza a los mensajes del otro participante —nadie es destinatario de sí
+mismo—, así que los propios nunca se tocan.
+
+El envío en vivo va por el destino STOMP `/app/chat/{chatId}/enviar`, con difusión a
+`/topic/chat/{chatId}` (§13). `POST /api/chats/{id}/mensajes` es la alternativa para clientes sin
+conexión STOMP: guarda y difunde por el mismo canal, de modo que el otro participante lo recibe en
+vivo aunque el emisor no esté suscrito.
 
 ---
 
@@ -419,7 +429,8 @@ ws://<host>/ws?token=<jwt>     prefijo de suscripción: /topic, /queue
 | Destino | Dirección | Descripción | Auth | Payload |
 |---|---|---|---|---|
 | `/topic/mapa` | Servidor → cliente | Altas, cambios de estado y cierres de alertas para refrescar el mapa sin recargar (RF-04). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | `EventoMapaResponse`: `accion` (`ALTA` \| `ACTUALIZACION` \| `CIERRE`) + `alerta` (`AlertaMapaResponse`) |
-| `/topic/chat/{chatId}` | Bidireccional (envío a `/app/chat/{chatId}`) | Mensajería en tiempo real de una conversación (RF-12). **Pendiente de implementar** | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
+| `/topic/chat/{chatId}` | Bidireccional (envío a `/app/chat/{chatId}/enviar`) | Mensajería en tiempo real de una conversación (RF-12) | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
+| `/user/queue/errores` | Servidor → cliente | Rechazos de un envío por WebSocket, devueltos solo a la sesión que los provocó | Autenticado | `ErrorResponse` |
 | `/user/queue/notificaciones` | Servidor → cliente | Notificaciones del usuario, incluidas las alertas registradas en su área geográfica (RF-05). **Pendiente de implementar**: hoy las notificaciones solo se persisten y se consultan por `GET /api/notificaciones` | Autenticado | `NotificacionResponse` |
 
 El prefijo `/user/` no es una ruta más: Spring lo resuelve contra el `Principal` de la sesión STOMP
@@ -427,12 +438,43 @@ y entrega el mensaje **solo** a la conexión de ese usuario, aunque todos se sus
 `/user/queue/notificaciones`. El servidor envía con
 `convertAndSendToUser(usuario, "/queue/notificaciones", …)`.
 
-> Para que ese prefijo funcione, la sesión WebSocket necesita un `Principal`.
-> `JwtHandshakeInterceptor` deja hoy el `UsuarioPrincipal` en los atributos de la sesión, que basta
-> para `/topic/mapa` (difusión a cualquier autenticado) pero no para `/user/…`. Antes de implementar
-> RF-05 y RF-12 hay que propagarlo, sobrescribiendo `determineUser` en un `DefaultHandshakeHandler`.
-> El chat, además, necesita comprobar en la suscripción que quien se suscribe a
-> `/topic/chat/{chatId}` es participante de ese chat: el destino es público entre autenticados.
+Ese `Principal` lo pone `UsuarioHandshakeHandler`, que sobrescribe `determineUser` para convertir en
+principal de la sesión al `UsuarioPrincipal` que `JwtHandshakeInterceptor` ya había validado en el
+handshake. Sin él bastaría para `/topic/mapa` —difusión a cualquier autenticado— pero no para
+`/user/…`, que no sabría a qué conexión entregar.
+
+Suscribirse a `/topic/chat/{chatId}` está además restringido a los participantes: el destino es
+público entre autenticados y los ids son secuenciales, así que sin filtro bastaría probar números
+para escuchar conversaciones ajenas. Lo comprueba `ChatSuscripcionInterceptor` en el `SUBSCRIBE`, y
+rechaza igual el chat ajeno que el inexistente —en un canal STOMP no hay `403` frente a `404` que
+distinguir—.
+
+**No se admiten suscripciones con comodín.** El bróker no reparte comparando cadenas: usa un
+`AntPathMatcher`, así que un `SUBSCRIBE` a `/topic/chat/*` o a `/topic/**` recibiría todo lo que se
+publique en `/topic/chat/{chatId}`, de cualquier conversación. Como ningún destino documentado aquí
+lleva comodín, se rechaza cualquiera que lo contenga. Dentro de `/topic/chat` la regla es **denegar
+por defecto**: un destino que no sea exactamente `/topic/chat/<número>` se rechaza en vez de dejarlo
+pasar por no haberlo reconocido.
+
+### `/user/queue/errores`
+
+Un envío a `/app/chat/{chatId}/enviar` no tiene respuesta HTTP donde devolver un rechazo, así que
+los errores del canal viajan por esta cola personal. El cuerpo es el mismo `ErrorResponse` de la API
+REST (§1), para que el cliente no tenga que interpretar dos formatos distintos; `ruta` lleva el
+destino STOMP que falló en lugar de la ruta HTTP.
+
+| Situación | `status` | `codigo` |
+|---|---|---|
+| El texto está vacío o supera los 2000 caracteres | `400` | `VALIDACION` (con `errores` campo a campo) |
+| El chat existe pero el usuario no participa, o la sesión no está autenticada | `403` | `CHAT_AJENO` |
+| El chat no existe | `404` | `NO_ENCONTRADO` |
+| Fallo no controlado | `500` | `ERROR_INTERNO` |
+
+Existe porque una excepción sin manejar en un `@MessageMapping` hace que Spring emita una trama
+`ERROR` de STOMP, y una trama `ERROR` **cierra la conexión**: un mensaje demasiado largo tumbaría el
+chat entero en vez de rechazarse solo. El aviso se entrega únicamente a la sesión que lo originó
+(`broadcast = false`), no a las demás del mismo usuario. Como en REST, el texto de un `500` no sale
+al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el detalle queda en el log.
 
 ---
 
@@ -483,7 +525,7 @@ modelo que hicieron falta para sostenerlos:
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
 | `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición |
 | `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
-| `POST /api/chats/{id}/mensajes`, `PATCH /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
+| `POST /api/chats/{id}/mensajes`, `PUT /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |
 
 ### Cambios en el modelo de datos derivados de esta revisión

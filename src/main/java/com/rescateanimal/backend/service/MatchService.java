@@ -81,6 +81,12 @@ public class MatchService {
      * tiene sentido que exista una sin las otras. Es distinto del caso de las
      * alertas, donde el aviso a la zona sí es un efecto colateral que no debe
      * poder tumbar la publicación.
+     *
+     * Tampoco contradice a MensajeService.enviar, que difunde DESPUÉS de
+     * confirmar: aquí la notificación es una escritura en la base de datos y dos
+     * escrituras sí pueden ser atómicas entre sí, mientras que una difusión por
+     * WebSocket no lo es —ningún rollback la retira— y lo único elegible allí es
+     * cuándo sale. El porqué completo está en el javadoc de aquel método.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
