@@ -1,9 +1,13 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.AnimalAdopcion;
+import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.Tamanyo;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import org.springframework.data.jpa.domain.Specification;
 
 import java.util.ArrayList;
@@ -67,6 +71,42 @@ public final class CatalogoAdopcionSpec {
 
             return cb.and(condiciones.toArray(new Predicate[0]));
         };
+    }
+
+    /**
+     * Lo mismo, pero para el feed de swipe (RF-09, RF-15): además de los
+     * filtros, deja fuera lo que este usuario no debe volver a ver.
+     *
+     * Dos exclusiones, cada una por su motivo:
+     * - los animales de su propia protectora, porque nadie hace match consigo
+     *   mismo y MatchService rechazaría el swipe con 403;
+     * - lo que ya deslizó, en cualquiera de los dos sentidos, que es justo lo
+     *   que deja registrado MATCH_REGISTRO. Sin esto, un descarte volvería a
+     *   aparecer en la siguiente sesión y la restricción única convertiría el
+     *   segundo swipe en un 409.
+     *
+     * El NOT EXISTS filtra por tipo además de por id: publicacion_id es una
+     * referencia polimórfica, así que sin ese filtro haber deslizado el
+     * avistamiento 7 escondería del feed al animal 7, que no tiene nada que ver.
+     * Se apoya en el índice único (usuario_id, publicacion_id, tipo_publicacion),
+     * que cubre las tres columnas de la subconsulta.
+     */
+    public static Specification<AnimalAdopcion> paraFeed(EstadoAnimal estado, String especie,
+                                                         Tamanyo tamanyo, String zona,
+                                                         Long usuarioId) {
+
+        return de(estado, especie, tamanyo, zona).and((raiz, consulta, cb) -> {
+            Subquery<Long> yaDeslizado = consulta.subquery(Long.class);
+            Root<MatchRegistro> match = yaDeslizado.from(MatchRegistro.class);
+            yaDeslizado.select(cb.literal(1L)).where(
+                    cb.equal(match.get("usuario").get("id"), usuarioId),
+                    cb.equal(match.get("tipoPublicacion"), TipoPublicacion.ADOPCION),
+                    cb.equal(match.get("publicacionId"), raiz.get("id")));
+
+            return cb.and(
+                    cb.notEqual(raiz.get("protectora").get("usuario").get("id"), usuarioId),
+                    cb.not(cb.exists(yaDeslizado)));
+        });
     }
 
     /** Un filtro vacío o en blanco es un filtro que no se aplica. */

@@ -398,6 +398,82 @@ class AnimalAdopcionControllerTest {
         }
 
         @Test
+        @DisplayName("GET /feed -> 200 con una lista, no una página: se consume tarjeta a tarjeta")
+        void feedDevuelveLista() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+            when(animalAdopcionService.feed(any(), any(), any(), eq(ID_CIUDADANO)))
+                    .thenReturn(List.of(respuesta()));
+
+            mockMvc.perform(get("/api/adopcion/feed"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$").isArray())
+                    .andExpect(jsonPath("$[0].id").value(ID_ANIMAL))
+                    .andExpect(jsonPath("$.content").doesNotExist())
+                    .andExpect(jsonPath("$.totalElements").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("El feed se pide siempre para el usuario del token")
+        void elFeedUsaElUsuarioDelToken() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+            when(animalAdopcionService.feed(any(), any(), any(), any())).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/adopcion/feed")).andExpect(status().isOk());
+
+            verify(animalAdopcionService).feed(isNull(), isNull(), isNull(), eq(ID_CIUDADANO));
+        }
+
+        @Test
+        @DisplayName("El feed admite los mismos filtros combinables que el catálogo")
+        void elFeedAdmiteLosMismosFiltros() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+            when(animalAdopcionService.feed(any(), any(), any(), any())).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/adopcion/feed")
+                            .param("especie", "perro")
+                            .param("tamanyo", "PEQUENO")
+                            .param("zona", "Madrid"))
+                    .andExpect(status().isOk());
+
+            verify(animalAdopcionService)
+                    .feed(eq("perro"), eq(Tamanyo.PEQUENO), eq("Madrid"), eq(ID_CIUDADANO));
+        }
+
+        @Test
+        @DisplayName("Feed agotado -> 200 con lista vacía, no 404")
+        void feedVacioDevuelve200() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+            when(animalAdopcionService.feed(any(), any(), any(), any())).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/adopcion/feed"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$").isArray())
+                    .andExpect(jsonPath("$").isEmpty());
+        }
+
+        @Test
+        @DisplayName("'feed' no se confunde con un id: no llega a la ruta del detalle")
+        void feedNoSeConfundeConUnId() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+            when(animalAdopcionService.feed(any(), any(), any(), any())).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/adopcion/feed")).andExpect(status().isOk());
+
+            verify(animalAdopcionService, never()).detalle(any());
+        }
+
+        @Test
+        @DisplayName("Un tamanyo inválido en el feed -> 400, igual que en el catálogo")
+        void feedConTamanyoInvalidoDevuelve400() throws Exception {
+            autenticar(ID_CIUDADANO, Rol.CIUDADANO);
+
+            mockMvc.perform(get("/api/adopcion/feed").param("tamanyo", "ENORME"))
+                    .andExpect(status().isBadRequest());
+
+            verifyNoInteractions(animalAdopcionService);
+        }
+
+        @Test
         @DisplayName("GET /{id} inexistente -> 404")
         void detalleInexistenteDevuelve404() throws Exception {
             autenticar(ID_CIUDADANO, Rol.CIUDADANO);
