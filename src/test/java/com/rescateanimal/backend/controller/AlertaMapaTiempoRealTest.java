@@ -11,6 +11,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.messaging.converter.SimpleMessageConverter;
 import org.springframework.messaging.simp.stomp.StompFrameHandler;
@@ -57,6 +58,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
  * por ella: así las alertas que hayan quedado en la base de datos de desarrollo
  * no pueden interferir con la prueba.
  */
+@ActiveProfiles("test")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "jwt.secret=secreto-solo-para-tests-de-al-menos-32-caracteres-1234567890")
