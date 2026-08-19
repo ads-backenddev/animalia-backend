@@ -9,14 +9,18 @@ import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
+import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.LimiteMatchDiario;
 import com.rescateanimal.backend.model.MatchRegistro;
+import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
@@ -66,6 +70,17 @@ class MatchServiceTest {
     private static final Long ID_DUENYO_ALERTA = 9L;
     private static final Long ID_AVISTAMIENTO = 33L;
 
+    /** Cuenta de la protectora dueña del animal: el otro extremo en adopción. */
+    private static final Long ID_CUENTA_PROTECTORA = 20L;
+
+    /**
+     * Mismo número que ID_AVISTAMIENTO a propósito: publicacion_id es una
+     * referencia polimórfica, así que el 33 existe en las dos tablas y el tipo
+     * es lo único que dice a cuál mirar. Si alguna rama dejara de filtrar por
+     * tipo, estas pruebas leerían la fila equivocada y fallarían.
+     */
+    private static final Long ID_ANIMAL = 33L;
+
     @Mock
     private MatchRegistroRepository matchRegistroRepository;
     @Mock
@@ -74,6 +89,8 @@ class MatchServiceTest {
     private ChatRepository chatRepository;
     @Mock
     private AvistamientoRepository avistamientoRepository;
+    @Mock
+    private AnimalAdopcionRepository animalAdopcionRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
     @Mock
@@ -84,7 +101,8 @@ class MatchServiceTest {
     @BeforeEach
     void prepararServicio() {
         matchService = new MatchService(matchRegistroRepository, limiteMatchDiarioRepository,
-                chatRepository, avistamientoRepository, usuarioRepository, notificacionService,
+                chatRepository, avistamientoRepository, animalAdopcionRepository, usuarioRepository,
+                notificacionService,
                 LIMITE_DIARIO);
 
         when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(avistamiento()));
@@ -351,18 +369,152 @@ class MatchServiceTest {
             verify(matchRegistroRepository, never()).save(any());
         }
 
-        @Test
-        @DisplayName("ADOPCION todavía no se admite y se dice explícitamente")
-        void elTipoAdopcionTodaviaNoSeAdmite() {
-            CrearMatchRequest peticion = new CrearMatchRequest(
-                    ID_AVISTAMIENTO, TipoPublicacion.ADOPCION, true);
+    }
 
-            assertThatThrownBy(() -> matchService.deslizar(peticion, ID_USUARIO))
+    /**
+     * Swipe sobre un animal en adopción (RF-09).
+     *
+     * Lo único que cambia respecto al avistamiento es de dónde sale el otro
+     * extremo: allí es el autor del avistamiento y aquí la CUENTA de la
+     * protectora dueña del animal. El resto del camino —cuota, swipe duplicado,
+     * apertura del chat— es compartido, así que aquí se prueba lo propio de la
+     * adopción en vez de repetir lo ya cubierto arriba.
+     */
+    @Nested
+    @DisplayName("Swipe sobre adopción (RF-09)")
+    class Adopcion {
+
+        @Test
+        @DisplayName("Match sobre un animal -> abre chat y notifica a la protectora")
+        void matchDeAdopcionNotificaALaProtectora() {
+            prepararMatchDeAdopcion();
+
+            MatchResponse respuesta = matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO);
+
+            assertThat(respuesta.getChatId()).isEqualTo(900L);
+            assertThat(respuesta.getTipoPublicacion()).isEqualTo(TipoPublicacion.ADOPCION);
+            verify(chatRepository).save(any());
+            verify(notificacionService)
+                    .notificarNuevoMatch(argThatTieneId(ID_CUENTA_PROTECTORA), any(), any());
+        }
+
+        @Test
+        @DisplayName("El avisado es siempre el que NO deslizó, igual que en los avistamientos")
+        void seNotificaAQuienNoDeslizo() {
+            prepararMatchDeAdopcion();
+
+            matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO);
+
+            verify(notificacionService, never())
+                    .notificarNuevoMatch(argThatTieneId(ID_USUARIO), any(), any());
+        }
+
+        @Test
+        @DisplayName("La protectora no puede deslizar su propio animal -> 403")
+        void laProtectoraNoDeslizaSuAnimal() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.DISPONIBLE)));
+
+            assertThatThrownBy(() ->
+                    matchService.deslizar(peticionDeAdopcion(true), ID_CUENTA_PROTECTORA))
+                    .isInstanceOf(PublicacionPropiaException.class);
+
+            verify(matchRegistroRepository, never()).save(any());
+            verify(chatRepository, never()).save(any());
+            verifyNoInteractions(notificacionService);
+        }
+
+        @Test
+        @DisplayName("Tampoco puede descartarlo: no depende del sentido del swipe")
+        void laProtectoraTampocoDescartaSuAnimal() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.DISPONIBLE)));
+
+            assertThatThrownBy(() ->
+                    matchService.deslizar(peticionDeAdopcion(false), ID_CUENTA_PROTECTORA))
+                    .isInstanceOf(PublicacionPropiaException.class);
+
+            verify(matchRegistroRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Animal ya adoptado -> 400 ANIMAL_NO_DISPONIBLE, sin gastar cuota")
+        void animalAdoptadoSeRechaza() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.ADOPTADO)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
                     .isInstanceOf(OperacionNoPermitidaException.class)
                     .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
-                            .isEqualTo("TIPO_PUBLICACION_NO_DISPONIBLE"));
+                            .isEqualTo("ANIMAL_NO_DISPONIBLE"));
 
+            verify(limiteMatchDiarioRepository, never()).incrementarSiHayCupo(any(), any(), anyInt());
+            verify(matchRegistroRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Ser dueño pesa más que el estado: primero se dice que es tuyo")
+        void loPropioSeRechazaAntesQueElEstado() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.ADOPTADO)));
+
+            assertThatThrownBy(() ->
+                    matchService.deslizar(peticionDeAdopcion(true), ID_CUENTA_PROTECTORA))
+                    .isInstanceOf(PublicacionPropiaException.class);
+        }
+
+        @Test
+        @DisplayName("Animal inexistente -> 404, sin tocar el repositorio de avistamientos")
+        void animalInexistenteDevuelve404() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            // El tipo decide la tabla: un id de animal no se busca como avistamiento.
             verifyNoInteractions(avistamientoRepository);
+        }
+
+        @Test
+        @DisplayName("El swipe duplicado se comprueba con el tipo, no solo con el id")
+        void elDuplicadoDistingueElTipo() {
+            prepararMatchDeAdopcion();
+
+            matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO);
+
+            verify(matchRegistroRepository).existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                    ID_USUARIO, ID_ANIMAL, TipoPublicacion.ADOPCION);
+        }
+
+        @Test
+        @DisplayName("El descarte de un animal ajeno no abre chat ni avisa (RF-15)")
+        void elDescarteNoAbreChat() {
+            prepararMatchDeAdopcion();
+
+            MatchResponse respuesta = matchService.deslizar(peticionDeAdopcion(false), ID_USUARIO);
+
+            assertThat(respuesta.getChatId()).isNull();
+            verify(chatRepository, never()).save(any());
+            verifyNoInteractions(notificacionService);
+        }
+
+        private void prepararMatchDeAdopcion() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.DISPONIBLE)));
+            when(matchRegistroRepository.save(any())).thenAnswer(invocacion -> {
+                MatchRegistro guardado = invocacion.getArgument(0);
+                guardado.setId(800L);
+                guardado.setCreatedAt(LocalDateTime.now());
+                return guardado;
+            });
+            when(chatRepository.save(any())).thenAnswer(invocacion -> {
+                Chat guardado = invocacion.getArgument(0);
+                guardado.setId(900L);
+                return guardado;
+            });
+            when(limiteMatchDiarioRepository.incrementarSiHayCupo(any(), any(), anyInt()))
+                    .thenReturn(1);
         }
     }
 
@@ -404,6 +556,29 @@ class MatchServiceTest {
 
     private static CrearMatchRequest peticion(boolean interesado) {
         return new CrearMatchRequest(ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO, interesado);
+    }
+
+    private static CrearMatchRequest peticionDeAdopcion(boolean interesado) {
+        return new CrearMatchRequest(ID_ANIMAL, TipoPublicacion.ADOPCION, interesado);
+    }
+
+    /**
+     * Un animal cuya protectora tiene detrás la cuenta ID_CUENTA_PROTECTORA:
+     * ese usuario, y no la fila de PROTECTORA, es el otro extremo del chat.
+     */
+    private static AnimalAdopcion animal(EstadoAnimal estado) {
+        Protectora protectora = new Protectora();
+        protectora.setId(70L);
+        protectora.setNombreOrganizacion("Protectora de prueba");
+        protectora.setUsuario(usuario(ID_CUENTA_PROTECTORA));
+
+        AnimalAdopcion animal = new AnimalAdopcion();
+        animal.setId(ID_ANIMAL);
+        animal.setProtectora(protectora);
+        animal.setNombre("Luna");
+        animal.setEspecie("PERRO");
+        animal.setEstado(estado);
+        return animal;
     }
 
     private static Avistamiento avistamiento() {

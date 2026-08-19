@@ -7,14 +7,18 @@ import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.ChatAjenoException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
+import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.MatchRegistro;
+import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Mensaje;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.MensajeRepository;
@@ -72,6 +76,9 @@ class ChatServiceTest {
     private static final Long ID_DUENYO_ALERTA = 9L;
     /** No pinta nada en esta conversación. */
     private static final Long ID_TERCERO = 99L;
+    /** Cuenta de la protectora duena del animal: participante B en adopcion. */
+    private static final Long ID_CUENTA_PROTECTORA = 20L;
+    private static final Long ID_ANIMAL = 44L;
 
     @Mock
     private ChatRepository chatRepository;
@@ -79,12 +86,15 @@ class ChatServiceTest {
     private MensajeRepository mensajeRepository;
     @Mock
     private AvistamientoRepository avistamientoRepository;
+    @Mock
+    private AnimalAdopcionRepository animalAdopcionRepository;
 
     private ChatService chatService;
 
     @BeforeEach
     void prepararServicio() {
-        chatService = new ChatService(chatRepository, mensajeRepository, avistamientoRepository);
+        chatService = new ChatService(chatRepository, mensajeRepository, avistamientoRepository,
+                animalAdopcionRepository);
 
         when(chatRepository.buscarConMatch(ID_CHAT)).thenReturn(Optional.of(chat()));
         when(avistamientoRepository.buscarConAutorYAlerta(anyCollection()))
@@ -206,7 +216,7 @@ class ChatServiceTest {
         @Test
         @DisplayName("Sin chats no se consulta nada más")
         void sinChatsNoConsultaNadaMas() {
-            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO))
+            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
                     .thenReturn(List.of());
 
             assertThat(chatService.listarMisChats(ID_EMISOR)).isEmpty();
@@ -216,7 +226,7 @@ class ChatServiceTest {
         @Test
         @DisplayName("Cada fila trae el interlocutor, el último mensaje y los no leídos")
         void cadaFilaTraeLoQuePintaLaLista() {
-            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO))
+            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
                     .thenReturn(List.of(chat()));
             when(mensajeRepository.buscarUltimoDeCadaChat(List.of(ID_CHAT)))
                     .thenReturn(List.of(mensaje(3L, ID_AUTOR, "¿Sigue por allí?", false)));
@@ -235,7 +245,7 @@ class ChatServiceTest {
         @Test
         @DisplayName("Un chat sin mensajes aparece igual, sin último mensaje y con cero no leídos")
         void unChatSinMensajesApareceIgual() {
-            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO))
+            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
                     .thenReturn(List.of(chat()));
             when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of());
             when(mensajeRepository.contarNoLeidosPorChat(anyCollection(), anyLong()))
@@ -255,7 +265,7 @@ class ChatServiceTest {
             Chat reciente = chat();
             reciente.setId(501L);
 
-            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO))
+            when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
                     .thenReturn(List.of(antiguo, reciente));
             when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of(
                     mensajeEn(1L, antiguo, LocalDateTime.now().minusDays(3)),
@@ -271,7 +281,7 @@ class ChatServiceTest {
         @Test
         @DisplayName("Se lista tanto siendo emisor como siendo autor del avistamiento")
         void seListaDesdeLosDosLados() {
-            when(chatRepository.buscarPorParticipante(anyLong(), any())).thenReturn(List.of(chat()));
+            when(chatRepository.buscarPorParticipante(anyLong(), any(), any())).thenReturn(List.of(chat()));
             when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of());
             when(mensajeRepository.contarNoLeidosPorChat(anyCollection(), anyLong()))
                     .thenReturn(List.of());
@@ -280,6 +290,117 @@ class ChatServiceTest {
                     .isEqualTo(ID_AUTOR);
             assertThat(chatService.listarMisChats(ID_AUTOR).get(0).getOtroParticipante().getId())
                     .isEqualTo(ID_EMISOR);
+        }
+    }
+
+    /**
+     * Conversaciones nacidas de un match de adopción (RF-09).
+     *
+     * Lo que hay que fijar aquí es que el segundo participante ya no es el autor
+     * de un avistamiento sino la CUENTA de la protectora, y que el tipo del
+     * match decide en qué tabla se busca la publicación: publicacion_id apunta a
+     * dos tablas distintas y el mismo número existe en ambas.
+     */
+    @Nested
+    @DisplayName("Conversaciones de adopción (RF-09)")
+    class ChatDeAdopcion {
+
+        @BeforeEach
+        void prepararChatDeAdopcion() {
+            when(chatRepository.buscarConMatch(ID_CHAT))
+                    .thenReturn(Optional.of(chatDeAdopcion()));
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal()));
+        }
+
+        @Test
+        @DisplayName("Los participantes son quien deslizó y la cuenta de la protectora")
+        void participanElCiudadanoYLaProtectora() {
+            ChatService.Participantes participantes =
+                    chatService.exigirParticipante(ID_CHAT, ID_EMISOR);
+
+            assertThat(participantes.incluye(ID_EMISOR)).isTrue();
+            assertThat(participantes.incluye(ID_CUENTA_PROTECTORA)).isTrue();
+            assertThat(participantes.otro(ID_EMISOR).getId()).isEqualTo(ID_CUENTA_PROTECTORA);
+        }
+
+        @Test
+        @DisplayName("El autor de un avistamiento cualquiera no entra en un chat de adopción")
+        void unTerceroNoParticipa() {
+            assertThatThrownBy(() -> chatService.exigirParticipante(ID_CHAT, ID_TERCERO))
+                    .isInstanceOf(ChatAjenoException.class);
+        }
+
+        @Test
+        @DisplayName("El detalle trae el animal y su protectora, no el avistamiento")
+        void elDetalleTraeElAnimal() {
+            ChatDetalleResponse detalle = chatService.detalle(ID_CHAT, ID_EMISOR);
+
+            assertThat(detalle.getTipoPublicacion()).isEqualTo(TipoPublicacion.ADOPCION);
+            assertThat(detalle.getAnimalId()).isEqualTo(ID_ANIMAL);
+            assertThat(detalle.getAnimalNombre()).isEqualTo("Luna");
+            assertThat(detalle.getAnimalEstado()).isEqualTo("DISPONIBLE");
+            assertThat(detalle.getProtectoraNombre()).isEqualTo("Protectora de prueba");
+
+            // Los campos del otro tipo quedan sin rellenar: el DTO los omite.
+            assertThat(detalle.getAvistamientoId()).isNull();
+            assertThat(detalle.getAlertaId()).isNull();
+        }
+
+        @Test
+        @DisplayName("El tipo decide la tabla: no se busca el id como avistamiento")
+        void elTipoDecideLaTabla() {
+            chatService.detalle(ID_CHAT, ID_EMISOR);
+
+            verifyNoInteractions(avistamientoRepository);
+        }
+
+        @Test
+        @DisplayName("Animal retirado del catálogo -> 404 del chat, no un 500")
+        void animalRetiradoDevuelve404() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> chatService.detalle(ID_CHAT, ID_EMISOR))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("El listado mezcla los dos tipos y resuelve cada uno en su tabla")
+        void elListadoMezclaLosDosTipos() {
+            Chat deAvistamiento = chat();
+            Chat deAdopcion = chatDeAdopcion();
+            deAdopcion.setId(501L);
+
+            when(chatRepository.buscarPorParticipante(
+                    ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
+                    .thenReturn(List.of(deAvistamiento, deAdopcion));
+            when(animalAdopcionRepository.buscarConProtectoraPorIds(anyCollection()))
+                    .thenReturn(List.of(animal()));
+            when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of());
+            when(mensajeRepository.contarNoLeidosPorChat(anyCollection(), anyLong()))
+                    .thenReturn(List.of());
+
+            List<ChatResumenResponse> chats = chatService.listarMisChats(ID_EMISOR);
+
+            assertThat(chats).hasSize(2);
+            assertThat(chats).extracting(chat -> chat.getOtroParticipante().getId())
+                    .containsExactlyInAnyOrder(ID_AUTOR, ID_CUENTA_PROTECTORA);
+        }
+
+        @Test
+        @DisplayName("Un chat cuyo animal ya no existe se omite del listado, no lo tumba")
+        void elChatSinAnimalSeOmite() {
+            when(chatRepository.buscarPorParticipante(
+                    ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
+                    .thenReturn(List.of(chatDeAdopcion()));
+            when(animalAdopcionRepository.buscarConProtectoraPorIds(anyCollection()))
+                    .thenReturn(List.of());
+            when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of());
+            when(mensajeRepository.contarNoLeidosPorChat(anyCollection(), anyLong()))
+                    .thenReturn(List.of());
+
+            assertThat(chatService.listarMisChats(ID_EMISOR)).isEmpty();
         }
     }
 
@@ -355,6 +476,38 @@ class ChatServiceTest {
         chat.setMatch(match());
         chat.setCreatedAt(LocalDateTime.now().minusDays(1));
         return chat;
+    }
+
+    /** Chat nacido de un match de adopción: el mismo id de chat, otro origen. */
+    private static Chat chatDeAdopcion() {
+        MatchRegistro match = new MatchRegistro();
+        match.setId(ID_MATCH);
+        match.setUsuario(usuario(ID_EMISOR));
+        match.setPublicacionId(ID_ANIMAL);
+        match.setTipoPublicacion(TipoPublicacion.ADOPCION);
+        match.setInteresado(true);
+
+        Chat chat = new Chat();
+        chat.setId(ID_CHAT);
+        chat.setMatch(match);
+        chat.setCreatedAt(LocalDateTime.now().minusDays(1));
+        return chat;
+    }
+
+    private static AnimalAdopcion animal() {
+        Protectora protectora = new Protectora();
+        protectora.setId(70L);
+        protectora.setNombreOrganizacion("Protectora de prueba");
+        protectora.setUsuario(usuario(ID_CUENTA_PROTECTORA));
+
+        AnimalAdopcion animal = new AnimalAdopcion();
+        animal.setId(ID_ANIMAL);
+        animal.setProtectora(protectora);
+        animal.setNombre("Luna");
+        animal.setEspecie("perro");
+        animal.setFotoUrl("https://cdn.test/luna.jpg");
+        animal.setEstado(EstadoAnimal.DISPONIBLE);
+        return animal;
     }
 
     private static MatchRegistro match() {

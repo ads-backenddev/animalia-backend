@@ -275,7 +275,8 @@ class MensajeServiceTest {
         avistamiento.setUsuario(usuario(ID_AUTOR));
         avistamiento.setAlerta(alerta);
 
-        return new ChatService.Participantes(chat, avistamiento, usuario(ID_EMISOR), usuario(ID_AUTOR));
+        return new ChatService.Participantes(chat,
+                new ChatService.PublicacionDelChat.DeAvistamiento(avistamiento), usuario(ID_EMISOR));
     }
 
     private static Usuario usuario(Long id) {
