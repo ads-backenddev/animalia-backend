@@ -17,12 +17,15 @@ import org.springframework.messaging.handler.annotation.MessageExceptionHandler;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.handler.annotation.support.MethodArgumentNotValidException;
 import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.validation.FieldError;
 
 import java.security.Principal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * Entrada de mensajes por WebSocket (RF-12).
@@ -92,18 +95,32 @@ public class ChatWebSocketController {
             log.debug("Envío rechazado en {}: {}", destino, ex.getMessage());
         }
 
-        return ErrorResponse.builder()
+        ErrorResponse cuerpo = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
                 .status(estado.value())
                 .error(estado.getReasonPhrase())
                 .codigo(codigoDe(ex, estado))
                 // El texto de un 500 no sale al cliente: podría llevar detalles
                 // internos, igual que en GlobalExceptionHandler (RNF-10).
-                .mensaje(estado.is5xxServerError() ? "Se ha producido un error inesperado" : ex.getMessage())
+                .mensaje(mensajeDe(ex, estado))
                 .ruta(destino)
                 .build();
+
+        if (ex instanceof MethodArgumentNotValidException validacion) {
+            cuerpo.setErrores(erroresDe(validacion));
+        }
+        return cuerpo;
     }
 
+    /**
+     * OJO con el MethodArgumentNotValidException que se compara aquí: es el de
+     * org.springframework.messaging.handler.annotation.support, no el homónimo
+     * de org.springframework.web.bind que usa GlobalExceptionHandler. Se llaman
+     * igual pero no comparten jerarquía, y quien lanza el fallo de @Valid en un
+     * @MessageMapping es PayloadMethodArgumentResolver, que usa el de
+     * messaging. Con el de web importado por error, un mensaje vacío o de más
+     * de 2000 caracteres no casaba con ninguna rama y se iba al 500.
+     */
     private HttpStatus estadoDe(Exception ex) {
         if (ex instanceof ChatAjenoException) {
             return HttpStatus.FORBIDDEN;
@@ -115,6 +132,32 @@ public class ChatWebSocketController {
             return HttpStatus.BAD_REQUEST;
         }
         return HttpStatus.INTERNAL_SERVER_ERROR;
+    }
+
+    /**
+     * El detalle de una validación no se saca de getMessage(): el de la
+     * excepción de messaging arrastra la firma del método y el payload entero.
+     * Se responde el mismo texto fijo que en REST y el detalle va en `errores`.
+     */
+    private String mensajeDe(Exception ex, HttpStatus estado) {
+        if (estado.is5xxServerError()) {
+            return "Se ha producido un error inesperado";
+        }
+        if (ex instanceof MethodArgumentNotValidException) {
+            return "Los datos enviados no son válidos";
+        }
+        return ex.getMessage();
+    }
+
+    /** Campo a campo, con la misma forma que el 400 de GlobalExceptionHandler. */
+    private Map<String, String> erroresDe(MethodArgumentNotValidException ex) {
+        Map<String, String> errores = new HashMap<>();
+        if (ex.getBindingResult() != null) {
+            for (FieldError error : ex.getBindingResult().getFieldErrors()) {
+                errores.put(error.getField(), error.getDefaultMessage());
+            }
+        }
+        return errores;
     }
 
     private String codigoDe(Exception ex, HttpStatus estado) {
