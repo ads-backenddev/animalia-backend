@@ -8,13 +8,15 @@ import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
+import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.LimiteMatchDiario;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
-import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
+import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
@@ -43,6 +45,7 @@ public class MatchService {
     private final LimiteMatchDiarioRepository limiteMatchDiarioRepository;
     private final ChatRepository chatRepository;
     private final AvistamientoRepository avistamientoRepository;
+    private final AnimalAdopcionRepository animalAdopcionRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
 
@@ -52,6 +55,7 @@ public class MatchService {
                         LimiteMatchDiarioRepository limiteMatchDiarioRepository,
                         ChatRepository chatRepository,
                         AvistamientoRepository avistamientoRepository,
+                        AnimalAdopcionRepository animalAdopcionRepository,
                         UsuarioRepository usuarioRepository,
                         NotificacionService notificacionService,
                         @Value("${app.matches.limite-diario}") int limiteDiario) {
@@ -59,6 +63,7 @@ public class MatchService {
         this.limiteMatchDiarioRepository = limiteMatchDiarioRepository;
         this.chatRepository = chatRepository;
         this.avistamientoRepository = avistamientoRepository;
+        this.animalAdopcionRepository = animalAdopcionRepository;
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.limiteDiario = limiteDiario;
@@ -90,30 +95,7 @@ public class MatchService {
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
-        if (peticion.getTipoPublicacion() != TipoPublicacion.AVISTAMIENTO) {
-            throw new OperacionNoPermitidaException("TIPO_PUBLICACION_NO_DISPONIBLE",
-                    "Por ahora solo se pueden deslizar avistamientos; las adopciones llegarán después");
-        }
-
-        Avistamiento avistamiento = avistamientoRepository.findById(peticion.getPublicacionId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "El avistamiento " + peticion.getPublicacionId() + " no existe"));
-
-        if (avistamiento.getUsuario().getId().equals(usuarioId)) {
-            // Sin esto, un match sobre lo propio abriría un chat de uno consigo
-            // mismo. El feed ya los excluye; esto cubre la llamada directa.
-            throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
-        }
-
-        if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
-            // Mismo motivo que el caso de arriba: el feed filtra por alerta
-            // ACTIVA, pero nada impide llamar al endpoint con el id de un
-            // avistamiento cuya alerta se cerró después de mostrarse la tarjeta.
-            // Sin esta comprobación se abriría un chat y se avisaría al dueño por
-            // un animal que ya apareció, gastándole además un match del día.
-            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
-                    "La alerta de este avistamiento ya no está activa: el animal ya apareció");
-        }
+        Usuario autorDeLaPublicacion = resolverAutor(peticion, usuarioId);
 
         if (matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
                 usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion())) {
@@ -138,7 +120,8 @@ public class MatchService {
         if (!interesado) {
             // Un descarte solo deja constancia para que el feed no lo repita:
             // ni chat, ni notificación, ni cuota (RF-15).
-            log.debug("Usuario {} descartó el avistamiento {}", usuarioId, peticion.getPublicacionId());
+            log.debug("Usuario {} descartó la publicación {} de tipo {}",
+                    usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion());
             return aMatchResponse(guardado, null);
         }
 
@@ -146,17 +129,94 @@ public class MatchService {
         chat.setMatch(guardado);
         Chat chatGuardado = chatRepository.save(chat);
 
-        // Avisa a quien registró el avistamiento de que alguien reconoce a ese
-        // animal. El destinatario es el otro participante del chat que se acaba
-        // de abrir, no el dueño de la alerta: quien desliza suele ser ese mismo
-        // dueño, y avisarle sería avisar a quien acaba de hacer el match.
+        // Avisa a quien publicó lo deslizado de que alguien ha mostrado interés.
+        // El destinatario es siempre el OTRO extremo del chat que se acaba de
+        // abrir, nunca quien deslizó: en los avistamientos es su autor y no el
+        // dueño de la alerta —que suele ser el propio deslizador—, y en las
+        // adopciones es la cuenta de la protectora dueña del animal.
         notificacionService.notificarNuevoMatch(
-                avistamiento.getUsuario(), guardado.getId(), usuarioId);
+                autorDeLaPublicacion, guardado.getId(), usuarioId);
 
-        log.info("Match {} del usuario {} sobre el avistamiento {}; chat {}",
-                guardado.getId(), usuarioId, peticion.getPublicacionId(), chatGuardado.getId());
+        log.info("Match {} del usuario {} sobre la publicación {} de tipo {}; chat {}",
+                guardado.getId(), usuarioId, peticion.getPublicacionId(),
+                peticion.getTipoPublicacion(), chatGuardado.getId());
 
         return aMatchResponse(guardado, chatGuardado.getId());
+    }
+
+    /**
+     * Carga la publicación deslizada y devuelve a quien la publicó, que es el
+     * otro extremo del chat y el destinatario de la notificación.
+     *
+     * Es lo único que cambia entre tipos de publicación (RF-08 y RF-09): cada
+     * uno vive en su tabla, tiene su propio dueño y su propia regla de cuándo
+     * deja de admitir matches. Todo lo que viene después —swipe duplicado,
+     * cuota diaria, registro, chat y notificación— es común y no se duplica.
+     *
+     * El orden dentro de cada rama importa y es el mismo en las dos: primero se
+     * rechaza deslizar lo propio y solo después se mira el estado. Al revés, a
+     * quien intentara deslizar su propia publicación ya cerrada se le diría que
+     * está cerrada en vez de que es suya.
+     */
+    private Usuario resolverAutor(CrearMatchRequest peticion, Long usuarioId) {
+        return switch (peticion.getTipoPublicacion()) {
+            case AVISTAMIENTO -> autorDelAvistamiento(peticion.getPublicacionId(), usuarioId);
+            case ADOPCION -> protectoraDelAnimal(peticion.getPublicacionId(), usuarioId);
+        };
+    }
+
+    private Usuario autorDelAvistamiento(Long avistamientoId, Long usuarioId) {
+        Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El avistamiento " + avistamientoId + " no existe"));
+
+        exigirQueNoSeaPropia(avistamiento.getUsuario(), usuarioId);
+
+        if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
+            // El feed filtra por alerta ACTIVA, pero nada impide llamar al
+            // endpoint con el id de un avistamiento cuya alerta se cerró después
+            // de mostrarse la tarjeta. Sin esta comprobación se abriría un chat y
+            // se avisaría al dueño por un animal que ya apareció, gastándole
+            // además un match del día.
+            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta de este avistamiento ya no está activa: el animal ya apareció");
+        }
+        return avistamiento.getUsuario();
+    }
+
+    /**
+     * El otro extremo de un match de adopción es la CUENTA de la protectora
+     * dueña del animal (PROTECTORA.usuario), no la protectora como organización:
+     * el chat y las notificaciones se dirigen a usuarios, y la protectora no
+     * tiene identidad propia en ninguno de los dos.
+     */
+    private Usuario protectoraDelAnimal(Long animalId, Long usuarioId) {
+        AnimalAdopcion animal = animalAdopcionRepository.buscarConProtectora(animalId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El animal " + animalId + " no existe"));
+
+        exigirQueNoSeaPropia(animal.getProtectora().getUsuario(), usuarioId);
+
+        if (animal.getEstado() != EstadoAnimal.DISPONIBLE) {
+            // Equivalente a la alerta ya cerrada: el animal ya tiene casa, así
+            // que un match nuevo abriría una conversación sobre una adopción
+            // consumada y le gastaría al ciudadano un match del día (RF-20).
+            throw new OperacionNoPermitidaException("ANIMAL_NO_DISPONIBLE",
+                    "Este animal ya ha sido adoptado");
+        }
+        return animal.getProtectora().getUsuario();
+    }
+
+    /**
+     * Nadie desliza lo suyo, ni para hacer match ni para descartarlo. Sin esto,
+     * un match sobre lo propio abriría un chat de un usuario consigo mismo; en
+     * adopción, además, es lo que impide que una protectora se deslice a sus
+     * propios animales. El feed ya los excluye: esto cubre la llamada directa.
+     */
+    private void exigirQueNoSeaPropia(Usuario autor, Long usuarioId) {
+        if (autor.getId().equals(usuarioId)) {
+            throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
+        }
     }
 
     /**

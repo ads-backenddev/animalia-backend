@@ -21,7 +21,7 @@ public class CrearMatchRequest {
     @NotNull(message = "la publicación es obligatoria")
     private Long publicacionId;
 
-    /** Por ahora solo AVISTAMIENTO; ADOPCION llegará con su propio bloque. */
+    /** Decide contra qué tabla se resuelve publicacionId y quién es el otro extremo del chat. */
     @NotNull(message = "el tipo de publicación es obligatorio")
     private TipoPublicacion tipoPublicacion;
 

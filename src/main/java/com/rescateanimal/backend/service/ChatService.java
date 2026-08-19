@@ -6,15 +6,16 @@ import com.rescateanimal.backend.dto.response.ChatResumenResponse;
 import com.rescateanimal.backend.dto.response.MensajeResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.ChatAjenoException;
-import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
+import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Mensaje;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.MensajeRepository;
@@ -29,6 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -40,12 +42,16 @@ import java.util.stream.Collectors;
  *
  * LOS DOS PARTICIPANTES. Un chat cuelga 1:1 de un match, y sus dos extremos son
  * los dos lados de ese match: quien deslizó (MATCH_REGISTRO.usuario) y quien
- * publicó lo deslizado (AVISTAMIENTO.usuario). No interviene el dueño de la
- * alerta como tal: normalmente ES quien desliza —el feed solo le esconde sus
- * propios avistamientos, no los que otros registran sobre su alerta—, y tomarlo
- * a él como segundo extremo abriría conversaciones de un usuario consigo mismo.
- * Que los dos extremos nunca coincidan lo garantiza MatchService, que rechaza
- * con 403 el deslizamiento sobre una publicación propia.
+ * publicó lo deslizado. Ese segundo extremo depende del tipo de publicación:
+ * en un avistamiento es su autor (AVISTAMIENTO.usuario) y en una adopción es la
+ * cuenta de la protectora dueña del animal (ANIMAL_ADOPCION.protectora.usuario).
+ *
+ * En el caso del avistamiento no interviene el dueño de la alerta como tal:
+ * normalmente ES quien desliza —el feed solo le esconde sus propios
+ * avistamientos, no los que otros registran sobre su alerta—, y tomarlo a él
+ * como segundo extremo abriría conversaciones de un usuario consigo mismo. Que
+ * los dos extremos nunca coincidan lo garantiza MatchService, que rechaza con
+ * 403 el deslizamiento sobre una publicación propia, sea del tipo que sea.
  *
  * El control de acceso de todo el bloque —REST y WebSocket— pasa por
  * exigirParticipante y esParticipante: son el único sitio donde se decide quién
@@ -66,6 +72,37 @@ public class ChatService {
     private final ChatRepository chatRepository;
     private final MensajeRepository mensajeRepository;
     private final AvistamientoRepository avistamientoRepository;
+    private final AnimalAdopcionRepository animalAdopcionRepository;
+
+    /**
+     * La publicación que originó un chat, en las dos formas que puede tener.
+     *
+     * Es una interfaz sellada y no dos campos nulables porque "o es un
+     * avistamiento o es un animal, nunca las dos cosas ni ninguna" deja así de
+     * ser una convención que hay que recordar y pasa a comprobarlo el
+     * compilador. Cada rama sabe además quién es su autor, que es lo único que
+     * el control de acceso necesita saber de ella.
+     */
+    public sealed interface PublicacionDelChat {
+
+        /** El participante que publicó: el otro extremo de la conversación. */
+        Usuario autor();
+
+        record DeAvistamiento(Avistamiento avistamiento) implements PublicacionDelChat {
+            @Override
+            public Usuario autor() {
+                return avistamiento.getUsuario();
+            }
+        }
+
+        record DeAdopcion(AnimalAdopcion animal) implements PublicacionDelChat {
+            /** La cuenta de la protectora, no la organización: el chat es entre usuarios. */
+            @Override
+            public Usuario autor() {
+                return animal.getProtectora().getUsuario();
+            }
+        }
+    }
 
     /**
      * Un chat con sus dos extremos y la publicación que lo originó ya resueltos.
@@ -74,22 +111,30 @@ public class ChatService {
      * la comprobación de permisos, y lo consumen MensajeService y el
      * interceptor de suscripciones del WebSocket.
      */
-    public record Participantes(Chat chat, Avistamiento avistamiento,
-                                Usuario emisorDelMatch, Usuario autorDelAvistamiento) {
+    public record Participantes(Chat chat, PublicacionDelChat publicacion, Usuario emisorDelMatch) {
+
+        /** Quien publicó lo deslizado, sea el autor del avistamiento o la protectora. */
+        public Usuario autorDeLaPublicacion() {
+            return publicacion.autor();
+        }
 
         public boolean incluye(Long usuarioId) {
             return emisorDelMatch.getId().equals(usuarioId)
-                    || autorDelAvistamiento.getId().equals(usuarioId);
+                    || autorDeLaPublicacion().getId().equals(usuarioId);
         }
 
         /** El interlocutor, visto desde uno de los dos participantes. */
         public Usuario otro(Long usuarioId) {
-            return emisorDelMatch.getId().equals(usuarioId) ? autorDelAvistamiento : emisorDelMatch;
+            return emisorDelMatch.getId().equals(usuarioId)
+                    ? autorDeLaPublicacion()
+                    : emisorDelMatch;
         }
 
         /** El propio participante, ya cargado, para no volver a consultarlo. */
         public Usuario yo(Long usuarioId) {
-            return emisorDelMatch.getId().equals(usuarioId) ? emisorDelMatch : autorDelAvistamiento;
+            return emisorDelMatch.getId().equals(usuarioId)
+                    ? emisorDelMatch
+                    : autorDeLaPublicacion();
         }
     }
 
@@ -141,21 +186,23 @@ public class ChatService {
      * Conversaciones del usuario, con el interlocutor, el último mensaje y los
      * no leídos.
      *
-     * Cuesta cuatro consultas pase lo que pase, no cuatro por conversación: una
-     * para los chats, otra para los avistamientos de todos ellos, otra para los
-     * últimos mensajes y otra para los recuentos. Ordena por actividad —el
-     * último mensaje primero, y los que aún no tienen ninguno por su fecha de
-     * apertura—, que es como se espera una lista de chats; el orden se resuelve
-     * en memoria porque el usuario tiene un puñado de conversaciones, no miles.
+     * Cuesta cinco consultas pase lo que pase, no cinco por conversación: una
+     * para los chats, dos para las publicaciones de todos ellos —una por tabla,
+     * y solo si hay chats de ese tipo—, otra para los últimos mensajes y otra
+     * para los recuentos. Ordena por actividad —el último mensaje primero, y los
+     * que aún no tienen ninguno por su fecha de apertura—, que es como se espera
+     * una lista de chats; el orden se resuelve en memoria porque el usuario
+     * tiene un puñado de conversaciones, no miles.
      */
     @Transactional(readOnly = true)
     public List<ChatResumenResponse> listarMisChats(Long usuarioId) {
-        List<Chat> chats = chatRepository.buscarPorParticipante(usuarioId, TipoPublicacion.AVISTAMIENTO);
+        List<Chat> chats = chatRepository.buscarPorParticipante(
+                usuarioId, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION);
         if (chats.isEmpty()) {
             return List.of();
         }
 
-        Map<Long, Avistamiento> avistamientos = avistamientosDe(chats);
+        Map<ClavePublicacion, PublicacionDelChat> publicaciones = publicacionesDe(chats);
         List<Long> chatIds = chats.stream().map(Chat::getId).toList();
 
         Map<Long, Mensaje> ultimos = mensajeRepository.buscarUltimoDeCadaChat(chatIds).stream()
@@ -165,13 +212,15 @@ public class ChatService {
                         MensajeRepository.ConteoNoLeidos::getTotal));
 
         return chats.stream()
-                // Un chat cuyo avistamiento ya no existe se omite del listado en
-                // vez de tumbarlo entero: en el detalle sí es un 404, porque
-                // allí ese chat es lo que se ha pedido.
-                .filter(chat -> avistamientos.containsKey(chat.getMatch().getPublicacionId()))
+                // Un chat cuya publicación ya no existe —un animal retirado del
+                // catálogo, por ejemplo— se omite del listado en vez de tumbarlo
+                // entero: en el detalle sí es un 404, porque allí ese chat es lo
+                // que se ha pedido.
+                .filter(chat -> publicaciones.containsKey(ClavePublicacion.de(chat)))
                 .map(chat -> {
-                    Avistamiento avistamiento = avistamientos.get(chat.getMatch().getPublicacionId());
-                    Participantes participantes = participantesDe(chat, avistamiento);
+                    Participantes participantes = new Participantes(chat,
+                            publicaciones.get(ClavePublicacion.de(chat)),
+                            chat.getMatch().getUsuario());
                     Mensaje ultimo = ultimos.get(chat.getId());
 
                     return ChatResumenResponse.builder()
@@ -188,27 +237,50 @@ public class ChatService {
                 .toList();
     }
 
-    /** Cabecera de una conversación: con quién se habla y a raíz de qué (RF-12). */
+    /**
+     * Cabecera de una conversación: con quién se habla y a raíz de qué (RF-12).
+     *
+     * El contexto que se devuelve depende de qué se deslizó: el avistamiento y
+     * su alerta, o el animal y su protectora. Los campos del otro tipo se dejan
+     * sin rellenar y el DTO los omite del JSON.
+     */
     @Transactional(readOnly = true)
     public ChatDetalleResponse detalle(Long chatId, Long usuarioId) {
         Participantes participantes = exigirParticipante(chatId, usuarioId);
         Chat chat = participantes.chat();
-        Avistamiento avistamiento = participantes.avistamiento();
-        Alerta alerta = avistamiento.getAlerta();
 
-        return ChatDetalleResponse.builder()
+        ChatDetalleResponse.ChatDetalleResponseBuilder detalle = ChatDetalleResponse.builder()
                 .id(chat.getId())
                 .otroParticipante(aAutor(participantes.otro(usuarioId)))
                 .matchId(chat.getMatch().getId())
-                .avistamientoId(avistamiento.getId())
-                .avistamientoFotoUrl(avistamiento.getFotoUrl())
-                .avistamientoDescripcion(avistamiento.getDescripcion())
-                .alertaId(alerta.getId())
-                .alertaEspecie(alerta.getEspecie())
-                .alertaFotoUrl(alerta.getFotoUrl())
-                .alertaEstado(alerta.getEstado().name())
-                .createdAt(chat.getCreatedAt())
-                .build();
+                .tipoPublicacion(chat.getMatch().getTipoPublicacion())
+                .createdAt(chat.getCreatedAt());
+
+        if (participantes.publicacion() instanceof PublicacionDelChat.DeAvistamiento origen) {
+            Avistamiento avistamiento = origen.avistamiento();
+            Alerta alerta = avistamiento.getAlerta();
+
+            detalle.avistamientoId(avistamiento.getId())
+                    .avistamientoFotoUrl(avistamiento.getFotoUrl())
+                    .avistamientoDescripcion(avistamiento.getDescripcion())
+                    .alertaId(alerta.getId())
+                    .alertaEspecie(alerta.getEspecie())
+                    .alertaFotoUrl(alerta.getFotoUrl())
+                    .alertaEstado(alerta.getEstado().name());
+
+        } else if (participantes.publicacion() instanceof PublicacionDelChat.DeAdopcion origen) {
+            AnimalAdopcion animal = origen.animal();
+
+            detalle.animalId(animal.getId())
+                    .animalNombre(animal.getNombre())
+                    .animalEspecie(animal.getEspecie())
+                    .animalFotoUrl(animal.getFotoUrl())
+                    .animalEstado(animal.getEstado().name())
+                    .protectoraId(animal.getProtectora().getId())
+                    .protectoraNombre(animal.getProtectora().getNombreOrganizacion());
+        }
+
+        return detalle.build();
     }
 
     /**
@@ -240,51 +312,85 @@ public class ChatService {
     /**
      * Completa un chat con la publicación deslizada y sus dos participantes.
      *
-     * El avistamiento se busca por MATCH_REGISTRO.publicacion_id, que es una
+     * La publicación se busca por MATCH_REGISTRO.publicacion_id, que es una
      * referencia polimórfica sin clave ajena: nada en la base de datos garantiza
-     * que siga existiendo, de ahí que su ausencia se trate como un 404 del chat
-     * y no como un fallo interno.
+     * que siga existiendo —una protectora puede retirar un animal del catálogo
+     * en cualquier momento—, de ahí que su ausencia se trate como un 404 del
+     * chat y no como un fallo interno.
+     *
+     * El tipo del match decide en qué tabla se busca. Leer el id sin mirarlo
+     * devolvería la fila equivocada, porque el mismo número existe como
+     * avistamiento y como animal.
      */
     private Participantes resolver(Chat chat) {
         MatchRegistro match = chat.getMatch();
-        exigirTipoSoportado(match);
 
-        Avistamiento avistamiento = avistamientoRepository
-                .buscarConAutorYAlerta(List.of(match.getPublicacionId())).stream()
-                .findFirst()
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "El avistamiento del chat " + chat.getId() + " ya no existe"));
+        PublicacionDelChat publicacion = switch (match.getTipoPublicacion()) {
+            case AVISTAMIENTO -> avistamientoRepository
+                    .buscarConAutorYAlerta(List.of(match.getPublicacionId())).stream()
+                    .findFirst()
+                    .map(PublicacionDelChat.DeAvistamiento::new)
+                    .map(PublicacionDelChat.class::cast)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "El avistamiento del chat " + chat.getId() + " ya no existe"));
 
-        return participantesDe(chat, avistamiento);
-    }
+            case ADOPCION -> animalAdopcionRepository
+                    .buscarConProtectora(match.getPublicacionId())
+                    .map(PublicacionDelChat.DeAdopcion::new)
+                    .map(PublicacionDelChat.class::cast)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "El animal del chat " + chat.getId() + " ya no existe"));
+        };
 
-    private Participantes participantesDe(Chat chat, Avistamiento avistamiento) {
-        return new Participantes(chat, avistamiento,
-                chat.getMatch().getUsuario(), avistamiento.getUsuario());
-    }
-
-    /** Avistamientos de un lote de chats, indexados por id, en una sola consulta. */
-    private Map<Long, Avistamiento> avistamientosDe(List<Chat> chats) {
-        List<Long> publicaciones = chats.stream()
-                .peek(chat -> exigirTipoSoportado(chat.getMatch()))
-                .map(chat -> chat.getMatch().getPublicacionId())
-                .distinct()
-                .toList();
-
-        return avistamientoRepository.buscarConAutorYAlerta(publicaciones).stream()
-                .collect(Collectors.toMap(Avistamiento::getId, Function.identity()));
+        return new Participantes(chat, publicacion, match.getUsuario());
     }
 
     /**
-     * Hoy solo los avistamientos abren chat: MatchService rechaza el resto. La
-     * comprobación existe porque publicacion_id apunta a tablas distintas según
-     * el tipo, y leerlo como avistamiento sin mirar el tipo devolvería la fila
-     * equivocada el día que las adopciones empiecen a generar match (RF-09).
+     * Publicaciones de un lote de chats, indexadas por tipo e id.
+     *
+     * Cuesta dos consultas —una por tabla— y no dos por chat: los ids se agrupan
+     * antes por tipo y cada grupo se resuelve de una vez. Si el usuario no tiene
+     * chats de un tipo, esa consulta ni se lanza.
      */
-    private void exigirTipoSoportado(MatchRegistro match) {
-        if (match.getTipoPublicacion() != TipoPublicacion.AVISTAMIENTO) {
-            throw new OperacionNoPermitidaException("TIPO_PUBLICACION_NO_DISPONIBLE",
-                    "Los chats de adopciones todavía no están disponibles");
+    private Map<ClavePublicacion, PublicacionDelChat> publicacionesDe(List<Chat> chats) {
+        Map<TipoPublicacion, List<Long>> idsPorTipo = chats.stream()
+                .collect(Collectors.groupingBy(chat -> chat.getMatch().getTipoPublicacion(),
+                        Collectors.mapping(chat -> chat.getMatch().getPublicacionId(),
+                                Collectors.toList())));
+
+        Map<ClavePublicacion, PublicacionDelChat> publicaciones = new HashMap<>();
+
+        List<Long> avistamientos = idsPorTipo.get(TipoPublicacion.AVISTAMIENTO);
+        if (avistamientos != null) {
+            for (Avistamiento avistamiento : avistamientoRepository
+                    .buscarConAutorYAlerta(avistamientos.stream().distinct().toList())) {
+                publicaciones.put(
+                        new ClavePublicacion(TipoPublicacion.AVISTAMIENTO, avistamiento.getId()),
+                        new PublicacionDelChat.DeAvistamiento(avistamiento));
+            }
+        }
+
+        List<Long> animales = idsPorTipo.get(TipoPublicacion.ADOPCION);
+        if (animales != null) {
+            for (AnimalAdopcion animal : animalAdopcionRepository
+                    .buscarConProtectoraPorIds(animales.stream().distinct().toList())) {
+                publicaciones.put(
+                        new ClavePublicacion(TipoPublicacion.ADOPCION, animal.getId()),
+                        new PublicacionDelChat.DeAdopcion(animal));
+            }
+        }
+        return publicaciones;
+    }
+
+    /**
+     * Identifica una publicación de verdad: el id solo no basta, porque el mismo
+     * número existe en las dos tablas y confundirlos mezclaría conversaciones.
+     */
+    private record ClavePublicacion(TipoPublicacion tipo, Long id) {
+
+        static ClavePublicacion de(Chat chat) {
+            return new ClavePublicacion(chat.getMatch().getTipoPublicacion(),
+                    chat.getMatch().getPublicacionId());
         }
     }
 
