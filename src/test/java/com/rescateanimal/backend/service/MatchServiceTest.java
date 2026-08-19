@@ -110,7 +110,7 @@ class MatchServiceTest {
     class Match {
 
         @Test
-        @DisplayName("Un match crea el registro, abre el chat y avisa a quien publicó la alerta")
+        @DisplayName("Un match crea el registro, abre el chat y avisa a quien registró el avistamiento")
         void elMatchAbreChatYNotifica() {
             MatchResponse respuesta = matchService.deslizar(peticion(true), ID_USUARIO);
 
@@ -122,9 +122,11 @@ class MatchServiceTest {
             verify(chatRepository).save(chat.capture());
             assertThat(chat.getValue().getMatch().getId()).isEqualTo(100L);
 
-            // El destinatario es el dueño de la alerta, no el autor del avistamiento.
+            // El destinatario es el autor del avistamiento, no el dueño de la
+            // alerta: son los dos extremos del chat que abre el match, y el
+            // dueño de la alerta es normalmente quien acaba de deslizar.
             verify(notificacionService).notificarNuevoMatch(
-                    argThatTieneId(ID_DUENYO_ALERTA), org.mockito.ArgumentMatchers.eq(100L),
+                    argThatTieneId(ID_AUTOR_AVISTAMIENTO), org.mockito.ArgumentMatchers.eq(100L),
                     org.mockito.ArgumentMatchers.eq(ID_USUARIO));
         }
 

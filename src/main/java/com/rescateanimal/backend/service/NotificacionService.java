@@ -72,9 +72,16 @@ public class NotificacionService {
     }
 
     /**
-     * Avisa a quien publicó la alerta de que alguien ha hecho match con un
-     * avistamiento suyo (RF-08). referenciaId apunta al match, que es desde
-     * donde el cliente llega al chat.
+     * Avisa a quien registró el avistamiento de que alguien ha hecho match con
+     * él (RF-08). referenciaId apunta al match, que es desde donde el cliente
+     * llega al chat.
+     *
+     * EL DESTINATARIO ES EL AUTOR DEL AVISTAMIENTO, no el dueño de la alerta.
+     * Son los dos extremos del chat que abre el match (RF-12): quien desliza y
+     * quien publicó lo deslizado. El dueño de la alerta es habitualmente quien
+     * desliza —el feed solo le esconde sus propios avistamientos, no los que
+     * otros registran sobre su alerta—, así que notificarle a él era avisar a
+     * quien acababa de hacer el match.
      *
      * Aquí NO se usa REQUIRES_NEW, al contrario que en notificarAlertaCercana:
      * un match del que el destinatario nunca se entera no sirve de nada, así
@@ -83,7 +90,10 @@ public class NotificacionService {
      *
      * @return la notificación creada, o vacío si el destinatario es el propio
      *         autor del deslizamiento: nadie necesita que le avisen de lo que
-     *         acaba de hacer.
+     *         acaba de hacer. Con el destinatario actual esa situación ya la
+     *         corta antes PublicacionPropiaException —nadie desliza lo suyo—,
+     *         pero la guarda se mantiene porque es barata y deja de depender de
+     *         una validación que vive en otro service.
      */
     @Transactional
     public Optional<Notificacion> notificarNuevoMatch(Usuario destinatario, Long matchId,

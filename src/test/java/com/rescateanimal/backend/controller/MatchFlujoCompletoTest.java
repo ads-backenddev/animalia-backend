@@ -156,19 +156,20 @@ class MatchFlujoCompletoTest {
         assertThat(idsDelFeed(tokenCurioso)).contains(primero, segundo, tercero);
         assertThat(idsDelFeed(tokenTestigo)).doesNotContain(primero, segundo, tercero);
 
-        // 2. Match: 201, chat abierto y notificación para quien publicó la alerta.
+        // 2. Match: 201, chat abierto y notificación para quien registró el
+        //    avistamiento, que es el otro extremo del chat recién abierto.
         HttpResponse<String> match = deslizar(tokenCurioso, primero, true);
         assertThat(match.statusCode()).isEqualTo(201);
         long chatId = numero(match.body(), "$.chatId");
         assertThat(JsonPath.<Boolean>read(match.body(), "$.interesado")).isTrue();
         assertThat(chatRepository.findById(chatId)).isPresent();
 
-        List<Notificacion> avisos = notificacionRepository.findAll().stream()
-                .filter(n -> n.getUsuario().getId().equals(idDuenyo)
-                        && n.getTipo() == TipoNotificacion.NUEVO_MATCH)
-                .toList();
+        List<Notificacion> avisos = notificacionesDeMatch(idTestigo);
         assertThat(avisos).hasSize(1);
         assertThat(avisos.get(0).getLeida()).isFalse();
+
+        // Y el dueño de la alerta no recibe nada: no es parte de este chat.
+        assertThat(notificacionesDeMatch(idDuenyo)).isEmpty();
 
         // 3. El mismo swipe otra vez choca con la restricción única.
         assertThat(deslizar(tokenCurioso, primero, true).statusCode()).isEqualTo(409);
@@ -270,6 +271,13 @@ class MatchFlujoCompletoTest {
     }
 
     // ------------------------------------------------------------------
+
+    private List<Notificacion> notificacionesDeMatch(Long usuarioId) {
+        return notificacionRepository.findAll().stream()
+                .filter(n -> n.getUsuario().getId().equals(usuarioId)
+                        && n.getTipo() == TipoNotificacion.NUEVO_MATCH)
+                .toList();
+    }
 
     private List<Long> idsDelFeed(String token) throws Exception {
         HttpResponse<String> feed = enviar("GET", "/api/avistamientos/feed", token, null);

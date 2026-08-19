@@ -81,6 +81,12 @@ public class MatchService {
      * tiene sentido que exista una sin las otras. Es distinto del caso de las
      * alertas, donde el aviso a la zona sí es un efecto colateral que no debe
      * poder tumbar la publicación.
+     *
+     * Tampoco contradice a MensajeService.enviar, que difunde DESPUÉS de
+     * confirmar: aquí la notificación es una escritura en la base de datos y dos
+     * escrituras sí pueden ser atómicas entre sí, mientras que una difusión por
+     * WebSocket no lo es —ningún rollback la retira— y lo único elegible allí es
+     * cuándo sale. El porqué completo está en el javadoc de aquel método.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
@@ -140,9 +146,12 @@ public class MatchService {
         chat.setMatch(guardado);
         Chat chatGuardado = chatRepository.save(chat);
 
-        // Avisa a quien perdió al animal de que alguien reconoce su avistamiento.
+        // Avisa a quien registró el avistamiento de que alguien reconoce a ese
+        // animal. El destinatario es el otro participante del chat que se acaba
+        // de abrir, no el dueño de la alerta: quien desliza suele ser ese mismo
+        // dueño, y avisarle sería avisar a quien acaba de hacer el match.
         notificacionService.notificarNuevoMatch(
-                avistamiento.getAlerta().getUsuario(), guardado.getId(), usuarioId);
+                avistamiento.getUsuario(), guardado.getId(), usuarioId);
 
         log.info("Match {} del usuario {} sobre el avistamiento {}; chat {}",
                 guardado.getId(), usuarioId, peticion.getPublicacionId(), chatGuardado.getId());

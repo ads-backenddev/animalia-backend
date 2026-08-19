@@ -4,10 +4,12 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.Rol;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.security.Principal;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -42,6 +44,26 @@ public class UsuarioPrincipal implements UserDetails {
                 Boolean.TRUE.equals(usuario.getActivo()),
                 usuario.getPasswordChangedAt()
         );
+    }
+
+    /**
+     * Extrae el usuario del Principal de una sesión WebSocket.
+     *
+     * En el mundo STOMP no hay SecurityContext ni @AuthenticationPrincipal: lo
+     * que llega a los @MessageMapping y a los interceptores es el Principal que
+     * UsuarioHandshakeHandler fijó al aceptar el handshake, que es la
+     * Authentication con este objeto dentro.
+     *
+     * @return el usuario autenticado, o null si el Principal no es uno de los
+     *         nuestros —conexión sin autenticar—, para que quien llame decida
+     *         cómo rechazarla
+     */
+    public static UsuarioPrincipal desde(Principal principal) {
+        if (principal instanceof Authentication autenticacion
+                && autenticacion.getPrincipal() instanceof UsuarioPrincipal usuario) {
+            return usuario;
+        }
+        return null;
     }
 
     /**

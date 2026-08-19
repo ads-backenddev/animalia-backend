@@ -128,6 +128,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "PUBLICACION_PROPIA", ex.getMessage(), request);
     }
 
+    /** 403 — el usuario no es ninguno de los dos participantes del chat (RF-12). */
+    @ExceptionHandler(ChatAjenoException.class)
+    public ResponseEntity<ErrorResponse> chatAjeno(ChatAjenoException ex, WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "CHAT_AJENO", ex.getMessage(), request);
+    }
+
     /** 403 — rol insuficiente para el endpoint, lanzado por @PreAuthorize. */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> accesoDenegado(AccessDeniedException ex, WebRequest request) {
