@@ -15,14 +15,16 @@ import com.rescateanimal.backend.model.enums.Tamanyo;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.CatalogoAdopcionSpec;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 /**
  * Lógica del catálogo de adopción: publicación y gestión de animales por la
@@ -37,7 +39,6 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AnimalAdopcionService {
 
     /**
@@ -49,6 +50,17 @@ public class AnimalAdopcionService {
 
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final ProtectoraRepository protectoraRepository;
+
+    /** Tamaño de la tanda que devuelve el feed de swipe (RF-09). */
+    private final int tamanyoFeed;
+
+    public AnimalAdopcionService(AnimalAdopcionRepository animalAdopcionRepository,
+                                 ProtectoraRepository protectoraRepository,
+                                 @Value("${app.adopcion.tamanyo-feed}") int tamanyoFeed) {
+        this.animalAdopcionRepository = animalAdopcionRepository;
+        this.protectoraRepository = protectoraRepository;
+        this.tamanyoFeed = tamanyoFeed;
+    }
 
     // ---------------------------------------------------------------------
     // Gestión por la protectora (RF-07, RF-20)
@@ -180,6 +192,37 @@ public class AnimalAdopcionService {
                 CatalogoAdopcionSpec.de(EstadoAnimal.DISPONIBLE, especie, tamanyo, zona), peticion);
 
         return PaginaResponse.de(pagina, AnimalAdopcionService::aResponse);
+    }
+
+    /**
+     * Tarjetas para el swipe de adopción (RF-09, RF-15).
+     *
+     * Es el catálogo menos lo que este usuario no debe volver a ver: sus propios
+     * animales, si es una protectora, y lo que ya deslizó en cualquiera de los
+     * dos sentidos. Sin esa segunda exclusión, un descarte reaparecería en la
+     * siguiente sesión y el segundo swipe acabaría en 409 por la restricción
+     * única.
+     *
+     * Admite los mismos filtros que el catálogo: quien busca un perro pequeño en
+     * su zona quiere deslizar sobre eso, no sobre todo el catálogo.
+     *
+     * Devuelve una tanda acotada y no una página, igual que el feed de
+     * avistamientos: se consume tarjeta a tarjeta, así que ni el cliente pide
+     * páginas ni le sirve saber cuántas hay. El orden es por fecha, lo más
+     * reciente primero.
+     */
+    @Transactional(readOnly = true)
+    public List<AnimalAdopcionResponse> feed(String especie, Tamanyo tamanyo, String zona,
+                                             Long usuarioId) {
+
+        return animalAdopcionRepository.findAll(
+                        CatalogoAdopcionSpec.paraFeed(
+                                EstadoAnimal.DISPONIBLE, especie, tamanyo, zona, usuarioId),
+                        PageRequest.of(0, tamanyoFeed,
+                                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"))))
+                .getContent().stream()
+                .map(AnimalAdopcionService::aResponse)
+                .toList();
     }
 
     /** Detalle de un animal, con los datos públicos de su protectora. */

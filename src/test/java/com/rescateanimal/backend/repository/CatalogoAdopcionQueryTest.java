@@ -1,18 +1,21 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.AnimalAdopcion;
+import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoProtectora;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.Tamanyo;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -40,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * REQUISITOS PARA EJECUTARLA: base de datos levantada ("docker compose up -d"),
  * como BackendApplicationTests y MatchFlujoCompletoTest.
  */
+@ActiveProfiles("test")
 @SpringBootTest(properties =
         "jwt.secret=secreto-solo-para-tests-de-al-menos-32-caracteres-1234567890")
 class CatalogoAdopcionQueryTest {
@@ -53,9 +57,12 @@ class CatalogoAdopcionQueryTest {
     private ProtectoraRepository protectoraRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
+    @Autowired
+    private MatchRegistroRepository matchRegistroRepository;
 
     private Protectora protectora;
     private final List<Long> animalesCreados = new java.util.ArrayList<>();
+    private final List<Long> matchesCreados = new java.util.ArrayList<>();
 
     @BeforeEach
     void sembrarCatalogo() {
@@ -70,6 +77,7 @@ class CatalogoAdopcionQueryTest {
 
     @AfterEach
     void limpiar() {
+        matchRegistroRepository.deleteAllById(matchesCreados);
         animalAdopcionRepository.deleteAllById(animalesCreados);
         protectoraRepository.delete(protectora);
         usuarioRepository.delete(protectora.getUsuario());
@@ -190,6 +198,128 @@ class CatalogoAdopcionQueryTest {
     }
 
     // ---------------------------------------------------------------------
+    // Feed de swipe (RF-09, RF-15)
+    // ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("El feed parte del catálogo: mismo estado y mismos filtros")
+    void elFeedFiltraIgualQueElCatalogo() {
+        Long ciudadano = crearCiudadano();
+
+        assertThat(mios(feed(null, null, null, ciudadano)))
+                .containsExactlyInAnyOrder("Luna", "Nube", "Sol", "Coco");
+        assertThat(mios(feed("Perro", Tamanyo.PEQUENO, "Madrid", ciudadano)))
+                .containsExactlyInAnyOrder("Luna", "Coco");
+
+        borrarUsuario(ciudadano);
+    }
+
+    @Test
+    @DisplayName("Lo ya deslizado desaparece del feed, se haya dado match o descarte")
+    void loDeslizadoDesaparece() {
+        Long ciudadano = crearCiudadano();
+        deslizar(ciudadano, idDe("Luna"), true);
+        deslizar(ciudadano, idDe("Nube"), false);
+
+        // Luna por match y Nube por descarte: la restriccion unica registra
+        // ambos, y el feed no debe repetir ninguno.
+        assertThat(mios(feed(null, null, null, ciudadano)))
+                .containsExactlyInAnyOrder("Sol", "Coco");
+
+        borrarUsuario(ciudadano);
+    }
+
+    @Test
+    @DisplayName("Deslizar un avistamiento con el mismo id no esconde al animal")
+    void elTipoDistingueLoDeslizado() {
+        Long ciudadano = crearCiudadano();
+        Long idLuna = idDe("Luna");
+
+        // Mismo publicacion_id pero tipo AVISTAMIENTO: es otra publicacion.
+        deslizarAvistamiento(ciudadano, idLuna);
+
+        assertThat(mios(feed(null, null, null, ciudadano))).contains("Luna");
+
+        borrarUsuario(ciudadano);
+    }
+
+    @Test
+    @DisplayName("La protectora no ve sus propios animales en el feed")
+    void laProtectoraNoSeVeASiMisma() {
+        assertThat(mios(feed(null, null, null, protectora.getUsuario().getId()))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Deslizarlo todo deja el feed vacío, no un error")
+    void feedAgotadoDevuelveVacio() {
+        Long ciudadano = crearCiudadano();
+        for (String nombre : List.of("Luna", "Nube", "Sol", "Coco")) {
+            deslizar(ciudadano, idDe(nombre), false);
+        }
+
+        assertThat(mios(feed(null, null, null, ciudadano))).isEmpty();
+
+        borrarUsuario(ciudadano);
+    }
+
+    // ---------------------------------------------------------------------
+
+    private List<AnimalAdopcion> feed(String especie, Tamanyo tamanyo, String zona,
+                                      Long usuarioId) {
+
+        return animalAdopcionRepository.findAll(
+                CatalogoAdopcionSpec.paraFeed(
+                        EstadoAnimal.DISPONIBLE, especie, tamanyo, zona, usuarioId),
+                PageRequest.of(0, 50, orden())).getContent();
+    }
+
+    private List<String> mios(List<AnimalAdopcion> animales) {
+        return animales.stream()
+                .filter(animal -> animalesCreados.contains(animal.getId()))
+                .map(AnimalAdopcion::getNombre)
+                .toList();
+    }
+
+    private Long idDe(String nombre) {
+        return animalAdopcionRepository.findAllById(animalesCreados).stream()
+                .filter(animal -> animal.getNombre().equals(nombre))
+                .findFirst().orElseThrow().getId();
+    }
+
+    private void deslizar(Long usuarioId, Long animalId, boolean interesado) {
+        guardarMatch(usuarioId, animalId, TipoPublicacion.ADOPCION, interesado);
+    }
+
+    private void deslizarAvistamiento(Long usuarioId, Long publicacionId) {
+        guardarMatch(usuarioId, publicacionId, TipoPublicacion.AVISTAMIENTO, true);
+    }
+
+    private void guardarMatch(Long usuarioId, Long publicacionId, TipoPublicacion tipo,
+                              boolean interesado) {
+
+        MatchRegistro registro = new MatchRegistro();
+        registro.setUsuario(usuarioRepository.findById(usuarioId).orElseThrow());
+        registro.setPublicacionId(publicacionId);
+        registro.setTipoPublicacion(tipo);
+        registro.setInteresado(interesado);
+        matchesCreados.add(matchRegistroRepository.save(registro).getId());
+    }
+
+    private Long crearCiudadano() {
+        Usuario ciudadano = new Usuario();
+        ciudadano.setNombre("Ciudadano " + marca);
+        ciudadano.setEmail("ciudadano-" + marca + "-" + System.nanoTime() + "@test.es");
+        ciudadano.setPasswordHash("$2a$10$hashDePrueba");
+        ciudadano.setRol(Rol.CIUDADANO);
+        ciudadano.setActivo(true);
+        return usuarioRepository.save(ciudadano).getId();
+    }
+
+    private void borrarUsuario(Long usuarioId) {
+        matchRegistroRepository.deleteAllById(matchesCreados);
+        matchesCreados.clear();
+        usuarioRepository.deleteById(usuarioId);
+    }
 
     private Page<AnimalAdopcion> buscar(String especie, Tamanyo tamanyo, String zona) {
         return animalAdopcionRepository.findAll(

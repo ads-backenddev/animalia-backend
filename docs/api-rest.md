@@ -360,7 +360,7 @@ RF-07, RF-09, RF-20, RF-22.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/adopcion` | Catálogo paginado de animales `DISPONIBLE`. Filtros de RF-22: `especie`, `tamanyo` (`PEQUENO` \| `MEDIANO` \| `GRANDE`), `zona` | Autenticado | — | Página de `AnimalAdopcionResponse` | `200`, `400`, `401` |
 | `GET` | `/api/adopcion/{id}` | Detalle de un animal con los datos de su protectora | Autenticado | — | `AnimalAdopcionDetalleResponse` | `200`, `401`, `404` |
-| `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los ya deslizados (RF-09, RF-15). **Pendiente de implementar**: hoy el swipe se alimenta del catálogo paginado | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `401` |
+| `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los propios y los ya deslizados (RF-09, RF-15). Admite los mismos filtros que el catálogo | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `400`, `401` |
 | `POST` | `/api/adopcion` | Publica un animal en adopción | `PROTECTORA` | `CrearAnimalRequest`: `nombre`, `especie`, `tamanyo`, `descripcion`, `fotoUrl`, `zonaGeografica` | `AnimalAdopcionResponse` | `201`, `400`, `401`, `403` |
 | `PUT` | `/api/adopcion/{id}` | Modifica un animal de la propia protectora | `PROTECTORA` + Propietario | `ActualizarAnimalRequest`: mismos campos que la creación | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
 | `DELETE` | `/api/adopcion/{id}` | Retira un animal del catálogo | `PROTECTORA` + Propietario | — | — | `204`, `401`, `403`, `404` |
@@ -398,6 +398,28 @@ Los tres son opcionales y **combinables entre sí**: se aplican en la misma cons
 El catálogo devuelve **solo animales `DISPONIBLE`**; el estado no es un filtro que el cliente pueda
 cambiar. Un animal `ADOPTADO` desaparece del listado pero conserva su detalle, para quien llegue
 desde un enlace o desde un chat abierto antes de la adopción.
+
+### Feed de swipe (RF-09, RF-15)
+
+`GET /api/adopcion/feed` es el catálogo menos lo que este usuario no debe volver a ver:
+
+| Se excluye | Por qué |
+|---|---|
+| Los animales de su propia protectora | Nadie hace match consigo mismo; `POST /api/matches` lo rechazaría con `403 PUBLICACION_PROPIA` |
+| Lo que ya deslizó, en cualquiera de los dos sentidos | Es lo que registra `MATCH_REGISTRO`. Sin esta exclusión un descarte reaparecería en la siguiente sesión, y el segundo swipe acabaría en `409 SWIPE_DUPLICADO` |
+| Los `ADOPTADO` | Como en el catálogo: ya tienen casa |
+
+La exclusión de lo deslizado filtra **por tipo además de por id**: `publicacion_id` es una referencia
+polimórfica, así que sin ese filtro haber deslizado el avistamiento 7 escondería del feed al animal
+7, que no tiene nada que ver con él.
+
+Admite `especie`, `tamanyo` y `zona` con la misma semántica que el catálogo: quien busca un perro
+pequeño en su zona quiere deslizar sobre eso, no sobre todo lo publicado.
+
+**Devuelve una lista, no una página.** El feed se consume tarjeta a tarjeta, así que ni el cliente
+pide páginas ni le sirve saber cuántas quedan; el servidor manda una tanda acotada
+(`app.adopcion.tamanyo-feed`, 30 por defecto), igual que `GET /api/avistamientos/feed`. Un feed
+agotado es `200` con lista vacía, no `404`.
 
 ### Confirmación de la adopción (RF-20)
 
@@ -569,7 +591,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-06 | `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar` |
 | RF-07 | `POST`, `PUT` y `DELETE` sobre `/api/adopcion` |
 | RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
-| RF-09 | `POST /api/matches` con `tipoPublicacion=ADOPCION` |
+| RF-09 | `GET /api/adopcion/feed`, `POST /api/matches` con `tipoPublicacion=ADOPCION` |
 | RF-10 | `GET /api/protectoras/panel` |
 | RF-11 | Todo `/api/admin` |
 | RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |

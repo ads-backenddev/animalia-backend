@@ -2,6 +2,7 @@ package com.rescateanimal.backend;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 /**
  * Comprueba que el contexto de Spring arranca por completo: entidades, capas,
@@ -15,6 +16,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * en application.properties, a propósito, para que ningún despliegue arranque
  * con una clave publicada en el repositorio.
  */
+@ActiveProfiles("test")
 @SpringBootTest(properties =
         "jwt.secret=secreto-solo-para-tests-de-al-menos-32-caracteres-1234567890")
 class BackendApplicationTests {

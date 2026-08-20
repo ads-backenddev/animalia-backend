@@ -55,6 +55,7 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class AnimalAdopcionServiceTest {
 
+    private static final int TAMANYO_FEED = 30;
     private static final Long ID_ANIMAL = 33L;
     private static final Long ID_PROTECTORA = 70L;
 
@@ -73,7 +74,7 @@ class AnimalAdopcionServiceTest {
     @BeforeEach
     void prepararServicio() {
         animalAdopcionService =
-                new AnimalAdopcionService(animalAdopcionRepository, protectoraRepository);
+                new AnimalAdopcionService(animalAdopcionRepository, protectoraRepository, TAMANYO_FEED);
 
         when(protectoraRepository.findByUsuarioId(ID_DUENYA)).thenReturn(Optional.of(protectora()));
         when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))

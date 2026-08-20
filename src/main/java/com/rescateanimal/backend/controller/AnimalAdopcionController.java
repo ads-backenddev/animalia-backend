@@ -27,6 +27,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
+import java.util.List;
 
 /**
  * Catálogo de adopción: gestión de animales por la protectora, filtros y
@@ -132,6 +133,33 @@ public class AnimalAdopcionController {
 
         return ResponseEntity.ok(
                 animalAdopcionService.catalogo(especie, tamanyo, zona, paginacion));
+    }
+
+    /**
+     * GET /api/adopcion/feed -> 200, 400, 401
+     *
+     * Tarjetas para el swipe de adopción (RF-09, RF-15): el catálogo menos los
+     * animales propios y los que el usuario ya deslizó.
+     *
+     * Va declarado ANTES que /{id} a propósito. Spring resuelve primero la ruta
+     * más específica, así que hoy funcionaría igual en cualquier orden, pero
+     * dejarlo aquí evita que un futuro cambio de mapeo convierta "feed" en un id
+     * que no se puede convertir a Long.
+     *
+     * Admite los mismos filtros que el catálogo, porque quien busca un perro
+     * pequeño en su zona quiere deslizar sobre eso y no sobre todo lo publicado.
+     * No pagina: se devuelve una tanda acotada, igual que el feed de
+     * avistamientos.
+     */
+    @GetMapping("/feed")
+    public ResponseEntity<List<AnimalAdopcionResponse>> feed(
+            @RequestParam(required = false) String especie,
+            @RequestParam(required = false) Tamanyo tamanyo,
+            @RequestParam(required = false) String zona,
+            @AuthenticationPrincipal UsuarioPrincipal usuario) {
+
+        return ResponseEntity.ok(
+                animalAdopcionService.feed(especie, tamanyo, zona, usuario.getId()));
     }
 
     /**
