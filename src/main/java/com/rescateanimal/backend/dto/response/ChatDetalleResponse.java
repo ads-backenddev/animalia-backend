@@ -67,7 +67,12 @@ public class ChatDetalleResponse {
     private String animalEspecie;
     private String animalFotoUrl;
 
-    /** DISPONIBLE o ADOPTADO: el chat sigue abierto aunque el animal ya tenga casa. */
+    /**
+     * DISPONIBLE, ADOPTADO o RETIRADO: el chat sigue abierto aunque el animal ya
+     * tenga casa o la protectora lo haya quitado del catálogo. Son tres valores,
+     * no dos: desde que retirar deja la ficha en RETIRADO en vez de borrarla,
+     * esta conversación es justo la que sobrevive a esa operación.
+     */
     private String animalEstado;
 
     /** Protectora dueña del animal, que es además el otro participante. */

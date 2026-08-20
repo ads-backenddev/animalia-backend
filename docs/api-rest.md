@@ -750,5 +750,5 @@ bloque 5.
 |---|---|
 | `VALORACION`: unicidad `(usuario_id, protectora_id)` y `PROTECTORA.valoracion_media`, hoy derivada y sin mantener | 9, con `ValoracionService` |
 | Borrado / anonimización de usuario (RF-19): nueve claves ajenas apuntan a `USUARIO` y ninguna dice qué hacer al borrarlo | 10 |
-| `reiniciaEn` sigue sin zona; convertirlo exige decidir de quién es el día natural | RF-24 |
+| `reiniciaEn` sigue sin zona, y el "hoy" del contador de cuota es el de la zona de la JVM. No se arregla migrando el tipo: exige decidir de quién es el día natural, si del servidor o del cliente | RF-24 |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |

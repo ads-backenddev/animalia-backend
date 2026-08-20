@@ -233,6 +233,20 @@ public class MatchService {
      * contador en memoria, dos peticiones simultáneas leerían el mismo valor y
      * el usuario acabaría con un match de más. El INSERT crea la fila del día si
      * es el primer match, y el UPDATE solo cuenta si aún queda cupo.
+     *
+     * PENDIENTE, Y CONVIENE SABERLO. "Hoy" es el día natural de la zona horaria
+     * de la JVM, que es lo único que hay: la zona no se fija en ninguna parte.
+     * Es el mismo patrón que causaba el desfase de la ventana de RF-25 antes de
+     * pasarla a Instant, aunque aquí las consecuencias son otras. El contador es
+     * de calendario y no de instante —la cuota se cuenta por día natural, ver
+     * LimiteMatchResponse.reiniciaEn—, así que no se arregla migrando el tipo:
+     * hay que decidir de quién es el día. Con la API en Railway (UTC), a un
+     * usuario en la península la cuota se le reinicia a la 01:00 o a las 02:00
+     * de la madrugada en vez de a medianoche, y a uno en Canarias a medianoche
+     * justa. Fijarlo a Europe/Madrid arregla lo primero y estropea lo segundo;
+     * hacerlo con la zona del cliente exige que el cliente la mande. Es una
+     * decisión de RF-24 y se deja tomada a conciencia fuera del bloque de
+     * mantenimiento del esquema, que solo se ocupó de los instantes.
      */
     private void consumirCuotaDiaria(Usuario usuario) {
         LocalDate hoy = LocalDate.now();

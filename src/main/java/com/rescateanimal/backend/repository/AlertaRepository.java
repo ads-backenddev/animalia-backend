@@ -33,7 +33,7 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
      * país, que es lo que RNF-02 no puede permitirse con 100 usuarios a la vez.
      *
      * Mismo criterio de medida que buscarSimilar: geography, es decir metros
-     * reales, y el índice GiST de db/indices-postgis.sql es el que la sostiene.
+     * reales, y el índice GiST que crea la migración V1 es el que la sostiene.
      */
     @Query(value = """
             SELECT a.*

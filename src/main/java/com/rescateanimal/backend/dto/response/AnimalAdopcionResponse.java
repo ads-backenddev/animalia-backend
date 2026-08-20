@@ -30,7 +30,7 @@ public class AnimalAdopcionResponse {
     private String fotoUrl;
     private String zonaGeografica;
 
-    /** DISPONIBLE o ADOPTADO (RF-20). */
+    /** DISPONIBLE, ADOPTADO (RF-20) o RETIRADO. El catálogo solo lista los primeros. */
     private String estado;
 
     private Long protectoraId;
