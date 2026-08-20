@@ -297,6 +297,10 @@ public class MatchService {
     /**
      * Medianoche del día siguiente: el contador no se reinicia con una tarea
      * programada, simplemente al cambiar la fecha se empieza una fila nueva.
+     *
+     * Devuelve LocalDateTime y no Instant, a diferencia del resto de marcas de
+     * tiempo de la API: es una fecha de calendario derivada de LocalDate, no un
+     * instante. Ver la nota de LimiteMatchResponse.reiniciaEn.
      */
     private LocalDateTime reinicioDelContador(LocalDate hoy) {
         return hoy.plusDays(1).atStartOfDay();
