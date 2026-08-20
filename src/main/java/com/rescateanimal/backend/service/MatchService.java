@@ -198,11 +198,18 @@ public class MatchService {
         exigirQueNoSeaPropia(animal.getProtectora().getUsuario(), usuarioId);
 
         if (animal.getEstado() != EstadoAnimal.DISPONIBLE) {
-            // Equivalente a la alerta ya cerrada: el animal ya tiene casa, así
-            // que un match nuevo abriría una conversación sobre una adopción
-            // consumada y le gastaría al ciudadano un match del día (RF-20).
+            // Equivalente a la alerta ya cerrada: el animal ya no se ofrece, así
+            // que un match nuevo abriría una conversación sobre algo cerrado y
+            // le gastaría al ciudadano un match del día (RF-20).
+            //
+            // El motivo se distingue porque no significan lo mismo para quien lo
+            // lee: ADOPTADO es un final feliz y RETIRADO puede ser cualquier
+            // cosa. Decirle "ya ha sido adoptado" de un animal retirado sería
+            // sencillamente falso.
             throw new OperacionNoPermitidaException("ANIMAL_NO_DISPONIBLE",
-                    "Este animal ya ha sido adoptado");
+                    animal.getEstado() == EstadoAnimal.ADOPTADO
+                            ? "Este animal ya ha sido adoptado"
+                            : "Este animal ya no está en el catálogo");
         }
         return animal.getProtectora().getUsuario();
     }

@@ -28,7 +28,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -212,10 +212,16 @@ public class ChatService {
                         MensajeRepository.ConteoNoLeidos::getTotal));
 
         return chats.stream()
-                // Un chat cuya publicación ya no existe —un animal retirado del
-                // catálogo, por ejemplo— se omite del listado en vez de tumbarlo
-                // entero: en el detalle sí es un 404, porque allí ese chat es lo
-                // que se ha pedido.
+                // Un chat cuya publicación ya no existe se omite del listado en
+                // vez de tumbarlo entero: en el detalle sí es un 404, porque
+                // allí ese chat es lo que se ha pedido.
+                //
+                // Retirar un animal del catálogo ya no llega aquí: desde que es
+                // un estado (RETIRADO) y no un DELETE, la fila sigue estando y
+                // la conversación se mantiene, que es justo lo que se buscaba.
+                // El filtro se queda porque nada en el esquema garantiza que no
+                // vuelva a pasar —publicacion_id no tiene clave ajena—, y sin él
+                // una fila borrada a mano tumbaría el listado entero de alguien.
                 .filter(chat -> publicaciones.containsKey(ClavePublicacion.de(chat)))
                 .map(chat -> {
                     Participantes participantes = new Participantes(chat,
@@ -395,7 +401,7 @@ public class ChatService {
     }
 
     /** Momento de la última actividad: el último mensaje o, sin ninguno, la apertura. */
-    private static LocalDateTime ultimaActividad(ChatResumenResponse chat) {
+    private static Instant ultimaActividad(ChatResumenResponse chat) {
         return chat.getUltimoMensaje() == null
                 ? chat.getCreatedAt()
                 : chat.getUltimoMensaje().getCreatedAt();

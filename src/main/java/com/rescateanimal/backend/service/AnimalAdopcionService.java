@@ -7,6 +7,7 @@ import com.rescateanimal.backend.dto.response.AnimalAdopcionResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.AnimalAjenoException;
 import com.rescateanimal.backend.exception.CuentaNoAutorizadaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Protectora;
@@ -97,9 +98,10 @@ public class AnimalAdopcionService {
     /**
      * Modifica un animal de la propia protectora (RF-07).
      *
-     * Se puede editar un animal ya ADOPTADO —corregir una descripción o una
-     * foto— porque editar no cambia su disponibilidad. Lo que no se puede es
-     * devolverlo al catálogo por esta vía: el estado no viaja en el cuerpo.
+     * Se puede editar un animal ya ADOPTADO o RETIRADO —corregir una
+     * descripción o una foto— porque editar no cambia su disponibilidad. Lo que
+     * no se puede es devolverlo al catálogo por esta vía: el estado no viaja en
+     * el cuerpo.
      */
     @Transactional
     public AnimalAdopcionResponse actualizar(Long animalId, ActualizarAnimalRequest peticion,
@@ -119,20 +121,32 @@ public class AnimalAdopcionService {
     }
 
     /**
-     * Retira un animal del catálogo (RF-07).
+     * Retira un animal del catálogo (RF-07): pasa a RETIRADO.
      *
-     * Es un borrado real y no un estado más: a diferencia de una alerta, que
-     * pasa a ELIMINADA para conservar el histórico del mapa, un animal retirado
-     * no deja rastro que consultar. Los matches que hubiera sobre él quedan
-     * huérfanos por la referencia polimórfica de MATCH_REGISTRO, y ese caso ya
-     * está contemplado: ChatService omite del listado los chats cuya publicación
-     * ya no existe y responde 404 al pedir el detalle.
+     * NO borra la fila, y ese es el cambio. Un DELETE dejaba huérfanos los
+     * MATCH_REGISTRO que apuntaran al animal —publicacion_id es una referencia
+     * polimórfica, así que ninguna clave ajena lo impedía— y con ellos su chat
+     * y sus mensajes. ChatService sabía esquivarlos, pero para el ciudadano al
+     * otro lado eso significaba ver desaparecer una conversación en curso sin
+     * poder releer siquiera lo ya hablado. Conservando la fila, el chat sigue
+     * en pie y quien lo abrió ve que el animal está RETIRADO.
+     *
+     * Es idempotente: retirar dos veces deja el mismo estado. Y es terminal,
+     * como ADOPTADO: no hay vuelta a DISPONIBLE por esta vía, por el mismo
+     * motivo que en confirmarAdopcion —reabrir la ficha dejaría los matches del
+     * ciclo anterior colgando de un caso que ya no es el mismo—. Un animal que
+     * vuelve a estar disponible se publica de nuevo.
      */
     @Transactional
     public void retirar(Long animalId, Long usuarioId) {
         AnimalAdopcion animal = exigirPropietaria(animalId, usuarioId);
 
-        animalAdopcionRepository.delete(animal);
+        if (animal.getEstado() == EstadoAnimal.RETIRADO) {
+            log.debug("El animal {} ya estaba retirado; la operación no cambia nada", animalId);
+            return;
+        }
+
+        animal.setEstado(EstadoAnimal.RETIRADO);
         log.info("Animal {} retirado del catálogo por el usuario {}", animalId, usuarioId);
     }
 
@@ -147,10 +161,22 @@ public class AnimalAdopcionService {
      * disponible tras una adopción fallida, lo que corresponde es publicarlo de
      * nuevo: reabrir la misma ficha dejaría los matches del ciclo anterior
      * colgando de un animal que ya no es el mismo caso.
+     *
+     * Tampoco desde RETIRADO. Antes ese caso no existía —retirar borraba la
+     * fila y confirmar después daba 404— y al conservarla habría quedado un
+     * camino nuevo, DISPONIBLE -> RETIRADO -> ADOPTADO, que afirma dos cosas
+     * incompatibles: que el animal se sacó del catálogo y que se adoptó. Se
+     * corta aquí con un 400 en vez de con un estado imposible de interpretar
+     * después.
      */
     @Transactional
     public AnimalAdopcionResponse confirmarAdopcion(Long animalId, Long usuarioId) {
         AnimalAdopcion animal = exigirPropietaria(animalId, usuarioId);
+
+        if (animal.getEstado() == EstadoAnimal.RETIRADO) {
+            throw new OperacionNoPermitidaException("ANIMAL_RETIRADO",
+                    "Este animal se retiró del catálogo; no puede confirmarse su adopción");
+        }
 
         if (animal.getEstado() == EstadoAnimal.ADOPTADO) {
             log.debug("El animal {} ya estaba adoptado; la confirmación no cambia nada", animalId);
@@ -174,6 +200,11 @@ public class AnimalAdopcionService {
      * mostrarlo llevaría a solicitudes sobre animales que ya tienen casa. Sigue
      * siendo accesible por su detalle, para quien llegue desde un enlace o desde
      * un chat abierto antes de la adopción.
+     *
+     * Eso mismo deja fuera a los RETIRADO sin necesidad de filtro nuevo: la
+     * condición no es "los que no estén adoptados" sino "los que estén
+     * DISPONIBLE", así que cualquier estado que se añada al enum nace excluido
+     * del catálogo y del feed, que es el valor por defecto seguro.
      *
      * Cómo se comparan los filtros —y que uno en blanco equivale a no filtrar—
      * lo describe CatalogoAdopcionSpec. Aquí solo se decide lo que es política
@@ -225,7 +256,14 @@ public class AnimalAdopcionService {
                 .toList();
     }
 
-    /** Detalle de un animal, con los datos públicos de su protectora. */
+    /**
+     * Detalle de un animal, con los datos públicos de su protectora.
+     *
+     * Sirve el animal en cualquier estado, también ADOPTADO y RETIRADO: quien
+     * llega aquí lo hace desde un enlace o desde un chat abierto antes, y
+     * merece ver qué pasó con el animal en lugar de un 404. El estado va en la
+     * respuesta para que el cliente lo pinte como corresponda.
+     */
     @Transactional(readOnly = true)
     public AnimalAdopcionDetalleResponse detalle(Long animalId) {
         AnimalAdopcion animal = animalAdopcionRepository.buscarConProtectora(animalId)

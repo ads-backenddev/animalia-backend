@@ -29,7 +29,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -580,7 +580,7 @@ class AnimalAdopcionControllerTest {
                 .estado(estado)
                 .protectoraId(70L)
                 .protectoraNombre("Protectora de prueba")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 
@@ -605,7 +605,7 @@ class AnimalAdopcionControllerTest {
                 .fotoUrl("https://cdn.test/luna.jpg")
                 .zonaGeografica("Madrid")
                 .estado("DISPONIBLE")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .protectoraId(70L)
                 .protectoraNombre("Protectora de prueba")
                 .protectoraDireccion("Calle Mayor 1")

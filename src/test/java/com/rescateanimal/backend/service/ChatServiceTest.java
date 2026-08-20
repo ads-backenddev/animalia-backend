@@ -37,7 +37,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -268,8 +269,8 @@ class ChatServiceTest {
             when(chatRepository.buscarPorParticipante(ID_EMISOR, TipoPublicacion.AVISTAMIENTO, TipoPublicacion.ADOPCION))
                     .thenReturn(List.of(antiguo, reciente));
             when(mensajeRepository.buscarUltimoDeCadaChat(anyCollection())).thenReturn(List.of(
-                    mensajeEn(1L, antiguo, LocalDateTime.now().minusDays(3)),
-                    mensajeEn(2L, reciente, LocalDateTime.now().minusMinutes(1))));
+                    mensajeEn(1L, antiguo, Instant.now().minus(3, ChronoUnit.DAYS)),
+                    mensajeEn(2L, reciente, Instant.now().minus(1, ChronoUnit.MINUTES))));
             when(mensajeRepository.contarNoLeidosPorChat(anyCollection(), anyLong()))
                     .thenReturn(List.of());
 
@@ -474,7 +475,7 @@ class ChatServiceTest {
         Chat chat = new Chat();
         chat.setId(ID_CHAT);
         chat.setMatch(match());
-        chat.setCreatedAt(LocalDateTime.now().minusDays(1));
+        chat.setCreatedAt(Instant.now().minus(1, ChronoUnit.DAYS));
         return chat;
     }
 
@@ -490,7 +491,7 @@ class ChatServiceTest {
         Chat chat = new Chat();
         chat.setId(ID_CHAT);
         chat.setMatch(match);
-        chat.setCreatedAt(LocalDateTime.now().minusDays(1));
+        chat.setCreatedAt(Instant.now().minus(1, ChronoUnit.DAYS));
         return chat;
     }
 
@@ -543,11 +544,11 @@ class ChatServiceTest {
         mensaje.setEmisor(usuario(emisorId));
         mensaje.setContenido(contenido);
         mensaje.setLeido(leido);
-        mensaje.setCreatedAt(LocalDateTime.now());
+        mensaje.setCreatedAt(Instant.now());
         return mensaje;
     }
 
-    private static Mensaje mensajeEn(Long id, Chat chat, LocalDateTime cuando) {
+    private static Mensaje mensajeEn(Long id, Chat chat, Instant cuando) {
         Mensaje mensaje = mensaje(id, ID_AUTOR, "texto", false);
         mensaje.setChat(chat);
         mensaje.setCreatedAt(cuando);

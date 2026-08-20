@@ -2,10 +2,12 @@ package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.request.ActualizarAnimalRequest;
 import com.rescateanimal.backend.dto.request.CrearAnimalRequest;
+import com.rescateanimal.backend.dto.response.AnimalAdopcionDetalleResponse;
 import com.rescateanimal.backend.dto.response.AnimalAdopcionResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.AnimalAjenoException;
 import com.rescateanimal.backend.exception.CuentaNoAutorizadaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Protectora;
@@ -32,7 +34,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -82,7 +84,7 @@ class AnimalAdopcionServiceTest {
         when(animalAdopcionRepository.save(any())).thenAnswer(invocacion -> {
             AnimalAdopcion guardado = invocacion.getArgument(0);
             guardado.setId(ID_ANIMAL);
-            guardado.setCreatedAt(LocalDateTime.now());
+            guardado.setCreatedAt(Instant.now());
             return guardado;
         });
     }
@@ -150,12 +152,17 @@ class AnimalAdopcionServiceTest {
         }
 
         @Test
-        @DisplayName("Retirar un animal de otra protectora -> 403 y no se borra nada")
+        @DisplayName("Retirar un animal de otra protectora -> 403 y el estado no cambia")
         void retirarAjenoDevuelve403() {
+            AnimalAdopcion animal = animal(EstadoAnimal.DISPONIBLE);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal));
+
             assertThatThrownBy(() ->
                     animalAdopcionService.retirar(ID_ANIMAL, ID_OTRA_PROTECTORA))
                     .isInstanceOf(AnimalAjenoException.class);
 
+            assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.DISPONIBLE);
             verify(animalAdopcionRepository, never()).delete(any(AnimalAdopcion.class));
         }
 
@@ -187,13 +194,80 @@ class AnimalAdopcionServiceTest {
         @Test
         @DisplayName("La dueña sí puede con las tres operaciones")
         void laDuenyaPuede() {
+            AnimalAdopcion animal = animal(EstadoAnimal.DISPONIBLE);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal));
+
             assertThatCode(() -> {
                 animalAdopcionService.actualizar(ID_ANIMAL, peticionDeEdicion(), ID_DUENYA);
                 animalAdopcionService.confirmarAdopcion(ID_ANIMAL, ID_DUENYA);
                 animalAdopcionService.retirar(ID_ANIMAL, ID_DUENYA);
             }).doesNotThrowAnyException();
 
-            verify(animalAdopcionRepository).delete(any(AnimalAdopcion.class));
+            assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+        }
+    }
+
+    @Nested
+    @DisplayName("Retirada del catálogo (RF-07)")
+    class Retirada {
+
+        @Test
+        @DisplayName("El animal pasa a RETIRADO y la fila NO se borra")
+        void pasaARetiradoSinBorrar() {
+            AnimalAdopcion animal = animal(EstadoAnimal.DISPONIBLE);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal));
+
+            animalAdopcionService.retirar(ID_ANIMAL, ID_DUENYA);
+
+            assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+            // Lo que de verdad protege esta prueba: borrar la fila dejaba
+            // huérfanos los matches que apuntaran al animal, y con ellos el chat
+            // y los mensajes de una conversación en curso.
+            verify(animalAdopcionRepository, never()).delete(any(AnimalAdopcion.class));
+        }
+
+        @Test
+        @DisplayName("Retirarlo dos veces deja el mismo estado: es idempotente")
+        void esIdempotente() {
+            AnimalAdopcion animal = animal(EstadoAnimal.RETIRADO);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal));
+
+            assertThatCode(() -> animalAdopcionService.retirar(ID_ANIMAL, ID_DUENYA))
+                    .doesNotThrowAnyException();
+
+            assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+        }
+
+        @Test
+        @DisplayName("Confirmar la adopción de un animal retirado -> 400 ANIMAL_RETIRADO")
+        void confirmarUnRetiradoDevuelve400() {
+            AnimalAdopcion animal = animal(EstadoAnimal.RETIRADO);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal));
+
+            assertThatThrownBy(() ->
+                    animalAdopcionService.confirmarAdopcion(ID_ANIMAL, ID_DUENYA))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ANIMAL_RETIRADO"));
+
+            assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+        }
+
+        @Test
+        @DisplayName("Un animal RETIRADO sigue siendo consultable por su detalle")
+        void elDetalleSigueRespondiendo() {
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(animal(EstadoAnimal.RETIRADO)));
+
+            AnimalAdopcionDetalleResponse detalle = animalAdopcionService.detalle(ID_ANIMAL);
+
+            // Quien tenga un chat abierto sobre él merece ver qué pasó con el
+            // animal, no un 404.
+            assertThat(detalle.getEstado()).isEqualTo("RETIRADO");
         }
     }
 
@@ -390,7 +464,7 @@ class AnimalAdopcionServiceTest {
         animal.setFotoUrl("https://cdn.test/luna.jpg");
         animal.setZonaGeografica("Madrid");
         animal.setEstado(estado);
-        animal.setCreatedAt(LocalDateTime.now());
+        animal.setCreatedAt(Instant.now());
         return animal;
     }
 

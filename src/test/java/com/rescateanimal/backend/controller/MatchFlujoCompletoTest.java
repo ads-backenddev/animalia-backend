@@ -25,9 +25,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -323,7 +323,7 @@ class MatchFlujoCompletoTest {
     }
 
     private static String ahoraMenos(int horas) {
-        return LocalDateTime.now().minusHours(horas).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        return Instant.now().minus(horas, ChronoUnit.HOURS).toString();
     }
 
     private HttpResponse<String> enviar(String metodo, String ruta, String token, String cuerpo)

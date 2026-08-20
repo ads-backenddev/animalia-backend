@@ -37,6 +37,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -505,7 +506,7 @@ class MatchServiceTest {
             when(matchRegistroRepository.save(any())).thenAnswer(invocacion -> {
                 MatchRegistro guardado = invocacion.getArgument(0);
                 guardado.setId(800L);
-                guardado.setCreatedAt(LocalDateTime.now());
+                guardado.setCreatedAt(Instant.now());
                 return guardado;
             });
             when(chatRepository.save(any())).thenAnswer(invocacion -> {
@@ -615,7 +616,7 @@ class MatchServiceTest {
         registro.setPublicacionId(ID_AVISTAMIENTO);
         registro.setTipoPublicacion(TipoPublicacion.AVISTAMIENTO);
         registro.setInteresado(true);
-        registro.setCreatedAt(LocalDateTime.now());
+        registro.setCreatedAt(Instant.now());
         return registro;
     }
 
