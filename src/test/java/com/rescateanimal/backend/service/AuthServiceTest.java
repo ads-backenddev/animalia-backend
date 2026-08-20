@@ -30,7 +30,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -151,12 +150,12 @@ class AuthServiceTest {
             Instant caducidad = Instant.now().plusSeconds(3600);
             when(jwtService.generarTokenAcceso(any()))
                     .thenReturn(new JwtService.TokenAcceso("el-token", caducidad));
-            when(jwtService.expiracionEnUtc(caducidad)).thenReturn(LocalDateTime.now().plusHours(1));
 
             var respuesta = authService.login(new LoginRequest("ana@test.es", "passw0rd123"));
 
             assertThat(respuesta.getToken()).isEqualTo("el-token");
             assertThat(respuesta.getTipo()).isEqualTo("Bearer");
+            assertThat(respuesta.getExpiraEn()).isEqualTo(caducidad);
             assertThat(respuesta.getUsuario().getEmail()).isEqualTo("ana@test.es");
         }
 

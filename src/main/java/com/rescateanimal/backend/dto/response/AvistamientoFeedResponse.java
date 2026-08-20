@@ -5,7 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Tarjeta del feed de swipe (RF-15).
@@ -24,7 +24,7 @@ public class AvistamientoFeedResponse {
     private String descripcion;
     private String fotoUrl;
     private UbicacionResponse ubicacion;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
     private AutorResponse autor;
 
     private Long alertaId;

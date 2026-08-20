@@ -27,7 +27,8 @@ import org.mockito.quality.Strictness;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -77,7 +78,7 @@ class MensajeServiceTest {
         when(mensajeRepository.save(any(Mensaje.class))).thenAnswer(invocacion -> {
             Mensaje mensaje = invocacion.getArgument(0);
             mensaje.setId(900L);
-            mensaje.setCreatedAt(LocalDateTime.now());
+            mensaje.setCreatedAt(Instant.now());
             return mensaje;
         });
     }
@@ -255,7 +256,7 @@ class MensajeServiceTest {
     private static ChatService.Participantes participantes() {
         Chat chat = new Chat();
         chat.setId(ID_CHAT);
-        chat.setCreatedAt(LocalDateTime.now().minusDays(1));
+        chat.setCreatedAt(Instant.now().minus(1, ChronoUnit.DAYS));
 
         MatchRegistro match = new MatchRegistro();
         match.setId(100L);

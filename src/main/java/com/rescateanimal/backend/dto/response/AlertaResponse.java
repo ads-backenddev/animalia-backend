@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /** Vista completa de una alerta de mascota perdida (RF-03). */
 @Data
@@ -19,10 +19,10 @@ public class AlertaResponse {
     private String descripcion;
     private String fotoUrl;
     private String especie;
-    private LocalDateTime fechaAvistamiento;
+    private Instant fechaAvistamiento;
     private UbicacionResponse ubicacion;
     private Integer radioBusqueda;
     private EstadoAlerta estado;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
     private AutorResponse autor;
 }

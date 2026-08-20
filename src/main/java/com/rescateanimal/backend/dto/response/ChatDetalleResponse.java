@@ -7,7 +7,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Cabecera de una conversación (RF-12): con quién se habla y a raíz de qué.
@@ -74,5 +74,5 @@ public class ChatDetalleResponse {
     private Long protectoraId;
     private String protectoraNombre;
 
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

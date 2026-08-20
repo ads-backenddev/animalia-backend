@@ -20,7 +20,7 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.locationtech.jts.geom.Point;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Alerta de mascota perdida publicada por un usuario (RF-03).
@@ -31,11 +31,16 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "alerta", indexes = {
-        // Las dos consultas del mapa filtran por estado, y la de duplicados
-        // ademas por especie; PostgreSQL no indexa las claves ajenas por si solo,
-        // asi que usuario_id tambien necesita el suyo para /mis-alertas.
+        // Las dos consultas del mapa filtran por estado; PostgreSQL no indexa
+        // las claves ajenas por si solo, asi que usuario_id tambien necesita el
+        // suyo para /mis-alertas.
+        //
+        // Aqui NO hay indice de especie, y no es un olvido: la deteccion de
+        // duplicados (RF-25) compara lower(especie), y a eso solo responde un
+        // indice funcional sobre lower(especie), que @Index no sabe declarar
+        // —solo genera B-tree sobre columnas en crudo—. Vive en la migracion
+        // V4, junto a los GiST, por el mismo motivo que ellos.
         @Index(name = "idx_alerta_estado", columnList = "estado"),
-        @Index(name = "idx_alerta_especie", columnList = "especie"),
         @Index(name = "idx_alerta_usuario", columnList = "usuario_id")
 })
 @Getter
@@ -62,7 +67,7 @@ public class Alerta {
     private String especie;
 
     @Column(name = "fecha_avistamiento")
-    private LocalDateTime fechaAvistamiento;
+    private Instant fechaAvistamiento;
 
     /** Último lugar donde fue vista la mascota. */
     @Column(name = "ultima_ubicacion", columnDefinition = "geometry(Point,4326)")
@@ -78,5 +83,5 @@ public class Alerta {
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

@@ -19,7 +19,7 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Datos de organización de un usuario con rol PROTECTORA (RF-01, RF-10).
@@ -63,5 +63,5 @@ public class Protectora {
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

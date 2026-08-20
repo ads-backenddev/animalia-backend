@@ -20,7 +20,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
@@ -142,7 +143,7 @@ class AuthControllerTest {
         when(authService.login(any())).thenReturn(LoginResponse.builder()
                 .token("el-token")
                 .tipo("Bearer")
-                .expiraEn(LocalDateTime.now().plusHours(24))
+                .expiraEn(Instant.now().plus(24, ChronoUnit.HOURS))
                 .usuario(usuarioResponse())
                 .build());
 

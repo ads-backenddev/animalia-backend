@@ -7,7 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -63,6 +63,11 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
      *
      * Se usa CAST(... AS geography) y no el operador ::geography porque Hibernate
      * interpreta los dos puntos como el inicio de un parámetro con nombre.
+     *
+     * "desde" es un Instant y fecha_avistamiento es TIMESTAMPTZ: la comparación
+     * es entre dos puntos de la línea del tiempo, sin que intervenga la zona de
+     * la JVM ni la de la sesión de PostgreSQL. Mientras la columna fue
+     * "timestamp without time zone" esa comparación dependía de ambas.
      */
     @Query(value = """
             SELECT a.*
@@ -84,7 +89,7 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
                                    @Param("latitud") double latitud,
                                    @Param("longitud") double longitud,
                                    @Param("radioMetros") double radioMetros,
-                                   @Param("desde") LocalDateTime desde);
+                                   @Param("desde") Instant desde);
 
     /**
      * Distancia en metros entre una alerta y unas coordenadas. Se consulta a

@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Vista de un usuario para su propietario. Nunca expone el passwordHash: es la
@@ -27,5 +27,5 @@ public class UsuarioResponse {
     private Rol rol;
     private String idioma;
     private Boolean activo;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

@@ -7,7 +7,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Resultado de un deslizamiento (RF-08, RF-15).
@@ -29,5 +29,5 @@ public class MatchResponse {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private Long chatId;
 
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

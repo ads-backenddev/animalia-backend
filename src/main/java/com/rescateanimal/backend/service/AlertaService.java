@@ -30,7 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -121,6 +122,17 @@ public class AlertaService {
      * Detección de alertas duplicadas (RF-25): misma especie, radio de 500 m y
      * ventana de 24 h, los tres a la vez.
      *
+     * LA VENTANA SON 24 HORAS REALES. Se calcula restando sobre un Instant, no
+     * sobre un LocalDateTime como antes, y eso arregla dos cosas distintas:
+     *
+     * 1. Deja de depender de la zona horaria de la JVM. LocalDateTime.now()
+     *    daba las 12:00 en el portátil de desarrollo (Europe/Madrid) y las
+     *    10:00 en Railway (UTC) en el mismo momento, así que la misma alerta
+     *    entraba o no en la ventana según dónde corriera la API.
+     * 2. Resta tiempo, no reloj. minusHours(24) sobre una hora de pared son 24
+     *    horas de calendario: la noche del cambio de hora eso son 23 o 25 horas
+     *    de verdad, y la ventana se encogía o se estiraba una hora al año.
+     *
      * LIMITACIÓN CONOCIDA: comprobar y guardar no son atómicos. Dos peticiones
      * simultáneas sobre la misma zona pueden pasar las dos la comprobación antes
      * de que ninguna confirme, y publicarse ambas. Cerrarlo exige un bloqueo
@@ -130,7 +142,7 @@ public class AlertaService {
      * fallar es una alerta repetida, no un dato corrupto.
      */
     private void comprobarQueNoEsDuplicada(CrearAlertaRequest peticion) {
-        LocalDateTime desde = LocalDateTime.now().minusHours(ventanaDuplicadosHoras);
+        Instant desde = Instant.now().minus(ventanaDuplicadosHoras, ChronoUnit.HOURS);
         double latitud = peticion.getUbicacion().getLatitud();
         double longitud = peticion.getUbicacion().getLongitud();
 

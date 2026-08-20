@@ -25,7 +25,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.test.context.TestSecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -313,7 +313,7 @@ class MensajeControllerTest {
                         .id(ID_USUARIO).nombre("Ana").fotoUrl("https://cdn.test/ana.jpg").build())
                 .contenido("¿Sigue por la zona?")
                 .leido(false)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 }

@@ -25,7 +25,7 @@ import org.springframework.security.test.context.TestSecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -220,7 +220,7 @@ class AvistamientoControllerTest {
                 .descripcion("Lo he visto en el parque")
                 .fotoUrl("https://fotos/avistamiento.jpg")
                 .ubicacion(new UbicacionResponse(40.4168, -3.7038))
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
                 .build();
     }

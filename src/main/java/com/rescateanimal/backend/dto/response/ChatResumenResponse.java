@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Una conversación en la lista de chats del usuario (RF-12).
@@ -33,5 +33,5 @@ public class ChatResumenResponse {
     /** Mensajes del otro participante que este usuario aún no ha leído. */
     private long noLeidos;
 
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }
