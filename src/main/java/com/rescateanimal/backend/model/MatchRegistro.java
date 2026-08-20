@@ -19,7 +19,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Registro del deslizamiento (swipe) de un usuario sobre una publicación, sea un
@@ -33,6 +33,40 @@ import java.time.LocalDateTime;
  * La restricción única (usuario_id, publicacion_id, tipo_publicacion) garantiza
  * un solo deslizamiento por usuario y publicación, de modo que el feed puede
  * excluir lo ya visto y no se pueden duplicar matches.
+ *
+ * POR QUÉ SIGUE HABIENDO UNA REFERENCIA POLIMÓRFICA (decisión tomada en el
+ * bloque de mantenimiento del esquema, y revisada entonces a conciencia).
+ *
+ * publicacionId apunta a AVISTAMIENTO o a ANIMAL_ADOPCION según tipoPublicacion,
+ * sin clave ajena que lo respalde. Es una debilidad conocida y tiene nombre: la
+ * base de datos no puede impedir que apunte a una fila que no existe, y el id 7
+ * existe en las dos tablas, así que cualquier consulta que lea publicacion_id
+ * sin emparejarlo con el tipo puede leer la fila equivocada.
+ *
+ * Las dos alternativas se estudiaron y se descartaron para ahora:
+ *
+ * - ARCO EXCLUSIVO: dos columnas nulables con clave ajena cada una
+ *   (avistamiento_id, animal_id) y un CHECK que exija exactamente una. Resuelve
+ *   la integridad, pero obliga a tocar todas las consultas que hoy filtran por
+ *   (publicacion_id, tipo) y no escala si algún día se desliza un tercer tipo.
+ * - SUPERTIPO PUBLICACION: una tabla padre de la que hereden AVISTAMIENTO y
+ *   ANIMAL_ADOPCION. Es la respuesta correcta del modelo relacional y la que se
+ *   elegiría empezando de cero, pero implica reescribir las dos entidades, sus
+ *   repositorios y la generación de ids.
+ *
+ * No se ha hecho ninguna de las dos porque no hay ningún requisito que lo exija
+ * y el riesgo no está compensado: 323 pruebas dependen de la forma actual de
+ * AVISTAMIENTO y ANIMAL_ADOPCION, y la debilidad está contenida por dos cosas
+ * que sí existen. La primera es que la referencia va SIEMPRE emparejada con el
+ * tipo, sin excepción, en los tres sitios donde se lee —ChatRepository,
+ * CatalogoAdopcionSpec y MatchService.resolverAutor—; la segunda es que
+ * resolverAutor es un switch exhaustivo sobre el enum, sin rama por defecto, de
+ * modo que añadir un TipoPublicacion nuevo rompe la compilación en lugar de
+ * colarse en tiempo de ejecución.
+ *
+ * Lo que hace falta para reabrir esto: un tercer tipo de publicación
+ * deslizable, o un incidente real de integridad. Cualquiera de los dos inclina
+ * la balanza hacia el supertipo.
  */
 @Entity
 @Table(
@@ -78,5 +112,5 @@ public class MatchRegistro {
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }
