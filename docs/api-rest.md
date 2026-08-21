@@ -137,8 +137,10 @@ RF-01, RF-13, RF-16, RF-17.
 | `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400` |
 | `POST` | `/api/auth/restablecer-password` | Fija la nueva contraseña a partir del token del enlace | Público | `RestablecerPasswordRequest`: `token`, `nuevaPassword` | — | `204`, `400` |
 
-**`403` en login:** cuenta bloqueada por el administrador (`activo = false`) o protectora en estado
-`PENDIENTE` / `RECHAZADA`.
+**`403` en login:** cuenta bloqueada por el administrador (`activo = false`), con código
+`CUENTA_BLOQUEADA`, o protectora en estado `PENDIENTE` / `RECHAZADA`, con `PROTECTORA_PENDIENTE` o
+`PROTECTORA_RECHAZADA`. El bloqueo no espera a que caduque el token que el usuario ya tuviera: se
+comprueba en cada petición, así que sus llamadas pasan a `401` en el acto (§11).
 
 ---
 
@@ -630,21 +632,129 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/admin/usuarios` | Listado paginado de usuarios. Filtros: `rol`, `activo`, `email` | `ADMIN` | — | Página de `UsuarioAdminResponse` | `200`, `401`, `403` |
-| `PATCH` | `/api/admin/usuarios/{id}/bloquear` | Bloquea la cuenta (`activo = false`): no podrá iniciar sesión | `ADMIN` | `BloquearUsuarioRequest`: `motivo?` | — | `204`, `401`, `403`, `404` |
-| `PATCH` | `/api/admin/usuarios/{id}/desbloquear` | Reactiva la cuenta | `ADMIN` | — | — | `204`, `401`, `403`, `404` |
-| `GET` | `/api/admin/protectoras/pendientes` | Protectoras en estado `PENDIENTE` esperando verificación | `ADMIN` | — | Página de `ProtectoraResponse` | `200`, `401`, `403` |
-| `PATCH` | `/api/admin/protectoras/{id}/aprobar` | Verifica la protectora: pasa a `ACTIVA` y ya puede iniciar sesión y publicar | `ADMIN` | — | `ProtectoraResponse` | `200`, `401`, `403`, `404` |
-| `PATCH` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud: pasa a `RECHAZADA` | `ADMIN` | `RechazarProtectoraRequest`: `motivo?` | `ProtectoraResponse` | `200`, `401`, `403`, `404` |
-| `GET` | `/api/admin/reportes` | Reportes recibidos. Filtro `estado` (`PENDIENTE` \| `REVISADO`) | `ADMIN` | — | Página de `ReporteAdminResponse` | `200`, `401`, `403` |
-| `PATCH` | `/api/admin/reportes/{id}/revisado` | Cierra un reporte marcándolo como `REVISADO` | `ADMIN` | — | — | `204`, `401`, `403`, `404` |
-| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Elimina cualquier publicación (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/admin/usuarios` | Listado paginado de usuarios, más recientes primero. Filtros opcionales y combinables: `rol`, `activo` | `ADMIN` | — | Página de `UsuarioAdminResponse` | `200`, `400`, `401`, `403` |
+| `PUT` | `/api/admin/usuarios/{id}/bloquear` | Bloquea la cuenta (`activo = false`): deja de poder iniciar sesión | `ADMIN` | `BloquearUsuarioRequest`: `motivo` (obligatorio, ≤500) | `UsuarioAdminResponse` | `200`, `400`, `401`, `403`, `404` |
+| `PUT` | `/api/admin/usuarios/{id}/desbloquear` | Reactiva la cuenta | `ADMIN` | — | `UsuarioAdminResponse` | `200`, `401`, `403`, `404` |
+| `GET` | `/api/admin/protectoras/pendientes` | Cola de verificación: protectoras `PENDIENTE`, más antiguas primero | `ADMIN` | — | Lista de `ProtectoraAdminResponse` | `200`, `401`, `403` |
+| `PUT` | `/api/admin/protectoras/{id}/aprobar` | Verifica la protectora: pasa a `ACTIVA` y ya puede iniciar sesión, publicar y abrir su panel | `ADMIN` | — | `ProtectoraAdminResponse` | `200`, `401`, `403`, `404` |
+| `PUT` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud, o retira una verificación ya concedida: pasa a `RECHAZADA` | `ADMIN` | `RechazarProtectoraRequest`: `motivo` (obligatorio, ≤500) | `ProtectoraAdminResponse` | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/admin/reportes` | Reportes `PENDIENTE`, más antiguos primero | `ADMIN` | — | Lista de `ReporteResponse` | `200`, `401`, `403` |
+| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Retira una publicación que incumple las normas (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
+
+> **Cambio de contrato.** Este bloque sustituye el borrador de arriba en cinco puntos. Las cuatro
+> transiciones de estado son `PUT` y no `PATCH`, por lo mismo que `PUT /api/adopcion/{id}/adoptado`:
+> fijan un estado y repetirlas lo dejan igual. Devuelven `200` con el recurso ya actualizado en vez de
+> `204`, para que el cliente pinte la fila sin una segunda petición. Los dos `motivo` son obligatorios,
+> no opcionales. El filtro `email` de `GET /api/admin/usuarios` se descarta: buscar por email es
+> superficie de enumeración de RNF-10, y `rol` + `activo` cubren el trabajo real. Y
+> `PATCH /api/admin/reportes/{id}/revisado` no se implementa aquí (ver más abajo).
+
+### El rol es toda la comprobación, y va en la clase
+
+`@PreAuthorize("hasRole('ADMIN')")` está escrito **una sola vez, a nivel de clase**, no repetido en
+cada método. Con la anotación ocho veces, un noveno endpoint que naciera sin ella quedaría abierto a
+cualquier autenticado sin que nada lo delatara; en la clase, todo lo que se añada al panel nace
+protegido.
+
+A diferencia del panel de protectora (§9) **no hay una segunda comprobación en el service**, y es
+deliberado: el administrador no tiene un subconjunto de datos «suyos» sobre el que operar, su ámbito
+es la plataforma entera. La única regla añadida es el autobloqueo.
+
+**`403 AUTOBLOQUEO`: nadie puede bloquear su propia cuenta.** Es la única puerta sin retorno del
+panel —una cuenta bloqueada no inicia sesión, así que un administrador que se bloqueara perdería el
+acceso y con él la capacidad de desbloquearse, y solo saldría de ahí tocando la base de datos a
+mano—. Es `403` y no `400`: la petición está bien formada y el rol es el correcto, lo que se rechaza
+es la operación sobre ese objetivo, igual que `PUBLICACION_PROPIA` en §6.
+
+**Bloquear y desbloquear son idempotentes**, y aprobar y rechazar también: repetir la decisión
+devuelve el mismo recurso, no cambia nada y **no vuelve a notificar**. Un segundo aviso de algo que
+el usuario ya sabía sería ruido.
+
+**El bloqueo surte efecto en el acto, sin esperar a que caduque ningún token.** `AuthService` rechaza
+el login de una cuenta inactiva con `403 CUENTA_BLOQUEADA` (§2), y `JwtAuthFilter` recarga el usuario
+en **cada** petición, así que el token que el bloqueado tuviera ya emitido deja de autenticar y sus
+peticiones pasan a `401`. Lo mismo vale para rechazar una protectora activa: su panel se comprueba en
+cada petición y se le cierra al momento con `403 PROTECTORA_RECHAZADA`.
+
+**Se aprueba también desde `RECHAZADA`, y se rechaza también desde `ACTIVA`.** Lo primero porque un
+rechazo no es una condena: la protectora puede aportar la documentación que faltaba, y sin ese camino
+su única salida sería registrarse de nuevo perdiendo la cuenta y todo lo que colgara de ella. Lo
+segundo es retirar una verificación concedida cuando la organización deja de merecerla. Las dos
+transiciones se deciden con un `switch` exhaustivo sobre `EstadoProtectora` **sin rama por defecto**,
+el mismo patrón que §9: si algún día se añade un estado, romperá la compilación en vez de tomar una
+decisión silenciosa sobre un caso que nadie pensó.
+
+### Notificaciones de las decisiones administrativas
+
+| Acción | Tipo | `referenciaId` |
+|---|---|---|
+| Bloquear | `CUENTA_BLOQUEADA` | *(nulo)* |
+| Desbloquear | `CUENTA_DESBLOQUEADA` | *(nulo)* |
+| Aprobar protectora | `PROTECTORA_VERIFICADA` | id de la protectora |
+| Rechazar protectora | `PROTECTORA_RECHAZADA` | id de la protectora |
+
+Los tres tipos nuevos se añadieron al enum `TipoNotificacion` con su migración `V6` (§16). La
+referencia va nula en las dos de cuenta porque el aviso es sobre la cuenta del propio destinatario, no
+sobre otra fila a la que apuntar.
+
+**El `motivo` no llega al usuario, y conviene saberlo.** Hoy acaba solo en el log del servidor, junto
+al id del administrador que decidió: `NOTIFICACION` no tiene ningún campo de texto —solo `tipo` y
+`referencia_id`—, así que el afectado recibe un `CUENTA_BLOQUEADA` sin explicación. Se exige
+igualmente en el body porque obliga a articular la decisión y porque el día que exista dónde
+guardarlo el contrato ya lo pide. Hacérselo llegar exige una columna de texto en `NOTIFICACION` o una
+tabla de auditoría de acciones del administrador, y ninguna de las dos está decidida.
+
+Si la notificación falla, **la decisión se mantiene**: se crea en su propia transacción
+(`REQUIRES_NEW`) y el error se registra sin propagarse. La decisión del administrador vale por sí
+sola; el aviso es su consecuencia. Es el mismo trato que `AlertaService` da al aviso a la zona.
+
+### `DELETE /api/admin/publicaciones/{id}` retira, no borra
 
 **El parámetro `tipo` es obligatorio** y toma los valores del enum `TipoContenido`: `ALERTA`,
 `AVISTAMIENTO` o `ADOPCION`. Sin él la petición devuelve `400`, porque el id de una publicación solo
-es único dentro de su propia tabla y `{id}` por sí solo no identifica el recurso. No se reutiliza
-`TipoPublicacion` porque ese enum solo cubre los tipos sobre los que se puede hacer match, donde
-`ALERTA` no es válido.
+es único dentro de su propia tabla —el 7 existe a la vez como alerta, como avistamiento y como
+animal— y `{id}` por sí solo no identifica el recurso. Es el mismo par `(tipo, id)` que guarda
+`REPORTE`, así que el administrador puede pasar directamente lo que le llega de `GET /api/admin/reportes`.
+No se reutiliza `TipoPublicacion` porque ese enum solo cubre los tipos sobre los que se puede hacer
+match, donde `ALERTA` no es válido.
+
+El verbo es `DELETE`, pero **ninguna fila desaparece**: la publicación pasa a su estado terminal y
+deja de mostrarse, conservando los chats que colgaran de ella. Es el mismo criterio que
+`DELETE /api/alertas/{id}` y `DELETE /api/adopcion/{id}`, y es idempotente en los tres casos.
+
+| `tipo` | Tabla | Estado terminal |
+|---|---|---|
+| `ALERTA` | `ALERTA` | `ELIMINADA` |
+| `AVISTAMIENTO` | `AVISTAMIENTO` | `ELIMINADO` *(nuevo, `EstadoAvistamiento`)* |
+| `ADOPCION` | `ANIMAL_ADOPCION` | `RETIRADO` |
+
+**Por qué `AVISTAMIENTO` también necesitaba un estado, y no valía el borrado real.** Era el único de
+los tres que no tenía ninguno, así que había que decidirlo. Un `DELETE` físico habría sido peor aquí
+que en las otras dos tablas: `MATCH_REGISTRO.publicacion_id` apunta al avistamiento con una referencia
+polimórfica **sin clave ajena** (§16), y `ChatRepository.buscarPorParticipante` resuelve el autor de
+la publicación con un `EXISTS` contra `AVISTAMIENTO`. Borrar la fila no da error en ninguna parte:
+simplemente el chat deja de aparecer en la lista de su dueño, en silencio, sin que la base de datos
+pueda impedirlo. Con el estado, el chat sigue vivo y solo desaparece la publicación del feed. La
+migración es `V7` (§16).
+
+Para el animal se reutiliza `RETIRADO`, el mismo estado con el que una protectora saca un animal de su
+catálogo, en vez de inventar uno para la moderación: la consecuencia es idéntica —deja de ofrecerse— y
+quién lo retiró queda en el log. Un estado más solo añadiría una rama que ninguna consulta necesita
+distinguir.
+
+**Retirar una publicación no notifica a nadie.** `REPORTE_RESUELTO` va dirigido a quien reportó, no al
+autor de lo retirado, y pertenece al bloque 9; aquí no hay reporte del que colgarlo.
+
+### Dependencia pendiente: `GET /api/admin/reportes` hoy devuelve vacío
+
+No está a medias: la consulta es real y funciona contra `REPORTE`, pero **nada puede crear reportes
+todavía**. `POST /api/reportes` y `ReporteService` son del bloque 9 (RF-26, §10). Hasta entonces la
+respuesta es `[]`, y en cuanto ese bloque exista el endpoint devuelve datos sin tocarlo. Es la misma
+situación que `/panel/valoraciones` en §9.
+
+Por lo mismo, `PATCH /api/admin/reportes/{id}/revisado` —la transición a `REVISADO` que enumeraba
+§15— **no se implementa en este bloque**: cerrar un reporte que no puede existir no es verificable, y
+la transición va con el servicio que también los crea.
 
 ---
 
@@ -658,7 +768,11 @@ RF-05.
 | `PATCH` | `/api/notificaciones/{id}/leida` | Marca una notificación como leída | Propietario | — | — | `204`, `401`, `403`, `404` |
 
 Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTECTORA_VERIFICADA`,
-`ADOPCION_CONFIRMADA`, `REPORTE_RESUELTO`.
+`ADOPCION_CONFIRMADA`, `REPORTE_RESUELTO`, y desde RF-11 `PROTECTORA_RECHAZADA`, `CUENTA_BLOQUEADA` y
+`CUENTA_DESBLOQUEADA` (§11, migración `V6`).
+
+Ninguna lleva texto: `NOTIFICACION` solo guarda `tipo` y `referencia_id`, así que el cliente compone
+el mensaje a partir del tipo. Es lo que impide que el `motivo` de un bloqueo llegue al afectado (§11).
 
 ---
 
@@ -772,7 +886,7 @@ modelo que hicieron falta para sostenerlos:
 | `GET /api/adopcion/feed` | RF-09 + RF-15: el swipe de adopción necesita su propio feed, igual que el de avistamientos |
 | `POST /api/protectoras/local/contactar` | RF-06 pide una «opción específica» para la protectora de la localidad, que no puede resolverse con un `{id}` en la ruta porque el usuario aún no lo conoce |
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
-| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición |
+| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición. **Aplazado al bloque 9**, junto con la creación de reportes (§11) |
 | `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
 | `POST /api/chats/{id}/mensajes`, `PUT /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |
@@ -812,6 +926,19 @@ aviso, dejando el código y la base de datos describiendo cosas distintas.
 | Nuevo `400 ANIMAL_RETIRADO` al confirmar la adopción de un animal retirado | §8 |
 | `ANIMAL_NO_DISPONIBLE` cubre ahora `ADOPTADO` y `RETIRADO`, con mensajes distintos | §6 |
 | El día de la cuota diaria se fija a `Europe/Madrid`: `reiniciaEn` ya no depende de la zona de la máquina | §6 *Estado del límite diario* |
+| Tres tipos nuevos de notificación —`PROTECTORA_RECHAZADA`, `CUENTA_BLOQUEADA`, `CUENTA_DESBLOQUEADA`— para las decisiones del administrador (`V6`) | §11, §12 |
+| `AVISTAMIENTO` tiene estado: `VISIBLE` \| `ELIMINADO`, con `NOT NULL` y su `CHECK` (`V7`) | §11 |
+
+**Sobre `V6`.** Hibernate mapea un `@Enumerated(STRING)` a `varchar` con un `CHECK (col IN (...))`, y
+`validate` **no** comprueba los `CHECK`: sin la migración la aplicación arrancaría igual y el `INSERT`
+de una notificación del tipo nuevo fallaría en ejecución. La migración borra y recrea
+`notificacion_tipo_check` con los nueve valores.
+
+**Sobre `V7`.** La columna se añade en tres pasos —nulable, `UPDATE` de las filas existentes a
+`'VISIBLE'`, y solo entonces `SET NOT NULL`— porque `AVISTAMIENTO` puede tener filas y un
+`ADD COLUMN NOT NULL` sin defecto las rechazaría. **No** lleva `DEFAULT` en la base de datos a
+propósito: el valor lo pone `AvistamientoService` al crear, y un defecto en la tabla escondería el día
+que dejara de ponerlo.
 
 ### Dos cosas que se decidieron NO cambiar
 
@@ -823,13 +950,17 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 366 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 416 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
 `MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
 un `switch` exhaustivo sin rama por defecto, así que un tipo nuevo rompe la compilación en lugar de
 colarse en ejecución. Se reabre si aparece un tercer
 tipo deslizable o un incidente real de integridad.
+
+RF-11 es justamente el caso que muestra el filo de esta decisión: la retirada de avistamientos tuvo
+que hacerse con un estado en vez de un `DELETE` precisamente porque no hay clave ajena que avisara del
+destrozo (§11).
 
 **No hay tabla `CHAT_PARTICIPANTE`, y es lo correcto.** Los dos extremos de un chat se deducen del
 match, son siempre exactamente dos y no cambian nunca. Una tabla de participantes sabría representar
@@ -849,3 +980,5 @@ bloque 5.
 | `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
 | `MATCH_REGISTRO` no tiene índice por `(tipo_publicacion, interesado)`. Las consultas del panel de RF-10 filtran por ahí, y el único índice existente empieza por `usuario_id`, así que no las sirve. Con los volúmenes del proyecto no se nota | Cuando el panel tenga volumen que lo justifique |
+| El `motivo` de un bloqueo o un rechazo no llega al usuario: solo queda en el log, porque `NOTIFICACION` no tiene campo de texto (§11). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
+| No hay endpoint de alta de administradores, ni debe haberlo: la cuenta `ADMIN` se crea desde la base de datos, como la cuenta raíz de cualquier panel | Fuera de alcance |

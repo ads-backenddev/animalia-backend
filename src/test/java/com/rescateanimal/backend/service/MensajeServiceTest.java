@@ -9,6 +9,7 @@ import com.rescateanimal.backend.model.Chat;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Mensaje;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
@@ -275,6 +276,7 @@ class MensajeServiceTest {
         avistamiento.setId(33L);
         avistamiento.setUsuario(usuario(ID_AUTOR));
         avistamiento.setAlerta(alerta);
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
 
         return new ChatService.Participantes(chat,
                 new ChatService.PublicacionDelChat.DeAvistamiento(avistamiento), usuario(ID_EMISOR));

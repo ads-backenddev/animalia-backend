@@ -12,6 +12,7 @@ import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
@@ -88,6 +89,10 @@ public class AvistamientoService {
         avistamiento.setDescripcion(peticion.getDescripcion());
         avistamiento.setFotoUrl(peticion.getFotoUrl());
         avistamiento.setUbicacion(aPunto(peticion.getUbicacion()));
+        // Nace visible; solo el administrador lo retira (RF-11). El estado se
+        // fija aquí y no con un DEFAULT en la columna para que la decisión viva
+        // en un solo sitio.
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
 
         Avistamiento guardado = avistamientoRepository.save(avistamiento);
         log.info("Avistamiento {} registrado sobre la alerta {}", guardado.getId(), alerta.getId());
@@ -114,6 +119,7 @@ public class AvistamientoService {
     public List<AvistamientoFeedResponse> feed(Long usuarioId) {
         return avistamientoRepository.buscarCandidatosParaFeed(
                         usuarioId,
+                        EstadoAvistamiento.VISIBLE,
                         EstadoAlerta.ACTIVA,
                         TipoPublicacion.AVISTAMIENTO,
                         PageRequest.of(0, tamanyoFeed))
