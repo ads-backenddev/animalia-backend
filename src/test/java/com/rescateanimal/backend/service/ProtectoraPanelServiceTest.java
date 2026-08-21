@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -150,6 +151,28 @@ class ProtectoraPanelServiceTest {
                     .isInstanceOf(CuentaNoAutorizadaException.class)
                     .satisfies(e -> assertThat(((CuentaNoAutorizadaException) e).getCodigo())
                             .isEqualTo("SIN_PROTECTORA"));
+        }
+
+        @Test
+        @DisplayName("Solo ACTIVA abre el panel: cualquier otro estado del enum lo cierra")
+        void soloActivaAbreElPanel() {
+            // exigirProtectoraActiva es un switch exhaustivo, asi que anadir un
+            // valor al enum rompe la compilacion y esta prueba ni llegaria a
+            // ejecutarse. Lo que cubre es el paso siguiente: que nadie resuelva
+            // esa rotura metiendo un "default" que conceda el acceso. Recorre el
+            // enum entero en vez de nombrar estados uno a uno, para que el dia
+            // que crezca siga comprobando todos.
+            for (EstadoProtectora estado : EstadoProtectora.values()) {
+                estadoDeLaProtectora(estado);
+
+                if (estado == EstadoProtectora.ACTIVA) {
+                    assertThatNoException().isThrownBy(() -> panel.resumen(ID_CUENTA));
+                } else {
+                    assertThatThrownBy(() -> panel.resumen(ID_CUENTA))
+                            .as("el estado %s no debe abrir el panel", estado)
+                            .isInstanceOf(CuentaNoAutorizadaException.class);
+                }
+            }
         }
 
         @Test

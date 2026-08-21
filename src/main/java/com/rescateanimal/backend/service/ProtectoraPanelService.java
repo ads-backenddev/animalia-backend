@@ -15,7 +15,6 @@ import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.Valoracion;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
-import com.rescateanimal.backend.model.enums.EstadoProtectora;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -217,11 +216,30 @@ public class ProtectoraPanelService {
      * pasar, pero de no comprobarlo saldría un 500 por un Optional vacío), que
      * está pendiente de verificación, o que fue rechazada.
      *
-     * Los códigos y los mensajes son literalmente los mismos que usa
-     * AuthService.verificarCuentaOperativa al impedir el login. Es deliberado:
-     * el cliente ya sabe traducirlos, y que la misma situación se llame igual en
-     * los dos sitios evita que acabe habiendo dos vocabularios para un mismo
-     * estado.
+     * ES UN SWITCH EXHAUSTIVO Y SIN RAMA POR DEFECTO, A PROPÓSITO. Escrito como
+     * dos "if" que rechazan PENDIENTE y RECHAZADA, lo que quedaba era una lista
+     * negra: cualquier estado que no estuviera en ella concedía el acceso. Hoy
+     * daría igual, porque el enum tiene exactamente tres valores, pero el día que
+     * RF-11 necesite uno intermedio —"en revisión de documentación",
+     * "suspendida"— ese estado nuevo abriría el panel entero salvo que quien lo
+     * añada se acuerde de tocar también este método, sin que nada se lo exija.
+     *
+     * Así al revés: el acceso solo se concede en la rama ACTIVA, y añadir un
+     * valor al enum ROMPE LA COMPILACIÓN aquí en lugar de colarse en ejecución.
+     * Es la misma disciplina que MatchService.resolverAutor aplica sobre
+     * TipoPublicacion, y por el mismo motivo.
+     *
+     * SOBRE LOS CÓDIGOS. PROTECTORA_PENDIENTE y PROTECTORA_RECHAZADA son
+     * literalmente los mismos, mensaje incluido, que usa
+     * AuthService.verificarCuentaOperativa al impedir el login: el cliente ya
+     * sabe traducirlos y no conviene tener dos vocabularios para un mismo estado.
+     *
+     * SIN_PROTECTORA es el único que NO existe en el login, y no es un descuido.
+     * Allí una cuenta con rol PROTECTORA sin ficha se trata como PENDIENTE, lo
+     * que le dice al usuario que espere a un administrador cuando lo que hay es
+     * una fila que falta y ninguna verificación va a arreglar. Aquí se llama por
+     * su nombre, igual que en AnimalAdopcionService.protectoraDe, que es el
+     * precedente del proyecto para este mismo caso.
      *
      * @throws CuentaNoAutorizadaException siempre que la protectora no esté ACTIVA (403)
      */
@@ -230,22 +248,23 @@ public class ProtectoraPanelService {
                 .orElseThrow(() -> new CuentaNoAutorizadaException("SIN_PROTECTORA",
                         "Tu cuenta no tiene una protectora asociada"));
 
-        EstadoProtectora estado = protectora.getEstado();
+        return switch (protectora.getEstado()) {
+            case ACTIVA -> protectora;
 
-        if (estado == EstadoProtectora.PENDIENTE) {
-            log.warn("La protectora {} ha intentado abrir el panel sin estar verificada",
-                    protectora.getId());
-            throw new CuentaNoAutorizadaException("PROTECTORA_PENDIENTE",
-                    "Tu protectora está pendiente de verificación por un administrador");
-        }
+            case PENDIENTE -> {
+                log.warn("La protectora {} ha intentado abrir el panel sin estar verificada",
+                        protectora.getId());
+                throw new CuentaNoAutorizadaException("PROTECTORA_PENDIENTE",
+                        "Tu protectora está pendiente de verificación por un administrador");
+            }
 
-        if (estado == EstadoProtectora.RECHAZADA) {
-            log.warn("La protectora {}, rechazada, ha intentado abrir el panel", protectora.getId());
-            throw new CuentaNoAutorizadaException("PROTECTORA_RECHAZADA",
-                    "La solicitud de tu protectora ha sido rechazada");
-        }
-
-        return protectora;
+            case RECHAZADA -> {
+                log.warn("La protectora {}, rechazada, ha intentado abrir el panel",
+                        protectora.getId());
+                throw new CuentaNoAutorizadaException("PROTECTORA_RECHAZADA",
+                        "La solicitud de tu protectora ha sido rechazada");
+            }
+        };
     }
 
     /**

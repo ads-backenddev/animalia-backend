@@ -545,6 +545,16 @@ token dura horas: una protectora que entra estando `ACTIVA` y a la que el admini
 continuación seguiría operando hasta que caducara. `SIN_PROTECTORA` cubre el caso de una cuenta con
 el rol pero sin fila de protectora asociada.
 
+Solo se concede el acceso con estado `ACTIVA`, comprobado con un `switch` exhaustivo sobre
+`EstadoProtectora`: si algún día RF-11 añade un estado intermedio, romperá la compilación en vez de
+abrir el panel por omisión.
+
+> **Ojo al implementar el cliente.** `SIN_PROTECTORA` es el único de los tres códigos que **no**
+> aparece en el login: `POST /api/auth/login` trata esa misma cuenta rota como `PROTECTORA_PENDIENTE`.
+> El panel la llama por su nombre, igual que hace `POST /api/adopcion`, porque decirle al usuario que
+> espere a un administrador cuando lo que falta es una fila lo deja esperando algo que no va a llegar.
+> Unificar el login con estos dos queda pendiente.
+
 **`/panel/animales` no es el catálogo público.** `GET /api/adopcion` solo enseña los `DISPONIBLE`
 porque es un escaparate; el panel enseña también los `ADOPTADO` y los `RETIRADO`, porque es el
 histórico de gestión de la protectora. Es la diferencia deliberada entre los dos listados.
@@ -813,7 +823,7 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 365 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 366 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
 `MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
