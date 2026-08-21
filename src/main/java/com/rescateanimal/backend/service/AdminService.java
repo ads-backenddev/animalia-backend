@@ -292,58 +292,70 @@ public class AdminService {
      * ellos su chat y sus mensajes, que desaparecerían de la lista de su dueño sin
      * un solo aviso. El razonamiento completo está en EstadoAvistamiento.
      *
-     * El switch es exhaustivo y sin rama por defecto: un TipoContenido nuevo
-     * rompe la compilación aquí en lugar de caer en un "no hago nada" silencioso.
+     * EL SWITCH ES UNA EXPRESIÓN, Y ESO NO ES UN DETALLE DE ESTILO. Java solo
+     * exige exhaustividad a los switch que producen un valor; un switch de
+     * sentencia sobre un enum compila igual de bien al que le falta un caso, y
+     * entonces la llamada lo atravesaría sin ejecutar ninguna rama y este método
+     * volvería como si hubiera retirado algo, con el controller respondiendo 204
+     * sobre una publicación intacta. Por eso cada retirarX devuelve si cambió
+     * algo y el switch se asigna: así un TipoContenido nuevo rompe la
+     * compilación aquí, que es lo que se pretendía desde el principio.
      *
      * Es idempotente en los tres casos: retirar lo ya retirado no cambia nada.
      */
     @Transactional
     public void retirarPublicacion(TipoContenido tipo, Long publicacionId, Long adminId) {
-        switch (tipo) {
+        boolean retirada = switch (tipo) {
             case ALERTA -> retirarAlerta(publicacionId, adminId);
             case AVISTAMIENTO -> retirarAvistamiento(publicacionId, adminId);
             case ADOPCION -> retirarAnimal(publicacionId, adminId);
+        };
+
+        if (!retirada) {
+            log.debug("La publicación {} de tipo {} ya estaba retirada", publicacionId, tipo);
         }
     }
 
-    private void retirarAlerta(Long alertaId, Long adminId) {
+    /** @return true si esta llamada la retiró, false si ya lo estaba. */
+    private boolean retirarAlerta(Long alertaId, Long adminId) {
         Alerta alerta = alertaRepository.findById(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "La alerta " + alertaId + " no existe"));
 
         if (alerta.getEstado() == EstadoAlerta.ELIMINADA) {
-            log.debug("La alerta {} ya estaba eliminada", alertaId);
-            return;
+            return false;
         }
 
         alerta.setEstado(EstadoAlerta.ELIMINADA);
         log.warn("El administrador {} ha retirado la alerta {} por incumplir las normas",
                 adminId, alertaId);
+        return true;
     }
 
-    private void retirarAvistamiento(Long avistamientoId, Long adminId) {
+    /** @return true si esta llamada lo retiró, false si ya lo estaba. */
+    private boolean retirarAvistamiento(Long avistamientoId, Long adminId) {
         Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El avistamiento " + avistamientoId + " no existe"));
 
         if (avistamiento.getEstado() == EstadoAvistamiento.ELIMINADO) {
-            log.debug("El avistamiento {} ya estaba eliminado", avistamientoId);
-            return;
+            return false;
         }
 
         avistamiento.setEstado(EstadoAvistamiento.ELIMINADO);
         log.warn("El administrador {} ha retirado el avistamiento {} por incumplir las normas",
                 adminId, avistamientoId);
+        return true;
     }
 
-    private void retirarAnimal(Long animalId, Long adminId) {
+    /** @return true si esta llamada lo retiró, false si ya lo estaba. */
+    private boolean retirarAnimal(Long animalId, Long adminId) {
         AnimalAdopcion animal = animalAdopcionRepository.findById(animalId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El animal " + animalId + " no existe"));
 
         if (animal.getEstado() == EstadoAnimal.RETIRADO) {
-            log.debug("El animal {} ya estaba retirado", animalId);
-            return;
+            return false;
         }
 
         // Se usa RETIRADO, el mismo estado con el que una protectora saca un
@@ -354,6 +366,7 @@ public class AdminService {
         animal.setEstado(EstadoAnimal.RETIRADO);
         log.warn("El administrador {} ha retirado el animal {} por incumplir las normas",
                 adminId, animalId);
+        return true;
     }
 
     // ---------------------------------------------------------------------

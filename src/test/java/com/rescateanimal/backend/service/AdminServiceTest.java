@@ -521,11 +521,18 @@ class AdminServiceTest {
         @Test
         @DisplayName("Los TRES tipos del enum se atienden: ninguno cae en un silencio")
         void elSwitchCubreElEnumEntero() {
-            // Mismo razonamiento que el de los estados de protectora: el switch de
-            // retirarPublicacion es exhaustivo y sin rama por defecto, y esto
-            // impide que se "arregle" con un default que no haga nada. Recorriendo
-            // el enum, un TipoContenido nuevo sin tratar falla aquí con 404 en vez
-            // de responder 204 sin haber retirado nada.
+            // OJO AL TOCAR retirarPublicacion. Su switch tiene que seguir siendo
+            // una EXPRESIÓN asignada a una variable. Java solo exige exhaustividad
+            // a los switch que producen un valor: escrito como sentencia sobre un
+            // enum, uno al que le falte un caso compila sin una sola queja, lo
+            // atraviesa sin ejecutar nada y el endpoint responde 204 sobre una
+            // publicación intacta. Esta prueba NO detecta ese fallo —recorre los
+            // valores que existen hoy, no los futuros—; quien lo detecta es el
+            // compilador, y solo si el switch sigue siendo una expresión.
+            //
+            // Lo que sí cubre es el paso siguiente, igual que su hermana de los
+            // estados de protectora: que nadie resuelva esa rotura de compilación
+            // metiendo un default que no haga nada.
             for (TipoContenido tipo : TipoContenido.values()) {
                 when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
                 when(avistamientoRepository.findById(anyLong())).thenReturn(Optional.empty());
