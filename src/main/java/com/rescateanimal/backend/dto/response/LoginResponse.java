@@ -5,7 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Respuesta del login (RF-13): el JWT con el que el cliente autenticará el resto
@@ -23,7 +23,7 @@ public class LoginResponse {
     private String tipo;
 
     /** Momento en que el token deja de ser válido. */
-    private LocalDateTime expiraEn;
+    private Instant expiraEn;
 
     private UsuarioResponse usuario;
 }

@@ -10,7 +10,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Publicación de una alerta de mascota perdida (RF-03).
@@ -38,7 +38,7 @@ public class CrearAlertaRequest {
 
     @NotNull(message = "la fecha del avistamiento es obligatoria")
     @PastOrPresent(message = "la fecha del avistamiento no puede ser futura")
-    private LocalDateTime fechaAvistamiento;
+    private Instant fechaAvistamiento;
 
     /** Último lugar donde se vio a la mascota; es la base de la búsqueda por proximidad. */
     @NotNull(message = "la ubicación es obligatoria")

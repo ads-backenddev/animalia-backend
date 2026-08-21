@@ -23,7 +23,7 @@ import org.springframework.stereotype.Controller;
 import org.springframework.validation.FieldError;
 
 import java.security.Principal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -96,7 +96,7 @@ public class ChatWebSocketController {
         }
 
         ErrorResponse cuerpo = ErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
+                .timestamp(Instant.now())
                 .status(estado.value())
                 .error(estado.getReasonPhrase())
                 .codigo(codigoDe(ex, estado))

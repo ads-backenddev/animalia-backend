@@ -58,7 +58,7 @@ Todas las excepciones se traducen en `exception/GlobalExceptionHandler`:
 
 ```json
 {
-  "timestamp": "2026-03-14T18:22:05",
+  "timestamp": "2026-03-14T18:22:05.417Z",
   "status": 409,
   "error": "Conflict",
   "codigo": "ALERTA_DUPLICADA",
@@ -95,6 +95,32 @@ objeto anidado, y el service hace la conversión:
 ```json
 { "ubicacion": { "latitud": 40.4168, "longitud": -3.7038 } }
 ```
+
+### Marcas de tiempo
+
+Todas las marcas de tiempo de la API son **instantes en UTC**, en ISO-8601 y terminadas en `Z`:
+
+```json
+{ "createdAt": "2026-08-20T17:42:11.512Z" }
+```
+
+Esto vale tanto para las respuestas (`createdAt`, `fechaAvistamiento`, `expiraEn`, el `timestamp`
+del cuerpo de error) como para lo que el cliente **envía**: `fechaAvistamiento` en
+`POST /api/alertas` debe llevar zona. `"2026-08-20T19:42:11"` sin `Z` ni desfase se rechaza con
+`400`.
+
+> **Cambio de contrato.** Hasta el bloque de mantenimiento del esquema estos campos eran horas de
+> pared sin zona (`"2026-08-20T19:42:11"`), que es lo que el cliente debía enviar y lo que recibía.
+> Significaban cosas distintas según dónde corriera la API —el portátil de desarrollo va en
+> `Europe/Madrid` y Railway en UTC—, y con ello la ventana de 24 h de RF-25 se desplazaba dos horas
+> entre entornos y se encogía o estiraba en el cambio de hora. El cliente Android tiene que enviar
+> y parsear con zona a partir de aquí.
+
+La única excepción es **`reiniciaEn`**, del `429` por cuota diaria agotada (RF-24), que sigue siendo
+una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
+por día natural y "mañana a las 00:00" depende de qué calendario se mire. Ese calendario es el de
+**`Europe/Madrid`**, fijado explícitamente en el servidor — con sus límites, en §6, *Estado del
+límite diario*.
 
 ---
 
@@ -253,10 +279,13 @@ dueño puede cerrarla mientras el cliente tiene la tarjeta en pantalla; sin esta
 abriría un chat y se avisaría al dueño por un animal que ya apareció, gastando además un match del
 día. Es el mismo código que devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
 
-**`400` con código `ANIMAL_NO_DISPONIBLE`** si el animal en adopción deslizado ya está `ADOPTADO`.
-Es el equivalente de `ALERTA_NO_ACTIVA` en el otro tipo de publicación: la tarjeta pudo mostrarse
-antes de que la protectora confirmara la adopción, y sin esta comprobación se abriría una
-conversación sobre una adopción ya consumada gastando un match del día.
+**`400` con código `ANIMAL_NO_DISPONIBLE`** si el animal en adopción deslizado ya no está
+`DISPONIBLE`, sea porque está `ADOPTADO` o porque la protectora lo `RETIRADO` del catálogo. Es el
+equivalente de `ALERTA_NO_ACTIVA` en el otro tipo de publicación: la tarjeta pudo mostrarse antes de
+que la protectora lo cambiara, y sin esta comprobación se abriría una conversación sobre algo ya
+cerrado gastando un match del día. El código es el mismo en los dos casos y el `mensaje` los
+distingue, porque para quien lo lee no significan lo mismo: `ADOPTADO` es un final feliz y
+`RETIRADO` puede ser cualquier cosa.
 
 El orden de las comprobaciones importa: la cuota se consume en último lugar, después de validar
 todo lo demás. Al revés, un swipe repetido —que acaba en `409`— le habría gastado al usuario un
@@ -272,7 +301,7 @@ abre el match:
 | `tipoPublicacion` | Publicación | Otro participante del chat y destinatario del aviso | Estado que la inhabilita |
 |---|---|---|---|
 | `AVISTAMIENTO` | `AVISTAMIENTO` (RF-08) | `AVISTAMIENTO.usuario`, el autor del avistamiento | Su alerta no está `ACTIVA` |
-| `ADOPCION` | `ANIMAL_ADOPCION` (RF-09) | `ANIMAL_ADOPCION.protectora.usuario`, la cuenta de la protectora | El animal está `ADOPTADO` |
+| `ADOPCION` | `ANIMAL_ADOPCION` (RF-09) | `ANIMAL_ADOPCION.protectora.usuario`, la cuenta de la protectora | El animal no está `DISPONIBLE` (`ADOPTADO` o `RETIRADO`) |
 
 En los dos casos la regla del aviso es la misma: se notifica a quien **no** deslizó. En adopción eso
 significa que una protectora recibe el `NUEVO_MATCH` cuando un ciudadano muestra interés por uno de
@@ -297,6 +326,19 @@ diaria, restricción única y apertura del chat no distinguen de qué publicaci�
 la fecha simplemente se empieza una fila nueva en `LIMITE_MATCH_DIARIO`, de ahí que `reiniciaEn`
 sea siempre la medianoche del día siguiente. El límite se configura con
 `app.matches.limite-diario` (20 por defecto).
+
+**El día de la cuota es el de `Europe/Madrid`**, fijado explícitamente en `MatchService` y no
+heredado de la zona de la máquina. Sin fijarlo, la cuota se reiniciaba a una hora distinta en cada
+entorno: en Railway, que va en UTC, a la 01:00 o a las 02:00 de la madrugada peninsular según la
+época del año, y en el portátil de desarrollo a medianoche. Con la zona fija, esas `00:00` son
+medianoche peninsular en todas partes.
+
+Es una **simplificación consciente**, no una solución general. Vale para España peninsular, que es
+el alcance geográfico del proyecto, y **no es correcta para Canarias**: allí se va una hora por
+detrás, así que un usuario canario ve su cuota reiniciarse a las 23:00 de su noche. Hacerlo bien
+exige que el cliente envíe su zona y que se guarde junto al contador, o contar la cuota por instante
+en vez de por día natural; es una decisión de producto de RF-24 que no se ha tomado, y queda
+anotada como pendiente en §16.
 
 **`429` al alcanzar el límite (RF-24)**, con mensaje informativo y momento de reinicio:
 
@@ -336,9 +378,13 @@ de contexto; el otro se omite del JSON:
 | `AVISTAMIENTO` | `avistamientoId`, `avistamientoFotoUrl`, `avistamientoDescripcion`, `alertaId`, `alertaEspecie`, `alertaFotoUrl`, `alertaEstado` |
 | `ADOPCION` | `animalId`, `animalNombre`, `animalEspecie`, `animalFotoUrl`, `animalEstado`, `protectoraId`, `protectoraNombre` |
 
-Un chat cuya publicación ya no existe —una protectora puede retirar un animal del catálogo en
-cualquier momento— se omite del listado en vez de tumbarlo entero, y responde `404` al pedir su
-detalle, que es donde ese chat concreto es lo que se ha pedido.
+Un chat cuya publicación ya no existe se omite del listado en vez de tumbarlo entero, y responde
+`404` al pedir su detalle, que es donde ese chat concreto es lo que se ha pedido. Retirar un animal
+del catálogo ya no provoca ese caso: desde que `DELETE /api/adopcion/{id}` lo deja en `RETIRADO` en
+lugar de borrar la ficha (§8), la conversación se mantiene y el `animalEstado` del detalle dice qué
+pasó. El filtro se conserva porque nada en el esquema impide que una fila desaparezca —
+`publicacion_id` no tiene clave ajena—, y sin él una sola fila borrada a mano tumbaría el listado
+completo de alguien.
 
 El marcado de leídos es `PUT` y no `PATCH` porque no modifica un subconjunto de campos de un
 recurso: fija por completo el estado «todo lo recibido está leído», y repetirlo deja la conversación
@@ -363,8 +409,31 @@ RF-07, RF-09, RF-20, RF-22.
 | `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los propios y los ya deslizados (RF-09, RF-15). Admite los mismos filtros que el catálogo | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `400`, `401` |
 | `POST` | `/api/adopcion` | Publica un animal en adopción | `PROTECTORA` | `CrearAnimalRequest`: `nombre`, `especie`, `tamanyo`, `descripcion`, `fotoUrl`, `zonaGeografica` | `AnimalAdopcionResponse` | `201`, `400`, `401`, `403` |
 | `PUT` | `/api/adopcion/{id}` | Modifica un animal de la propia protectora | `PROTECTORA` + Propietario | `ActualizarAnimalRequest`: mismos campos que la creación | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
-| `DELETE` | `/api/adopcion/{id}` | Retira un animal del catálogo | `PROTECTORA` + Propietario | — | — | `204`, `401`, `403`, `404` |
-| `PUT` | `/api/adopcion/{id}/adoptado` | Confirma la adopción: el animal pasa a estado `ADOPTADO` (RF-20) | `PROTECTORA` + Propietario | — | `AnimalAdopcionResponse` | `200`, `401`, `403`, `404` |
+| `DELETE` | `/api/adopcion/{id}` | Retira un animal del catálogo: pasa a estado `RETIRADO`. **No borra la ficha** | `PROTECTORA` + Propietario | — | — | `204`, `401`, `403`, `404` |
+| `PUT` | `/api/adopcion/{id}/adoptado` | Confirma la adopción: el animal pasa a estado `ADOPTADO` (RF-20) | `PROTECTORA` + Propietario | — | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
+
+### Estados de un animal
+
+| Estado | Significado | En catálogo y feed | Detalle |
+|---|---|---|---|
+| `DISPONIBLE` | Se ofrece en adopción. Es donde nace todo animal publicado | Sí | Sí |
+| `ADOPTADO` | La protectora confirmó la adopción (RF-20) | No | Sí |
+| `RETIRADO` | La protectora lo quitó del catálogo | No | Sí |
+
+`DELETE /api/adopcion/{id}` **conserva la fila** y solo cambia el estado, igual que cerrar una alerta
+la deja en `ELIMINADA`. Sigue siendo un `DELETE` con `204` porque desde fuera es lo mismo: el animal
+deja de estar en el catálogo. Lo que cambia es lo que le pasa a quien tenía una conversación abierta
+sobre él. Borrando la fila, esa conversación desaparecía de su listado sin explicación —los matches
+apuntan a `publicacion_id` sin clave ajena que los proteja, así que quedaban huérfanos con su chat y
+sus mensajes—; conservándola, el chat sigue en pie y el otro extremo ve que el animal está
+`RETIRADO`.
+
+Es idempotente: retirar dos veces deja el mismo estado y responde `204` igual. Y es terminal, como
+`ADOPTADO`: no hay vuelta a `DISPONIBLE`, un animal que vuelve a ofrecerse se publica de nuevo.
+
+**`400` con código `ANIMAL_RETIRADO`** al confirmar la adopción de un animal `RETIRADO`. El camino
+`DISPONIBLE → RETIRADO → ADOPTADO` afirmaría dos cosas incompatibles —que se sacó del catálogo y que
+se adoptó—, así que se corta.
 
 ### Permisos: el rol no basta
 
@@ -396,7 +465,7 @@ Los tres son opcionales y **combinables entre sí**: se aplican en la misma cons
 | `zona` | Contiene, sin distinguir mayúsculas: `Madrid` encuentra `Madrid, Carabanchel` |
 
 El catálogo devuelve **solo animales `DISPONIBLE`**; el estado no es un filtro que el cliente pueda
-cambiar. Un animal `ADOPTADO` desaparece del listado pero conserva su detalle, para quien llegue
+cambiar. Un animal `ADOPTADO` o `RETIRADO` desaparece del listado pero conserva su detalle, para quien llegue
 desde un enlace o desde un chat abierto antes de la adopción.
 
 ### Feed de swipe (RF-09, RF-15)
@@ -407,7 +476,7 @@ desde un enlace o desde un chat abierto antes de la adopción.
 |---|---|
 | Los animales de su propia protectora | Nadie hace match consigo mismo; `POST /api/matches` lo rechazaría con `403 PUBLICACION_PROPIA` |
 | Lo que ya deslizó, en cualquiera de los dos sentidos | Es lo que registra `MATCH_REGISTRO`. Sin esta exclusión un descarte reaparecería en la siguiente sesión, y el segundo swipe acabaría en `409 SWIPE_DUPLICADO` |
-| Los `ADOPTADO` | Como en el catálogo: ya tienen casa |
+| Los que no están `DISPONIBLE` | Como en el catálogo: un `ADOPTADO` ya tiene casa y un `RETIRADO` ya no se ofrece |
 
 La exclusión de lo deslizado filtra **por tipo además de por id**: `publicacion_id` es una referencia
 polimórfica, así que sin ese filtro haber deslizado el avistamiento 7 escondería del feed al animal
@@ -645,3 +714,57 @@ Dos requisitos no eran implementables con el modelo del SRS tal cual:
 | `GET /api/usuarios/{id}` | Superficie de enumeración de toda la base de usuarios, incompatible con RNF-10. Los datos públicos del interlocutor van embebidos en las respuestas que los necesitan |
 | `GET /api/avistamientos?alertaId=` | Redundante: `AlertaDetalleResponse` ya incluye los avistamientos de la alerta |
 | `PATCH /api/notificaciones/leidas` | Solo comodidad de cliente, y `leidas` es un segmento literal en la posición donde su ruta hermana espera un id |
+
+---
+
+## 16. Bloque de mantenimiento del esquema
+
+El esquema pasó a gestionarse con **migraciones Flyway** (`src/main/resources/db/migration`) y
+`ddl-auto=validate`. Lo que hasta entonces mantenía `ddl-auto=update` solo sabía añadir tablas,
+columnas e índices: cambiar el tipo de una columna, un `CHECK` o una unicidad lo ignoraba sin un solo
+aviso, dejando el código y la base de datos describiendo cosas distintas.
+
+### Lo que cambió en el contrato
+
+| Cambio | Dónde |
+|---|---|
+| Las marcas de tiempo son instantes UTC con `Z`, y `fechaAvistamiento` debe enviarse con zona | §1 *Marcas de tiempo* |
+| `DELETE /api/adopcion/{id}` deja el animal en `RETIRADO` en vez de borrar la ficha | §8 *Estados de un animal* |
+| Nuevo `400 ANIMAL_RETIRADO` al confirmar la adopción de un animal retirado | §8 |
+| `ANIMAL_NO_DISPONIBLE` cubre ahora `ADOPTADO` y `RETIRADO`, con mensajes distintos | §6 |
+| El día de la cuota diaria se fija a `Europe/Madrid`: `reiniciaEn` ya no depende de la zona de la máquina | §6 *Estado del límite diario* |
+
+### Dos cosas que se decidieron NO cambiar
+
+Se estudiaron en el mismo bloque y se dejaron como están. Conviene que quede escrito para que no se
+retomen por inercia ni se lean como descuidos:
+
+**La referencia polimórfica de `MATCH_REGISTRO` se queda.** `publicacion_id` apunta a
+`AVISTAMIENTO` o a `ANIMAL_ADOPCION` según `tipo_publicacion`, sin clave ajena que lo respalde. Las
+dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
+`PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
+empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 321 pruebas
+apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
+tipo en los tres sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec` y
+`MatchService.resolverAutor`), y ese último es un `switch` exhaustivo sin rama por defecto, así que
+un tipo nuevo rompe la compilación en lugar de colarse en ejecución. Se reabre si aparece un tercer
+tipo deslizable o un incidente real de integridad.
+
+**No hay tabla `CHAT_PARTICIPANTE`, y es lo correcto.** Los dos extremos de un chat se deducen del
+match, son siempre exactamente dos y no cambian nunca. Una tabla de participantes sabría representar
+cero, uno o siete, y admitiría altas y bajas: expresaría estados que este dominio no admite, y
+haría falta defenderla con restricciones adicionales para volver a prohibir lo que hoy es imposible
+por construcción. Además duplicaría un dato que ya está en el match. Lo resuelve
+`ChatService.exigirParticipante`, único punto de entrada al chat, cubierto por las pruebas del
+bloque 5.
+
+### Fuera de alcance, pendientes
+
+| Pendiente | Bloque |
+|---|---|
+| `VALORACION`: unicidad `(usuario_id, protectora_id)` y `PROTECTORA.valoracion_media`, hoy derivada y sin mantener | 9, con `ValoracionService` |
+| Borrado / anonimización de usuario (RF-19): nueve claves ajenas apuntan a `USUARIO` y ninguna dice qué hacer al borrarlo | 10 |
+| El día de la cuota está fijado a `Europe/Madrid` (§6): correcto para la península, no para Canarias. Contarla por zona del cliente exige que la envíe y guardarla junto al contador | RF-24 |
+| `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
+| Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |

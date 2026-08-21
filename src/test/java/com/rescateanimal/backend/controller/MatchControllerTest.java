@@ -26,6 +26,7 @@ import org.springframework.security.test.context.TestSecurityContextHolder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -235,7 +236,7 @@ class MatchControllerTest {
                 .tipoPublicacion(TipoPublicacion.AVISTAMIENTO)
                 .interesado(interesado)
                 .chatId(chatId)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 }

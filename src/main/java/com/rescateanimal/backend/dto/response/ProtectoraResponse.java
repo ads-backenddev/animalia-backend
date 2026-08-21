@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Vista de una protectora. Tras el registro se devuelve con estado PENDIENTE,
@@ -25,7 +25,7 @@ public class ProtectoraResponse {
     private String zonaGeografica;
     private EstadoProtectora estado;
     private BigDecimal valoracionMedia;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     /** Datos de la cuenta de acceso asociada. */
     private UsuarioResponse usuario;

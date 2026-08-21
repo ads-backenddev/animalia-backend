@@ -11,8 +11,6 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 import java.security.Principal;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.Collection;
 import java.util.List;
 
@@ -33,7 +31,7 @@ public class UsuarioPrincipal implements UserDetails {
     private final boolean activo;
 
     /** Corte de validez de los tokens; nulo si nunca se cambió la contraseña. */
-    private final LocalDateTime passwordChangedAt;
+    private final Instant passwordChangedAt;
 
     public static UsuarioPrincipal de(Usuario usuario) {
         return new UsuarioPrincipal(
@@ -74,13 +72,18 @@ public class UsuarioPrincipal implements UserDetails {
      * JWT solo tiene esa granularidad: un token emitido en el mismo segundo del
      * cambio se considera válido, para no invalidar por redondeo el token que la
      * propia operación acaba de generar.
+     *
+     * Los dos lados son ya instantes. Antes había que convertir passwordChangedAt
+     * suponiendo que la hora guardada era de la zona de la máquina, y esa
+     * suposición era falsa en cuanto la API cambiaba de entorno: un despliegue en
+     * UTC leía el corte dos horas antes de lo que fue, dando por buenos durante
+     * ese rato tokens que la víctima de un robo de contraseña acababa de anular.
      */
     public boolean tokenEmitidoSigueVigente(Instant emitidoEn) {
         if (passwordChangedAt == null || emitidoEn == null) {
             return true;
         }
-        Instant corte = passwordChangedAt.atZone(ZoneId.systemDefault()).toInstant();
-        return !emitidoEn.isBefore(corte.minusSeconds(1));
+        return !emitidoEn.isBefore(passwordChangedAt.minusSeconds(1));
     }
 
     /**

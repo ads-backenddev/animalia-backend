@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Un animal del catálogo de adopción (RF-07, RF-22).
@@ -30,11 +30,11 @@ public class AnimalAdopcionResponse {
     private String fotoUrl;
     private String zonaGeografica;
 
-    /** DISPONIBLE o ADOPTADO (RF-20). */
+    /** DISPONIBLE, ADOPTADO (RF-20) o RETIRADO. El catálogo solo lista los primeros. */
     private String estado;
 
     private Long protectoraId;
     private String protectoraNombre;
 
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

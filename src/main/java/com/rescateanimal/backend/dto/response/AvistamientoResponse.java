@@ -5,7 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /** Vista completa de un avistamiento (RF-21). */
 @Data
@@ -19,6 +19,6 @@ public class AvistamientoResponse {
     private String descripcion;
     private String fotoUrl;
     private UbicacionResponse ubicacion;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
     private AutorResponse autor;
 }

@@ -5,7 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Un mensaje del chat (RF-12).
@@ -32,5 +32,5 @@ public class MensajeResponse {
 
     private String contenido;
     private Boolean leido;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

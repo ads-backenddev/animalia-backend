@@ -29,8 +29,8 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -255,7 +255,7 @@ class AlertaMapaTiempoRealTest {
                   "radioBusqueda": 1000
                 }
                 """.formatted(especie,
-                LocalDateTime.now().minusHours(1).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                Instant.now().minus(1, ChronoUnit.HOURS),
                 latitud, longitud);
     }
 

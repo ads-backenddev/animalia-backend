@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Alerta reducida a lo que necesita pintar un marcador en el mapa (RF-04).
@@ -25,6 +25,6 @@ public class AlertaMapaResponse {
     private String especie;
     private String fotoUrl;
     private UbicacionResponse ubicacion;
-    private LocalDateTime fechaAvistamiento;
+    private Instant fechaAvistamiento;
     private EstadoAlerta estado;
 }

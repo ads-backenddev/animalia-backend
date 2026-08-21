@@ -27,7 +27,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.test.context.TestSecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -294,7 +294,7 @@ class ChatControllerTest {
                 .otroParticipante(otroParticipante())
                 .ultimoMensaje(mensaje())
                 .noLeidos(noLeidos)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 
@@ -310,7 +310,7 @@ class ChatControllerTest {
                 .alertaEspecie("PERRO")
                 .alertaFotoUrl("https://cdn.test/alerta.jpg")
                 .alertaEstado("ACTIVA")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 
@@ -334,7 +334,7 @@ class ChatControllerTest {
                 .emisor(otroParticipante())
                 .contenido("¿Sigue por la zona?")
                 .leido(false)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 

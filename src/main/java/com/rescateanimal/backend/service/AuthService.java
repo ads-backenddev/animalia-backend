@@ -27,7 +27,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -144,7 +144,7 @@ public class AuthService {
         return LoginResponse.builder()
                 .token(token.token())
                 .tipo("Bearer")
-                .expiraEn(jwtService.expiracionEnUtc(token.expiraEn()))
+                .expiraEn(token.expiraEn())
                 .usuario(aUsuarioResponse(usuario))
                 .build();
     }
@@ -220,7 +220,7 @@ public class AuthService {
         usuario.setPasswordHash(passwordEncoder.encode(peticion.getNuevaPassword()));
         // Invalida de golpe todos los tokens de acceso ya emitidos: si la cuenta
         // estaba comprometida, el atacante pierde el acceso al instante (RF-17).
-        usuario.setPasswordChangedAt(LocalDateTime.now());
+        usuario.setPasswordChangedAt(Instant.now());
         usuarioRepository.save(usuario);
 
         tokenRevocadoService.revocar(jti, jwtService.getExpiracion(claims));

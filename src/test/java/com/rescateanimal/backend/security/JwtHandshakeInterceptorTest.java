@@ -24,7 +24,6 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -148,7 +147,7 @@ class JwtHandshakeInterceptorTest {
             conTokenValido();
             when(jwtService.getEmitidoEn(claims)).thenReturn(Instant.now().minusSeconds(3600));
             when(userDetailsService.loadUserByUsername(EMAIL))
-                    .thenReturn(principal(true, LocalDateTime.now()));
+                    .thenReturn(principal(true, Instant.now()));
 
             assertThat(ejecutar()).isFalse();
             assertThat(respuestaServlet.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
@@ -207,7 +206,7 @@ class JwtHandshakeInterceptorTest {
         return interceptor.beforeHandshake(peticion, respuesta, null, atributos);
     }
 
-    private static UsuarioPrincipal principal(boolean activo, LocalDateTime passwordChangedAt) {
+    private static UsuarioPrincipal principal(boolean activo, Instant passwordChangedAt) {
         return new UsuarioPrincipal(1L, EMAIL, "$2a$10$hash", Rol.CIUDADANO, activo, passwordChangedAt);
     }
 }

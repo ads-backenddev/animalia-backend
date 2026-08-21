@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Detalle de un animal en adopción, con los datos de la protectora que lo
@@ -36,7 +36,7 @@ public class AnimalAdopcionDetalleResponse {
     private String fotoUrl;
     private String zonaGeografica;
     private String estado;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     private Long protectoraId;
     private String protectoraNombre;

@@ -30,8 +30,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.TestSecurityContextHolder;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -141,7 +141,7 @@ class AlertaControllerTest {
         void sinEspecieDevuelve400() throws Exception {
             mockMvc.perform(post("/api/alertas")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(cuerpo(null, LocalDateTime.now().minusHours(2), "40.4168", "-3.7038")))
+                            .content(cuerpo(null, Instant.now().minus(2, ChronoUnit.HOURS), "40.4168", "-3.7038")))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.codigo").value("VALIDACION"))
                     .andExpect(jsonPath("$.errores.especie").exists());
@@ -155,8 +155,7 @@ class AlertaControllerTest {
                             .content("""
                                     {"especie":"perro","fechaAvistamiento":"%s",
                                      "ubicacion":{"latitud":40.4168,"longitud":-3.7038}}
-                                    """.formatted(LocalDateTime.now().minusHours(2)
-                                    .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME))))
+                                    """.formatted(Instant.now().minus(2, ChronoUnit.HOURS))))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errores.descripcion").exists());
         }
@@ -166,7 +165,7 @@ class AlertaControllerTest {
         void latitudFueraDeRangoDevuelve400() throws Exception {
             mockMvc.perform(post("/api/alertas")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(cuerpo("perro", LocalDateTime.now().minusHours(2), "120.0", "-3.7038")))
+                            .content(cuerpo("perro", Instant.now().minus(2, ChronoUnit.HOURS), "120.0", "-3.7038")))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.codigo").value("VALIDACION"))
                     .andExpect(jsonPath("$.errores['ubicacion.latitud']").exists());
@@ -177,7 +176,7 @@ class AlertaControllerTest {
         void fechaFuturaDevuelve400() throws Exception {
             mockMvc.perform(post("/api/alertas")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(cuerpo("perro", LocalDateTime.now().plusDays(1), "40.4168", "-3.7038")))
+                            .content(cuerpo("perro", Instant.now().plus(1, ChronoUnit.DAYS), "40.4168", "-3.7038")))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.errores.fechaAvistamiento").exists());
         }
@@ -222,7 +221,7 @@ class AlertaControllerTest {
                             .id(42L)
                             .especie("perro")
                             .ubicacion(new UbicacionResponse(40.4168, -3.7038))
-                            .fechaAvistamiento(LocalDateTime.now().minusHours(2))
+                            .fechaAvistamiento(Instant.now().minus(2, ChronoUnit.HOURS))
                             .estado(EstadoAlerta.ACTIVA)
                             .build()));
 
@@ -328,14 +327,18 @@ class AlertaControllerTest {
     }
 
     private static String cuerpoValido() {
-        return cuerpo("perro", LocalDateTime.now().minusHours(2), "40.4168", "-3.7038");
+        return cuerpo("perro", Instant.now().minus(2, ChronoUnit.HOURS), "40.4168", "-3.7038");
     }
 
     /**
      * La fecha se calcula respecto al momento de la prueba, no se fija literal:
      * @PastOrPresent haría fallar la prueba con el paso del tiempo.
+     *
+     * Se interpola el Instant tal cual: su toString() ya es el ISO-8601 con "Z"
+     * que espera Jackson, que es también el formato en el que el cliente debe
+     * mandar la fecha desde que fechaAvistamiento dejó de ser hora de pared.
      */
-    private static String cuerpo(String especie, LocalDateTime fecha, String latitud, String longitud) {
+    private static String cuerpo(String especie, Instant fecha, String latitud, String longitud) {
         return """
                 {
                   "descripcion": "Se escapó por la puerta del parque",
@@ -346,7 +349,7 @@ class AlertaControllerTest {
                 }
                 """.formatted(
                 especie == null ? "null" : "\"" + especie + "\"",
-                fecha.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+                fecha,
                 latitud, longitud);
     }
 
@@ -355,11 +358,11 @@ class AlertaControllerTest {
                 .id(42L)
                 .descripcion("Se escapó por la puerta del parque")
                 .especie("perro")
-                .fechaAvistamiento(LocalDateTime.now().minusHours(2))
+                .fechaAvistamiento(Instant.now().minus(2, ChronoUnit.HOURS))
                 .ubicacion(new UbicacionResponse(40.4168, -3.7038))
                 .radioBusqueda(1000)
                 .estado(EstadoAlerta.ACTIVA)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
                 .build();
     }

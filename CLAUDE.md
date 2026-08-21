@@ -9,6 +9,7 @@ con protectoras verificadas.
 ## Stack
 - Java 17 + Spring Boot 4.0.7 (Maven)
 - PostgreSQL + PostGIS (Hibernate Spatial para tipos Point)
+- Flyway para versionar el esquema (ddl-auto=validate, no update)
 - Spring Security + JWT (stateless, sin sesiones)
 - WebSockets con STOMP (mapa en tiempo real, chat, notificaciones)
 - Thymeleaf + Bootstrap 5 (panel web de protectora/administrador)
@@ -33,6 +34,24 @@ Un repository NUNCA contiene lógica de negocio.
   comprobación manual del rol dentro del método.
 - Los campos de geolocalización usan org.locationtech.jts.geom.Point
   (Hibernate Spatial), nunca latitud/longitud como campos separados.
+
+## Base de datos — el esquema lo manda Flyway
+El esquema vive en migraciones (src/main/resources/db/migration), no lo
+genera Hibernate: ddl-auto está en `validate`.
+
+Regla dura: cualquier cambio en una entidad JPA —campo nuevo, cambio de
+tipo, índice, unicidad, valor nuevo en un enum con CHECK— necesita su
+migración `V<n>__<descripcion>.sql` en el mismo commit. Sin ella la
+aplicación no arranca: `validate` compara entidades contra tablas y
+falla. Es a propósito; antes `update` ignoraba en silencio los cambios
+de tipo, de CHECK y de unicidad, y el código y la base de datos acababan
+describiendo cosas distintas.
+
+- Nunca editar una migración ya aplicada: Flyway guarda su checksum y el
+  arranque falla. Todo cambio va en una migración nueva.
+- `validate` NO comprueba índices ni unicidad, solo columnas, tipos y
+  nulabilidad. Un @Index que solo esté en la anotación de la entidad no
+  existe en la base de datos: hay que crearlo también en la migración.
 
 ## Git y commits
 - GitFlow: main / develop / feature/<nombre> / release/ / hotfix/

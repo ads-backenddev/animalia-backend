@@ -73,6 +73,7 @@ class CatalogoAdopcionQueryTest {
         crear("Sol", "Gato", Tamanyo.PEQUENO, "Sevilla", EstadoAnimal.DISPONIBLE);
         crear("Coco", "perro", Tamanyo.PEQUENO, "MADRID centro", EstadoAnimal.DISPONIBLE);
         crear("Rocky", "Perro", Tamanyo.PEQUENO, "Madrid", EstadoAnimal.ADOPTADO);
+        crear("Tina", "Perro", Tamanyo.PEQUENO, "Madrid", EstadoAnimal.RETIRADO);
     }
 
     @AfterEach
@@ -102,6 +103,20 @@ class CatalogoAdopcionQueryTest {
     }
 
     @Test
+    @DisplayName("Nunca devuelve los RETIRADO, aunque encajen con los filtros")
+    void elRetiradoNuncaSale() {
+        // Tina encaja en los tres filtros y solo la deja fuera el estado.
+        // Importa comprobarlo contra PostgreSQL y no solo en el service: el
+        // CHECK de la columna tiene que admitir RETIRADO (migración V3) para que
+        // la fila siquiera pueda existir, y el filtro del catálogo compara con
+        // DISPONIBLE en vez de excluir ADOPTADO, que es lo que hace que un
+        // estado nuevo nazca fuera del catálogo sin tocar la consulta.
+        assertThat(mios(buscar("Perro", Tamanyo.PEQUENO, "Madrid")))
+                .doesNotContain("Tina");
+        assertThat(mios(buscar(null, null, null))).doesNotContain("Tina");
+    }
+
+    @Test
     @DisplayName("Los tres filtros combinados se intersecan de verdad")
     void losTresFiltrosSeIntersecan() {
         Page<AnimalAdopcion> pagina = buscar("Perro", Tamanyo.PEQUENO, "Madrid");
@@ -111,7 +126,8 @@ class CatalogoAdopcionQueryTest {
         //       no distingue mayúsculas y la zona busca por contenido.
         // Nube: perro en Madrid pero GRANDE -> fuera por tamaño.
         // Sol:  pequeño pero gato y en Sevilla -> fuera por especie y zona.
-        // Rocky: encaja en todo menos en el estado -> fuera por ADOPTADO.
+        // Rocky y Tina: encajan en todo menos en el estado -> fuera por
+        //       ADOPTADO y por RETIRADO.
         assertThat(mios(pagina)).containsExactlyInAnyOrder("Luna", "Coco");
     }
 

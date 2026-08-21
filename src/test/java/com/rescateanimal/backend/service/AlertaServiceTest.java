@@ -28,7 +28,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
 
@@ -141,18 +142,18 @@ class AlertaServiceTest {
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
-            LocalDateTime antesDeLlamar = LocalDateTime.now().minusHours(VENTANA_HORAS);
+            Instant antesDeLlamar = Instant.now().minus(VENTANA_HORAS, ChronoUnit.HOURS);
 
             alertaService.publicar(peticion(), 1L);
 
             ArgumentCaptor<Double> radio = ArgumentCaptor.forClass(Double.class);
-            ArgumentCaptor<LocalDateTime> desde = ArgumentCaptor.forClass(LocalDateTime.class);
+            ArgumentCaptor<Instant> desde = ArgumentCaptor.forClass(Instant.class);
             verify(alertaRepository).buscarSimilar(eq("perro"), eq(LAT), eq(LNG),
                     radio.capture(), desde.capture());
 
             assertThat(radio.getValue()).isEqualTo(500.0);
-            assertThat(desde.getValue()).isBetween(antesDeLlamar.minusMinutes(1),
-                    antesDeLlamar.plusMinutes(1));
+            assertThat(desde.getValue()).isBetween(antesDeLlamar.minus(1, ChronoUnit.MINUTES),
+                    antesDeLlamar.plus(1, ChronoUnit.MINUTES));
         }
     }
 
@@ -335,7 +336,7 @@ class AlertaServiceTest {
 
     private CrearAlertaRequest peticion() {
         return new CrearAlertaRequest("Perro pequeño marrón", null, "perro",
-                LocalDateTime.now().minusHours(1), new UbicacionRequest(LAT, LNG), 1000);
+                Instant.now().minus(1, ChronoUnit.HOURS), new UbicacionRequest(LAT, LNG), 1000);
     }
 
     private Usuario autor() {
@@ -355,7 +356,7 @@ class AlertaServiceTest {
         alerta.setUsuario(autor());
         alerta.setEspecie("perro");
         alerta.setEstado(EstadoAlerta.ACTIVA);
-        alerta.setFechaAvistamiento(LocalDateTime.now().minusHours(2));
+        alerta.setFechaAvistamiento(Instant.now().minus(2, ChronoUnit.HOURS));
         GeometryFactory factory = new GeometryFactory(new PrecisionModel(), 4326);
         alerta.setUltimaUbicacion(factory.createPoint(new Coordinate(LNG, LAT)));
         return alerta;
