@@ -243,11 +243,24 @@ public class AnimalAdopcionService {
      *
      * NO comprueba permisos, a propósito: recibe una protectora ya resuelta y ya
      * verificada por ProtectoraPanelService, que es el único punto de entrada al
-     * panel. Nadie más debería llamarlo con un id que no venga de ahí.
+     * panel.
+     *
+     * Y por eso NO es público: es visible solo en este paquete, de modo que
+     * ningún controller puede llamarlo: no compilaría. Enseña el histórico
+     * completo de una protectora a partir de un id sin validar nada, así que
+     * dejarlo público confiaría en que nadie lo llame desde fuera, y eso es una
+     * confianza que puede romper cualquier cambio futuro sin que nada avise.
+     * Restringir la visibilidad convierte esa confianza en algo que impone el
+     * compilador.
+     *
+     * La transacción la abre siempre quien llama —ProtectoraPanelService.animales
+     * es @Transactional(readOnly = true)—, así que la anotación de aquí solo
+     * documenta la intención y no depende de que el proxy alcance un método no
+     * público.
      */
     @Transactional(readOnly = true)
-    public PaginaResponse<AnimalAdopcionResponse> listarDeLaProtectora(Long protectoraId,
-                                                                       Pageable paginacion) {
+    PaginaResponse<AnimalAdopcionResponse> listarDeLaProtectora(Long protectoraId,
+                                                                Pageable paginacion) {
 
         PageRequest peticion = PageRequest.of(
                 Math.max(0, paginacion.getPageNumber()),

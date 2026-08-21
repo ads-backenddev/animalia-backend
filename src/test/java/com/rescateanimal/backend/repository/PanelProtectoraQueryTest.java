@@ -1,5 +1,8 @@
 package com.rescateanimal.backend.repository;
 
+import com.rescateanimal.backend.dto.response.AnimalAdopcionResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
+import com.rescateanimal.backend.exception.CuentaNoAutorizadaException;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Protectora;
@@ -27,6 +30,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Las consultas del panel de la protectora contra PostgreSQL de verdad (RF-10).
@@ -57,6 +61,8 @@ class PanelProtectoraQueryTest {
     private ProtectoraRepository protectoraRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
+    @Autowired
+    private com.rescateanimal.backend.service.ProtectoraPanelService protectoraPanelService;
 
     private Protectora protectora;
     private Protectora otraProtectora;
@@ -111,6 +117,42 @@ class PanelProtectoraQueryTest {
 
         // El público solo el DISPONIBLE de esta protectora.
         assertThat(nombresDelCatalogoPublico()).contains("Luna").doesNotContain("Rocky", "Tina");
+    }
+
+    @Test
+    @DisplayName("De punta a punta, el service del panel devuelve también los RETIRADO")
+    void elServiceDelPanelDevuelveLosRetirados() {
+        // Recorre ProtectoraPanelService -> AnimalAdopcionService con los beans
+        // reales de Spring, no con simulaciones. Es el único sitio donde se
+        // ejercita esa llamada entre servicios: comprueba a la vez que el
+        // método sigue siendo alcanzable a través del proxy y que la política
+        // del panel —los tres estados— llega intacta hasta el DTO.
+        PaginaResponse<AnimalAdopcionResponse> pagina = protectoraPanelService.animales(
+                protectora.getUsuario().getId(), PageRequest.of(0, 50));
+
+        assertThat(pagina.getContent()).extracting(AnimalAdopcionResponse::getNombre)
+                .containsExactlyInAnyOrder("Luna", "Rocky", "Tina");
+        assertThat(pagina.getContent()).extracting(AnimalAdopcionResponse::getEstado)
+                .contains("RETIRADO");
+    }
+
+    @Test
+    @DisplayName("De punta a punta, una protectora PENDIENTE no abre el panel")
+    void elServiceDelPanelCierraALaPendiente() {
+        Protectora pendiente = crearProtectora("Pendiente");
+        pendiente.setEstado(EstadoProtectora.PENDIENTE);
+        protectoraRepository.save(pendiente);
+
+        try {
+            assertThatThrownBy(() -> protectoraPanelService.resumen(
+                    pendiente.getUsuario().getId()))
+                    .isInstanceOf(CuentaNoAutorizadaException.class)
+                    .satisfies(e -> assertThat(((CuentaNoAutorizadaException) e).getCodigo())
+                            .isEqualTo("PROTECTORA_PENDIENTE"));
+        } finally {
+            protectoraRepository.delete(pendiente);
+            usuarioRepository.delete(pendiente.getUsuario());
+        }
     }
 
     @Test
