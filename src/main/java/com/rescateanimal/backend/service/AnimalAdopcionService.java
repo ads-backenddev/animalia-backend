@@ -226,6 +226,54 @@ public class AnimalAdopcionService {
     }
 
     /**
+     * Todos los animales de una protectora, en cualquier estado (RF-10).
+     *
+     * ES EL MISMO CATÁLOGO, CON OTRA POLÍTICA, y por eso vive aquí y no en
+     * ProtectoraPanelService: la forma de la consulta, el tope de página, el
+     * orden y la conversión a DTO son los del catálogo público, y duplicarlos en
+     * el panel habría creado una segunda copia que se separaría en cuanto
+     * cualquiera de las dos cambiara. Lo único distinto es qué se enseña, que es
+     * precisamente lo que decide este método.
+     *
+     * Y lo que enseña es TODO: DISPONIBLE, ADOPTADO y RETIRADO. El catálogo
+     * público solo lista los DISPONIBLE porque es un escaparate; el panel es el
+     * histórico de gestión de la protectora, donde un animal retirado sigue
+     * siendo suyo y tiene que poder verlo. Es la diferencia deliberada entre los
+     * dos listados.
+     *
+     * NO comprueba permisos, a propósito: recibe una protectora ya resuelta y ya
+     * verificada por ProtectoraPanelService, que es el único punto de entrada al
+     * panel.
+     *
+     * Y por eso NO es público: es visible solo en este paquete, de modo que
+     * ningún controller puede llamarlo: no compilaría. Enseña el histórico
+     * completo de una protectora a partir de un id sin validar nada, así que
+     * dejarlo público confiaría en que nadie lo llame desde fuera, y eso es una
+     * confianza que puede romper cualquier cambio futuro sin que nada avise.
+     * Restringir la visibilidad convierte esa confianza en algo que impone el
+     * compilador.
+     *
+     * La transacción la abre siempre quien llama —ProtectoraPanelService.animales
+     * es @Transactional(readOnly = true)—, así que la anotación de aquí solo
+     * documenta la intención y no depende de que el proxy alcance un método no
+     * público.
+     */
+    @Transactional(readOnly = true)
+    PaginaResponse<AnimalAdopcionResponse> listarDeLaProtectora(Long protectoraId,
+                                                                Pageable paginacion) {
+
+        PageRequest peticion = PageRequest.of(
+                Math.max(0, paginacion.getPageNumber()),
+                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+
+        Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(
+                CatalogoAdopcionSpec.deLaProtectora(protectoraId), peticion);
+
+        return PaginaResponse.de(pagina, AnimalAdopcionService::aResponse);
+    }
+
+    /**
      * Tarjetas para el swipe de adopción (RF-09, RF-15).
      *
      * Es el catálogo menos lo que este usuario no debe volver a ver: sus propios

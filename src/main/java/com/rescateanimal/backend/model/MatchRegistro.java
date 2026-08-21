@@ -55,14 +55,19 @@ import java.time.Instant;
  *   repositorios y la generación de ids.
  *
  * No se ha hecho ninguna de las dos porque no hay ningún requisito que lo exija
- * y el riesgo no está compensado: 323 pruebas dependen de la forma actual de
+ * y el riesgo no está compensado: la suite entera depende de la forma actual de
  * AVISTAMIENTO y ANIMAL_ADOPCION, y la debilidad está contenida por dos cosas
  * que sí existen. La primera es que la referencia va SIEMPRE emparejada con el
- * tipo, sin excepción, en los tres sitios donde se lee —ChatRepository,
- * CatalogoAdopcionSpec y MatchService.resolverAutor—; la segunda es que
- * resolverAutor es un switch exhaustivo sobre el enum, sin rama por defecto, de
- * modo que añadir un TipoPublicacion nuevo rompe la compilación en lugar de
- * colarse en tiempo de ejecución.
+ * tipo, sin excepción, en los cuatro sitios donde se lee —ChatRepository,
+ * CatalogoAdopcionSpec, MatchService.resolverAutor y las consultas del panel de
+ * protectora en MatchRegistroRepository—; la segunda es que resolverAutor es un
+ * switch exhaustivo sobre el enum, sin rama por defecto, de modo que añadir un
+ * TipoPublicacion nuevo rompe la compilación en lugar de colarse en tiempo de
+ * ejecución.
+ *
+ * Cada consulta nueva que lea publicacionId hereda esa obligación: emparejarlo
+ * con el tipo. PanelProtectoraQueryTest la comprueba explícitamente para las del
+ * panel, deslizando un avistamiento cuyo id coincide con el de un animal.
  *
  * Lo que hace falta para reabrir esto: un tercer tipo de publicación
  * deslizable, o un incidente real de integridad. Cualquiera de los dos inclina

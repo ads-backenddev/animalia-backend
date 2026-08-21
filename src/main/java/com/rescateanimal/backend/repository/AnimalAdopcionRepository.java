@@ -69,4 +69,30 @@ public interface AnimalAdopcionRepository
             WHERE a.id IN :ids
             """)
     List<AnimalAdopcion> buscarConProtectoraPorIds(@Param("ids") Collection<Long> ids);
+
+    /**
+     * Cuántos animales tiene una protectora en cada estado (RF-10).
+     *
+     * Una sola consulta agregada en vez de tres recuentos o, peor, de traerse el
+     * catálogo entero para contarlo en Java: el resumen del panel no necesita ni
+     * un animal en memoria. Se apoya en idx_animal_protectora, creado en V4.
+     *
+     * Solo devuelve fila para los estados que la protectora tenga; los que no
+     * aparezcan valen cero, y de convertir esa ausencia en un cero se encarga
+     * ProtectoraPanelService.
+     */
+    @Query("""
+            SELECT a.estado AS estado, COUNT(a) AS total
+            FROM AnimalAdopcion a
+            WHERE a.protectora.id = :protectoraId
+            GROUP BY a.estado
+            """)
+    List<ConteoPorEstado> contarPorEstado(@Param("protectoraId") Long protectoraId);
+
+    /** Proyección del recuento agrupado: evita manejar Object[] en el service. */
+    interface ConteoPorEstado {
+        EstadoAnimal getEstado();
+
+        long getTotal();
+    }
 }
