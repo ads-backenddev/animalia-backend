@@ -109,6 +109,24 @@ public final class CatalogoAdopcionSpec {
         });
     }
 
+    /**
+     * Los animales de UNA protectora, en cualquier estado (RF-10).
+     *
+     * Es el catálogo del panel de gestión, y se diferencia del público en las
+     * dos cosas a la vez: acota a una protectora, y NO filtra por estado. Esa
+     * ausencia es el punto: el catálogo de RF-22 solo enseña los DISPONIBLE
+     * porque un animal adoptado no es escaparate, pero su protectora sí tiene
+     * que verlos todos —también los RETIRADO— porque es su histórico de
+     * gestión. Por eso no se reutiliza `de(...)`, que exige un estado.
+     *
+     * Se filtra por el id de la PROTECTORA y no por el de su cuenta de usuario,
+     * a diferencia de paraFeed: quien llama ya la ha resuelto para comprobar que
+     * está ACTIVA, así que este salto de más sobraría.
+     */
+    public static Specification<AnimalAdopcion> deLaProtectora(Long protectoraId) {
+        return (raiz, consulta, cb) -> cb.equal(raiz.get("protectora").get("id"), protectoraId);
+    }
+
     /** Un filtro vacío o en blanco es un filtro que no se aplica. */
     private static String normalizar(String filtro) {
         if (filtro == null || filtro.isBlank()) {

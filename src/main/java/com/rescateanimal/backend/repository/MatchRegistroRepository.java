@@ -1,8 +1,11 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.MatchRegistro;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
@@ -27,4 +30,72 @@ public interface MatchRegistroRepository extends JpaRepository<MatchRegistro, Lo
      * listado (RF-08).
      */
     List<MatchRegistro> findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(Long usuarioId);
+
+    /**
+     * Solicitudes de adopción recibidas por una protectora (RF-10): los
+     * ciudadanos que han mostrado interés por alguno de sus animales.
+     *
+     * Es el reverso del listado anterior. Aquel mira los matches DE un usuario;
+     * este los matches SOBRE los animales de una protectora, que no cuelgan de
+     * ella por ninguna asociación: hay que saltar por publicacionId hasta
+     * ANIMAL_ADOPCION y desde ahí a la protectora.
+     *
+     * interesado = true no es un filtro cosmético: los descartes de RF-15
+     * comparten tabla con los matches y contarlos como solicitudes le diría a la
+     * protectora que alguien quiere a un animal al que en realidad dijo que no.
+     *
+     * El EXISTS empareja publicacionId con el tipo, sin excepción, por lo mismo
+     * que ChatRepository y CatalogoAdopcionSpec: publicacion_id es una
+     * referencia polimórfica y el id 7 existe como avistamiento y como animal.
+     * Sin el filtro de tipo, deslizar el avistamiento 7 aparecería aquí como una
+     * solicitud sobre el animal 7, que no tiene nada que ver.
+     *
+     * El usuario viene con JOIN FETCH porque el listado pinta el nombre y la
+     * foto de cada interesado; sin él serían tantas consultas como solicitudes.
+     */
+    @Query("""
+            SELECT m FROM MatchRegistro m
+            JOIN FETCH m.usuario
+            WHERE m.tipoPublicacion = :adopcion
+              AND m.interesado = true
+              AND EXISTS (SELECT 1 FROM AnimalAdopcion a
+                          WHERE a.id = m.publicacionId
+                            AND a.protectora.id = :protectoraId)
+            ORDER BY m.createdAt DESC
+            """)
+    List<MatchRegistro> buscarSolicitudesDeProtectora(@Param("protectoraId") Long protectoraId,
+                                                      @Param("adopcion") TipoPublicacion adopcion);
+
+    /** Cuántas solicitudes ha recibido la protectora en total (RF-10). */
+    @Query("""
+            SELECT COUNT(m) FROM MatchRegistro m
+            WHERE m.tipoPublicacion = :adopcion
+              AND m.interesado = true
+              AND EXISTS (SELECT 1 FROM AnimalAdopcion a
+                          WHERE a.id = m.publicacionId
+                            AND a.protectora.id = :protectoraId)
+            """)
+    long contarSolicitudesDeProtectora(@Param("protectoraId") Long protectoraId,
+                                       @Param("adopcion") TipoPublicacion adopcion);
+
+    /**
+     * Solicitudes que la protectora todavía tiene que atender: las que recaen
+     * sobre un animal que sigue en el estado indicado (DISPONIBLE).
+     *
+     * El estado llega como parámetro y no escrito en la consulta porque cuál es
+     * el estado "pendiente" es una decisión de negocio, y esa vive en
+     * ProtectoraPanelService. Aquí solo se sabe filtrar por él.
+     */
+    @Query("""
+            SELECT COUNT(m) FROM MatchRegistro m
+            WHERE m.tipoPublicacion = :adopcion
+              AND m.interesado = true
+              AND EXISTS (SELECT 1 FROM AnimalAdopcion a
+                          WHERE a.id = m.publicacionId
+                            AND a.protectora.id = :protectoraId
+                            AND a.estado = :estadoPendiente)
+            """)
+    long contarSolicitudesPendientes(@Param("protectoraId") Long protectoraId,
+                                     @Param("adopcion") TipoPublicacion adopcion,
+                                     @Param("estadoPendiente") EstadoAnimal estadoPendiente);
 }
