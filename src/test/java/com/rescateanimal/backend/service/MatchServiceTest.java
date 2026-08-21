@@ -41,6 +41,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +67,14 @@ import static org.mockito.Mockito.when;
 class MatchServiceTest {
 
     private static final int LIMITE_DIARIO = 20;
+
+    /**
+     * El día de la cuota es el de Europe/Madrid, no el de la JVM: hay que
+     * preguntarlo igual que MatchService.ZONA_CUOTA o estas pruebas fallarían
+     * en un entorno UTC durante las dos horas en que allí todavía es ayer.
+     */
+    private static final ZoneId ZONA_CUOTA = ZoneId.of("Europe/Madrid");
+
     private static final Long ID_USUARIO = 7L;
     private static final Long ID_AUTOR_AVISTAMIENTO = 8L;
     private static final Long ID_DUENYO_ALERTA = 9L;
@@ -167,9 +176,10 @@ class MatchServiceTest {
         void elMatchConsumeCuota() {
             matchService.deslizar(peticion(true), ID_USUARIO);
 
-            verify(limiteMatchDiarioRepository).crearContadorSiNoExiste(ID_USUARIO, LocalDate.now());
             verify(limiteMatchDiarioRepository)
-                    .incrementarSiHayCupo(ID_USUARIO, LocalDate.now(), LIMITE_DIARIO);
+                    .crearContadorSiNoExiste(ID_USUARIO, LocalDate.now(ZONA_CUOTA));
+            verify(limiteMatchDiarioRepository)
+                    .incrementarSiHayCupo(ID_USUARIO, LocalDate.now(ZONA_CUOTA), LIMITE_DIARIO);
         }
     }
 
@@ -223,7 +233,7 @@ class MatchServiceTest {
                         LimiteMatchesAlcanzadoException ex = (LimiteMatchesAlcanzadoException) e;
                         assertThat(ex.getLimiteDiario()).isEqualTo(LIMITE_DIARIO);
                         assertThat(ex.getReiniciaEn())
-                                .isEqualTo(LocalDate.now().plusDays(1).atStartOfDay());
+                                .isEqualTo(LocalDate.now(ZONA_CUOTA).plusDays(1).atStartOfDay());
                         assertThat(ex.getMessage()).contains("mañana");
                     });
         }
@@ -257,7 +267,8 @@ class MatchServiceTest {
         @Test
         @DisplayName("Sin fila del día, el consumo se cuenta como cero")
         void sinFilaDelDiaElConsumoEsCero() {
-            when(limiteMatchDiarioRepository.findByUsuarioIdAndFecha(ID_USUARIO, LocalDate.now()))
+            when(limiteMatchDiarioRepository
+                    .findByUsuarioIdAndFecha(ID_USUARIO, LocalDate.now(ZONA_CUOTA)))
                     .thenReturn(Optional.empty());
 
             LimiteMatchResponse limite = matchService.consultarLimite(ID_USUARIO);
@@ -265,7 +276,8 @@ class MatchServiceTest {
             assertThat(limite.getConsumidos()).isZero();
             assertThat(limite.getRestantes()).isEqualTo(LIMITE_DIARIO);
             assertThat(limite.getLimiteDiario()).isEqualTo(LIMITE_DIARIO);
-            assertThat(limite.getReiniciaEn()).isEqualTo(LocalDate.now().plusDays(1).atStartOfDay());
+            assertThat(limite.getReiniciaEn())
+                    .isEqualTo(LocalDate.now(ZONA_CUOTA).plusDays(1).atStartOfDay());
         }
 
         @Test
@@ -273,7 +285,8 @@ class MatchServiceTest {
         void restantesNuncaEsNegativo() {
             LimiteMatchDiario fila = new LimiteMatchDiario();
             fila.setContador(LIMITE_DIARIO + 5);
-            when(limiteMatchDiarioRepository.findByUsuarioIdAndFecha(ID_USUARIO, LocalDate.now()))
+            when(limiteMatchDiarioRepository
+                    .findByUsuarioIdAndFecha(ID_USUARIO, LocalDate.now(ZONA_CUOTA)))
                     .thenReturn(Optional.of(fila));
 
             assertThat(matchService.consultarLimite(ID_USUARIO).getRestantes()).isZero();

@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -40,6 +41,13 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class MatchService {
+
+    /**
+     * Zona con la que se decide qué día natural es "hoy" para la cuota diaria
+     * (RF-24). Fijada a propósito y no heredada de la JVM; el porqué y sus
+     * límites están en el javadoc de consumirCuotaDiaria.
+     */
+    private static final ZoneId ZONA_CUOTA = ZoneId.of("Europe/Madrid");
 
     private final MatchRegistroRepository matchRegistroRepository;
     private final LimiteMatchDiarioRepository limiteMatchDiarioRepository;
@@ -234,22 +242,26 @@ public class MatchService {
      * el usuario acabaría con un match de más. El INSERT crea la fila del día si
      * es el primer match, y el UPDATE solo cuenta si aún queda cupo.
      *
-     * PENDIENTE, Y CONVIENE SABERLO. "Hoy" es el día natural de la zona horaria
-     * de la JVM, que es lo único que hay: la zona no se fija en ninguna parte.
-     * Es el mismo patrón que causaba el desfase de la ventana de RF-25 antes de
-     * pasarla a Instant, aunque aquí las consecuencias son otras. El contador es
-     * de calendario y no de instante —la cuota se cuenta por día natural, ver
-     * LimiteMatchResponse.reiniciaEn—, así que no se arregla migrando el tipo:
-     * hay que decidir de quién es el día. Con la API en Railway (UTC), a un
-     * usuario en la península la cuota se le reinicia a la 01:00 o a las 02:00
-     * de la madrugada en vez de a medianoche, y a uno en Canarias a medianoche
-     * justa. Fijarlo a Europe/Madrid arregla lo primero y estropea lo segundo;
-     * hacerlo con la zona del cliente exige que el cliente la mande. Es una
-     * decisión de RF-24 y se deja tomada a conciencia fuera del bloque de
-     * mantenimiento del esquema, que solo se ocupó de los instantes.
+     * "HOY" ES EL DÍA NATURAL EN EUROPE/MADRID, fijado explícitamente en
+     * ZONA_CUOTA. El contador es de calendario y no de instante —la cuota se
+     * cuenta por día natural, LIMITE_MATCH_DIARIO.fecha es un DATE, ver
+     * LimiteMatchResponse.reiniciaEn—, así que no se arreglaba migrando el tipo
+     * como se hizo con la ventana de RF-25: había que decidir de quién es el
+     * día. Sin fijarlo, el día era el de la zona de la JVM y la cuota se
+     * reiniciaba a una hora distinta en cada entorno: en Railway (UTC) a la
+     * 01:00 o a las 02:00 de la madrugada peninsular según la época del año, y
+     * en el portátil de desarrollo a medianoche.
+     *
+     * SIMPLIFICACIÓN CONSCIENTE, Y NO ES CORRECTA PARA CANARIAS. Vale para
+     * España peninsular, que es el alcance geográfico del proyecto. Un usuario
+     * en Canarias va una hora por detrás y ve su cuota reiniciarse a las 23:00
+     * de su noche, no a medianoche. Resolverlo de verdad exige que el cliente
+     * envíe su zona y guardarla junto al contador —o contar la cuota por
+     * instante en vez de por día—, y eso es una decisión de producto de RF-24
+     * que no se ha tomado. Queda anotada en docs/api-rest.md, §16.
      */
     private void consumirCuotaDiaria(Usuario usuario) {
-        LocalDate hoy = LocalDate.now();
+        LocalDate hoy = LocalDate.now(ZONA_CUOTA);
 
         limiteMatchDiarioRepository.crearContadorSiNoExiste(usuario.getId(), hoy);
 
@@ -291,7 +303,7 @@ public class MatchService {
     /** Estado del límite diario, para que el cliente lo muestre antes de agotarlo (RF-24). */
     @Transactional(readOnly = true)
     public LimiteMatchResponse consultarLimite(Long usuarioId) {
-        LocalDate hoy = LocalDate.now();
+        LocalDate hoy = LocalDate.now(ZONA_CUOTA);
         int consumidos = limiteMatchDiarioRepository.findByUsuarioIdAndFecha(usuarioId, hoy)
                 .map(LimiteMatchDiario::getContador)
                 .orElse(0);
@@ -312,6 +324,7 @@ public class MatchService {
      * Medianoche del día siguiente: el contador no se reinicia con una tarea
      * programada, simplemente al cambiar la fecha se empieza una fila nueva.
      *
+     * Medianoche de ZONA_CUOTA, porque "hoy" ya viene decidido con esa zona.
      * Devuelve LocalDateTime y no Instant, a diferencia del resto de marcas de
      * tiempo de la API: es una fecha de calendario derivada de LocalDate, no un
      * instante. Ver la nota de LimiteMatchResponse.reiniciaEn.

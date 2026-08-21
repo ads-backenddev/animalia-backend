@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -59,6 +60,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MatchFlujoCompletoTest {
 
     private static final int LIMITE = 2;
+
+    /** El día de la cuota es el de Europe/Madrid; ver MatchService.ZONA_CUOTA. */
+    private static final ZoneId ZONA_CUOTA = ZoneId.of("Europe/Madrid");
+
     private static final Duration ESPERA = Duration.ofSeconds(10);
 
     @LocalServerPort
@@ -195,7 +200,7 @@ class MatchFlujoCompletoTest {
         assertThat(JsonPath.<String>read(pasado.body(), "$.mensaje")).contains("mañana");
         assertThat(numero(pasado.body(), "$.limiteDiario")).isEqualTo(LIMITE);
         assertThat(JsonPath.<String>read(pasado.body(), "$.reiniciaEn"))
-                .startsWith(LocalDate.now().plusDays(1).toString());
+                .startsWith(LocalDate.now(ZONA_CUOTA).plusDays(1).toString());
 
         // El rechazo no dejó rastro: ni registro ni cuota de más.
         assertThat(matchRegistroRepository

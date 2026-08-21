@@ -27,10 +27,12 @@ public class LimiteMatchResponse {
      * Es el único campo de fecha-hora de la API que NO es un Instant, y es
      * deliberado. La cuota de RF-24 se cuenta por día natural
      * —LIMITE_MATCH_DIARIO.fecha es un DATE— y "mañana a las 00:00" es una
-     * fecha de calendario, no un punto en la línea del tiempo. Convertirlo
-     * obliga a decidir de quién es el día, si del servidor o del usuario, que
-     * puede estar en Canarias; esa decisión pertenece a RF-24 y no a una
-     * migración de tipos.
+     * fecha de calendario, no un punto en la línea del tiempo.
+     *
+     * El día es el de Europe/Madrid, fijado en MatchService.ZONA_CUOTA, así que
+     * estas 00:00 son medianoche peninsular en cualquier entorno. Es una
+     * simplificación consciente para el alcance del proyecto y no es correcta
+     * para Canarias; el detalle está en MatchService.consumirCuotaDiaria.
      */
     private LocalDateTime reiniciaEn;
 }

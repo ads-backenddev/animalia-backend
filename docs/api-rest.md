@@ -118,8 +118,9 @@ del cuerpo de error) como para lo que el cliente **envía**: `fechaAvistamiento`
 
 La única excepción es **`reiniciaEn`**, del `429` por cuota diaria agotada (RF-24), que sigue siendo
 una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
-por día natural y "mañana a las 00:00" depende de qué calendario se mire. Convertirlo obliga a
-decidir si el día es el del servidor o el del usuario, y esa decisión pertenece a RF-24.
+por día natural y "mañana a las 00:00" depende de qué calendario se mire. Ese calendario es el de
+**`Europe/Madrid`**, fijado explícitamente en el servidor — con sus límites, en §6, *Estado del
+límite diario*.
 
 ---
 
@@ -325,6 +326,19 @@ diaria, restricción única y apertura del chat no distinguen de qué publicaci�
 la fecha simplemente se empieza una fila nueva en `LIMITE_MATCH_DIARIO`, de ahí que `reiniciaEn`
 sea siempre la medianoche del día siguiente. El límite se configura con
 `app.matches.limite-diario` (20 por defecto).
+
+**El día de la cuota es el de `Europe/Madrid`**, fijado explícitamente en `MatchService` y no
+heredado de la zona de la máquina. Sin fijarlo, la cuota se reiniciaba a una hora distinta en cada
+entorno: en Railway, que va en UTC, a la 01:00 o a las 02:00 de la madrugada peninsular según la
+época del año, y en el portátil de desarrollo a medianoche. Con la zona fija, esas `00:00` son
+medianoche peninsular en todas partes.
+
+Es una **simplificación consciente**, no una solución general. Vale para España peninsular, que es
+el alcance geográfico del proyecto, y **no es correcta para Canarias**: allí se va una hora por
+detrás, así que un usuario canario ve su cuota reiniciarse a las 23:00 de su noche. Hacerlo bien
+exige que el cliente envíe su zona y que se guarde junto al contador, o contar la cuota por instante
+en vez de por día natural; es una decisión de producto de RF-24 que no se ha tomado, y queda
+anotada como pendiente en §16.
 
 **`429` al alcanzar el límite (RF-24)**, con mensaje informativo y momento de reinicio:
 
@@ -718,6 +732,7 @@ aviso, dejando el código y la base de datos describiendo cosas distintas.
 | `DELETE /api/adopcion/{id}` deja el animal en `RETIRADO` en vez de borrar la ficha | §8 *Estados de un animal* |
 | Nuevo `400 ANIMAL_RETIRADO` al confirmar la adopción de un animal retirado | §8 |
 | `ANIMAL_NO_DISPONIBLE` cubre ahora `ADOPTADO` y `RETIRADO`, con mensajes distintos | §6 |
+| El día de la cuota diaria se fija a `Europe/Madrid`: `reiniciaEn` ya no depende de la zona de la máquina | §6 *Estado del límite diario* |
 
 ### Dos cosas que se decidieron NO cambiar
 
@@ -750,5 +765,6 @@ bloque 5.
 |---|---|
 | `VALORACION`: unicidad `(usuario_id, protectora_id)` y `PROTECTORA.valoracion_media`, hoy derivada y sin mantener | 9, con `ValoracionService` |
 | Borrado / anonimización de usuario (RF-19): nueve claves ajenas apuntan a `USUARIO` y ninguna dice qué hacer al borrarlo | 10 |
-| `reiniciaEn` sigue sin zona, y el "hoy" del contador de cuota es el de la zona de la JVM. No se arregla migrando el tipo: exige decidir de quién es el día natural, si del servidor o del cliente | RF-24 |
+| El día de la cuota está fijado a `Europe/Madrid` (§6): correcto para la península, no para Canarias. Contarla por zona del cliente exige que la envíe y guardarla junto al contador | RF-24 |
+| `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
