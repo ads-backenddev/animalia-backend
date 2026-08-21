@@ -2,6 +2,7 @@ package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -23,12 +24,20 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
      * Avistamientos que el usuario todavía no ha deslizado, para el feed de
      * swipe (RF-15).
      *
-     * Tres filtros, cada uno por un motivo distinto:
+     * Cuatro filtros, cada uno por un motivo distinto:
+     * - el avistamiento debe estar VISIBLE: uno retirado por el administrador
+     *   (RF-11) no vuelve a ofrecerse a nadie;
      * - la alerta debe seguir ACTIVA: si el animal ya apareció, el avistamiento
      *   ya no sirve para nada;
      * - se excluyen los propios, porque nadie hace match consigo mismo;
      * - y se excluye lo ya deslizado, en cualquiera de los dos sentidos, que es
      *   justo lo que la restricción única de MATCH_REGISTRO deja registrado.
+     *
+     * El estado se compara con VISIBLE en lugar de excluir ELIMINADO, por lo
+     * mismo que el catálogo de adopción compara con DISPONIBLE: así cualquier
+     * estado que se añada al enum nace fuera del feed, que es el valor por
+     * defecto seguro, en vez de colarse hasta que alguien se acuerde de
+     * excluirlo.
      *
      * El NOT EXISTS se apoya en el índice único
      * (usuario_id, publicacion_id, tipo_publicacion), que cubre las tres
@@ -38,7 +47,8 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
             SELECT a FROM Avistamiento a
             JOIN FETCH a.alerta al
             JOIN FETCH a.usuario u
-            WHERE al.estado = :estadoAlerta
+            WHERE a.estado = :estadoVisible
+              AND al.estado = :estadoAlerta
               AND u.id <> :usuarioId
               AND NOT EXISTS (
                     SELECT 1 FROM MatchRegistro m
@@ -48,6 +58,7 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
             ORDER BY a.createdAt DESC
             """)
     List<Avistamiento> buscarCandidatosParaFeed(@Param("usuarioId") Long usuarioId,
+                                                @Param("estadoVisible") EstadoAvistamiento estadoVisible,
                                                 @Param("estadoAlerta") EstadoAlerta estadoAlerta,
                                                 @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
                                                 Pageable pageable);

@@ -1,7 +1,10 @@
 package com.rescateanimal.backend.model;
 
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
@@ -59,6 +62,16 @@ public class Avistamiento {
 
     @Column(columnDefinition = "geometry(Point,4326)")
     private Point ubicacion;
+
+    /**
+     * Pasa a ELIMINADO cuando el administrador lo retira por incumplir las
+     * normas (RF-11). La fila se conserva: borrarla dejaría huérfanos sus
+     * matches y haría desaparecer chats en curso. El porqué completo está en el
+     * javadoc de EstadoAvistamiento.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private EstadoAvistamiento estado;
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

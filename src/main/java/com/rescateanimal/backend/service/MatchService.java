@@ -16,6 +16,7 @@ import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -179,6 +180,16 @@ public class MatchService {
                         "El avistamiento " + avistamientoId + " no existe"));
 
         exigirQueNoSeaPropia(avistamiento.getUsuario(), usuarioId);
+
+        if (avistamiento.getEstado() != EstadoAvistamiento.VISIBLE) {
+            // Retirado por el administrador (RF-11). El feed ya lo excluye, pero
+            // nada impide llamar al endpoint con el id de un avistamiento que se
+            // retiró después de mostrarse la tarjeta. Sin esto se abriría un chat
+            // sobre contenido que incumplía las normas, y encima le costaría al
+            // ciudadano un match del día.
+            throw new OperacionNoPermitidaException("AVISTAMIENTO_ELIMINADO",
+                    "Este avistamiento fue retirado por incumplir las normas");
+        }
 
         if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
             // El feed filtra por alerta ACTIVA, pero nada impide llamar al

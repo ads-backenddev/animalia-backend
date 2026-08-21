@@ -14,6 +14,7 @@ import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Mensaje;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
@@ -534,6 +535,7 @@ class ChatServiceTest {
         avistamiento.setAlerta(alerta);
         avistamiento.setFotoUrl("https://fotos/avistamiento.jpg");
         avistamiento.setDescripcion("Lo he visto en el parque");
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
         return avistamiento;
     }
 

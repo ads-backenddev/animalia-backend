@@ -9,6 +9,7 @@ import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
@@ -168,12 +169,14 @@ class AvistamientoServiceTest {
         @DisplayName("El feed pide candidatos ACTIVA, de tipo AVISTAMIENTO y acotados en tamaño")
         void elFeedPideLosFiltrosCorrectos() {
             when(avistamientoRepository.buscarCandidatosParaFeed(
-                    any(), any(), any(), any(Pageable.class))).thenReturn(List.of());
+                    any(), any(), any(), any(), any(Pageable.class))).thenReturn(List.of());
 
             avistamientoService.feed(ID_USUARIO);
 
             verify(avistamientoRepository).buscarCandidatosParaFeed(
                     ID_USUARIO,
+                    // Los retirados por el administrador (RF-11) no vuelven al feed.
+                    EstadoAvistamiento.VISIBLE,
                     EstadoAlerta.ACTIVA,
                     TipoPublicacion.AVISTAMIENTO,
                     PageRequest.of(0, TAMANYO_FEED));
@@ -184,7 +187,7 @@ class AvistamientoServiceTest {
         void cadaTarjetaLlevaLaAlerta() {
             Avistamiento candidato = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
             when(avistamientoRepository.buscarCandidatosParaFeed(
-                    any(), any(), any(), any(Pageable.class))).thenReturn(List.of(candidato));
+                    any(), any(), any(), any(), any(Pageable.class))).thenReturn(List.of(candidato));
 
             List<AvistamientoFeedResponse> feed = avistamientoService.feed(ID_USUARIO);
 
@@ -221,6 +224,7 @@ class AvistamientoServiceTest {
         avistamiento.setDescripcion("Lo he visto en el parque");
         avistamiento.setFotoUrl("https://fotos/avistamiento.jpg");
         avistamiento.setUbicacion(punto());
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
         return avistamiento;
     }
 

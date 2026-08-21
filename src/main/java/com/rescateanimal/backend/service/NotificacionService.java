@@ -110,6 +110,45 @@ public class NotificacionService {
         return Optional.of(notificacion);
     }
 
+    /**
+     * Avisa a un usuario de una decisión que el administrador ha tomado sobre su
+     * cuenta o sobre su protectora (RF-11): aprobación, rechazo, bloqueo o
+     * desbloqueo.
+     *
+     * UN SOLO MÉTODO PARA LOS CUATRO CASOS, y no cuatro. Aquí, a diferencia de
+     * las alertas o los matches, no hay nada que decidir por tipo: el
+     * destinatario ya viene resuelto por quien toma la decisión y lo único que
+     * cambia es la constante. Cuatro métodos idénticos salvo por un literal
+     * habrían sido cuatro sitios donde equivocarse.
+     *
+     * TRANSACCIÓN PROPIA (REQUIRES_NEW), como en notificarAlertaCercana y por el
+     * mismo motivo, que aquí pesa más todavía: bloquear una cuenta abusiva es lo
+     * que el administrador ha pedido, y avisar al afectado es la consecuencia.
+     * Compartiendo transacción, un fallo insertando la notificación marcaría la
+     * del bloqueo como "rollback only" y la cuenta se quedaría operativa. El
+     * riesgo simétrico —que el aviso sobreviva a una decisión que sí se
+     * deshace— es remoto y se corrige solo: lo que el usuario puede hacer
+     * depende de su fila, no del aviso.
+     *
+     * EL MOTIVO NO VIAJA AQUÍ. NOTIFICACION no tiene ningún campo de texto, así
+     * que lo que el administrador escribió queda en el log. Ver
+     * BloquearUsuarioRequest.motivo.
+     *
+     * @param referenciaId el recurso al que se refiere la decisión: la protectora
+     *                     al aprobar o rechazar, y nulo al bloquear o desbloquear
+     *                     una cuenta, porque el afectado es el propio destinatario
+     *                     y no hay nada más a lo que apuntar
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Notificacion notificarDecisionAdministrativa(Usuario destinatario, TipoNotificacion tipo,
+                                                        Long referenciaId) {
+
+        Notificacion notificacion = notificacionRepository.save(
+                crear(destinatario, tipo, referenciaId));
+        log.info("Creada notificación {} para el usuario {}", tipo, destinatario.getId());
+        return notificacion;
+    }
+
     private Notificacion crear(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {
         Notificacion notificacion = new Notificacion();
         notificacion.setUsuario(destinatario);

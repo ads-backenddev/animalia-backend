@@ -16,6 +16,7 @@ import com.rescateanimal.backend.model.LimiteMatchDiario;
 import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.Rol;
@@ -609,6 +610,7 @@ class MatchServiceTest {
         avistamiento.setId(ID_AVISTAMIENTO);
         avistamiento.setAlerta(alerta);
         avistamiento.setUsuario(usuario(ID_AUTOR_AVISTAMIENTO));
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
         return avistamiento;
     }
 

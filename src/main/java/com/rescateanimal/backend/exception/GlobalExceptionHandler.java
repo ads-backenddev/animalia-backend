@@ -128,6 +128,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "PUBLICACION_PROPIA", ex.getMessage(), request);
     }
 
+    /** 403 — un administrador no puede bloquear su propia cuenta (RF-11). */
+    @ExceptionHandler(AutobloqueoException.class)
+    public ResponseEntity<ErrorResponse> autobloqueo(AutobloqueoException ex, WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "AUTOBLOQUEO", ex.getMessage(), request);
+    }
+
     /** 403 — el usuario no es ninguno de los dos participantes del chat (RF-12). */
     @ExceptionHandler(ChatAjenoException.class)
     public ResponseEntity<ErrorResponse> chatAjeno(ChatAjenoException ex, WebRequest request) {
