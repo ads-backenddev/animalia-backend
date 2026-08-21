@@ -517,10 +517,79 @@ RF-06, RF-10, RF-23.
 | `POST` | `/api/protectoras/{id}/contactar` | Abre un contacto con una protectora concreta al encontrar un animal perdido (RF-06) | Autenticado | `ContactarProtectoraRequest`: `mensaje`, `alertaId?`, `avistamientoId?` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
 | `POST` | `/api/protectoras/local/contactar` | Contacta con la protectora de la localidad del usuario, resolviéndola a partir de su `areaGeografica` sin que tenga que buscarla. Es la «opción específica» que pide RF-06 | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
 | `POST` | `/api/protectoras/{id}/valoracion` | Valora la protectora de 1 a 5 estrellas tras una adopción o contacto (RF-23). Recalcula `valoracionMedia` | Autenticado | `CrearValoracionRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `201`, `400`, `401`, `403`, `404`, `409` |
-| `GET` | `/api/protectoras/panel` | Panel de gestión de la protectora autenticada: sus animales y los usuarios que han querido contactar (RF-10) | `PROTECTORA` | — | `PanelProtectoraResponse`: `animales[]`, `contactos[]`, `valoracionMedia`, `totalAdopciones` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/solicitudes` | Ciudadanos que han querido ponerse en contacto por alguno de sus animales (RF-10) | `PROTECTORA` `ACTIVA` | — | Lista de `SolicitudAdopcionResponse` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/valoraciones` | Valoraciones recibidas, con la media calculada (RF-10, RF-23) | `PROTECTORA` `ACTIVA` | — | `ValoracionesPanelResponse`: `valoraciones[]`, `media?`, `total` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/resumen` | Contadores agregados para la pantalla principal del panel (RF-10) | `PROTECTORA` `ACTIVA` | — | `ResumenPanelResponse` | `200`, `401`, `403` |
 
 **`403` en valoración:** el usuario no ha tenido adopción ni contacto previo con esa protectora.
 **`409`:** ya la había valorado.
+
+### Panel de la protectora (RF-10)
+
+> **Cambio de contrato.** Hasta este bloque el panel era un único `GET /api/protectoras/panel` que
+> devolvía un `PanelProtectoraResponse` con todo dentro. Se ha sustituido por las cuatro rutas de
+> arriba: los tres listados crecen de forma independiente y el agregado obligaba a traerlos enteros
+> para pintar unas cifras. `/panel/resumen` ocupa el lugar de aquel agregado, con contadores en vez
+> de listas, y `totalAdopciones` es ahora `animalesAdoptados`.
+
+**Todo el panel es sobre uno mismo.** Ninguna de las cuatro rutas admite un id de protectora: la
+protectora se resuelve del token. Pedir el panel de otra no es algo que se rechace, es algo que no
+se puede expresar.
+
+**No basta con el rol.** `PROTECTORA` lo tiene igual una protectora `PENDIENTE` o `RECHAZADA` —el
+rol se asigna al registrarse y la verificación es posterior (RF-11)—. Las cuatro rutas exigen además
+estado `ACTIVA` y responden `403` con `PROTECTORA_PENDIENTE` o `PROTECTORA_RECHAZADA`, los mismos
+códigos y mensajes que el login. Se comprueba **en cada petición** y no solo al entrar, porque un
+token dura horas: una protectora que entra estando `ACTIVA` y a la que el administrador rechaza a
+continuación seguiría operando hasta que caducara. `SIN_PROTECTORA` cubre el caso de una cuenta con
+el rol pero sin fila de protectora asociada.
+
+**`/panel/animales` no es el catálogo público.** `GET /api/adopcion` solo enseña los `DISPONIBLE`
+porque es un escaparate; el panel enseña también los `ADOPTADO` y los `RETIRADO`, porque es el
+histórico de gestión de la protectora. Es la diferencia deliberada entre los dos listados.
+
+**`/panel/solicitudes` nunca incluye descartes.** Solo los `MATCH_REGISTRO` de tipo `ADOPCION` con
+`interesado = true`. Los descartes de RF-15 comparten tabla y contarlos diría que alguien quiere un
+animal al que en realidad dijo que no. Cada solicitud trae el chat abierto por el match, que es el
+canal para responder (RF-12).
+
+Los datos del ciudadano viajan como `AutorResponse` —`id`, `nombre`, `fotoUrl`—, **nunca su email ni
+su teléfono**. No es una omisión temporal: el modelo no tiene ningún campo con el que un usuario
+declare que quiere compartir su contacto, así que no hay forma de saber si lo ha consentido y
+RNF-10 no permite suponerlo. El canal por el que el ciudadano los comparte si quiere es el chat.
+
+**`/panel/valoraciones` depende del bloque 9 y hoy devuelve vacío.** La lectura es real y funciona
+contra `VALORACION`, pero nada puede escribir en esa tabla todavía: no existen `ValoracionService`
+ni `POST /api/protectoras/{id}/valoracion`. Hasta entonces la respuesta es `valoraciones: []`,
+`total: 0` y `media` ausente. En cuanto ese bloque exista, el endpoint devuelve datos sin tocarlo.
+
+La media se calcula sobre las valoraciones reales y **no** sale de `PROTECTORA.valoracion_media`, que
+está documentada como derivada y sin mantener (§16). Se omite del JSON cuando no hay ninguna, en vez
+de viajar como `0`: un cero se leería como la peor nota posible.
+
+**`/panel/resumen`** devuelve `animalesDisponibles`, `animalesAdoptados`, `animalesRetirados`,
+`animalesTotales`, `solicitudesPendientes`, `solicitudesTotales`, `valoracionMedia?` y
+`totalValoraciones`. Todo son agregaciones: no se trae ni un animal ni una solicitud a memoria.
+
+Una solicitud cuenta como **pendiente** mientras su animal siga `DISPONIBLE`. RF-10 no lo define y
+`MATCH_REGISTRO` no tiene ningún estado, así que hubo que elegir criterio: en cuanto el animal pasa a
+`ADOPTADO` o `RETIRADO` el caso está cerrado, con adopción o sin ella, aunque su chat siga vivo. El
+criterio alternativo —"sin responder en el chat"— mide la diligencia contestando, no los casos
+abiertos, y además dependería de `MENSAJE`.
+
+```json
+{
+  "animalesDisponibles": 4,
+  "animalesAdoptados": 3,
+  "animalesRetirados": 2,
+  "animalesTotales": 9,
+  "solicitudesPendientes": 5,
+  "solicitudesTotales": 11,
+  "valoracionMedia": 4.50,
+  "totalValoraciones": 6
+}
+```
 
 **En `/local/contactar`:** `400` si el usuario no tiene `areaGeografica` fijada en su perfil, `404` si
 no hay ninguna protectora `ACTIVA` en esa zona. El segmento literal `local` tiene prioridad sobre el
@@ -661,7 +730,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-07 | `POST`, `PUT` y `DELETE` sobre `/api/adopcion` |
 | RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
 | RF-09 | `GET /api/adopcion/feed`, `POST /api/matches` con `tipoPublicacion=ADOPCION` |
-| RF-10 | `GET /api/protectoras/panel` |
+| RF-10 | `GET /api/protectoras/panel/animales`, `/solicitudes`, `/valoraciones`, `/resumen` |
 | RF-11 | Todo `/api/admin` |
 | RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |
 | RF-13 | `POST /api/auth/login` |
@@ -744,11 +813,12 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 321 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 363 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
-tipo en los tres sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec` y
-`MatchService.resolverAutor`), y ese último es un `switch` exhaustivo sin rama por defecto, así que
-un tipo nuevo rompe la compilación en lugar de colarse en ejecución. Se reabre si aparece un tercer
+tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
+`MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
+un `switch` exhaustivo sin rama por defecto, así que un tipo nuevo rompe la compilación en lugar de
+colarse en ejecución. Se reabre si aparece un tercer
 tipo deslizable o un incidente real de integridad.
 
 **No hay tabla `CHAT_PARTICIPANTE`, y es lo correcto.** Los dos extremos de un chat se deducen del
@@ -768,3 +838,4 @@ bloque 5.
 | El día de la cuota está fijado a `Europe/Madrid` (§6): correcto para la península, no para Canarias. Contarla por zona del cliente exige que la envíe y guardarla junto al contador | RF-24 |
 | `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
+| `MATCH_REGISTRO` no tiene índice por `(tipo_publicacion, interesado)`. Las consultas del panel de RF-10 filtran por ahí, y el único índice existente empieza por `usuario_id`, así que no las sirve. Con los volúmenes del proyecto no se nota | Cuando el panel tenga volumen que lo justifique |

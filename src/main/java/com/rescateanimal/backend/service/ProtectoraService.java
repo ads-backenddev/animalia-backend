@@ -6,10 +6,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * Lógica de protectoras: directorio, contacto con la protectora local, panel de
- * gestión y valoraciones de 1 a 5 estrellas (RF-06, RF-10, RF-23).
+ * Lógica de protectoras: directorio, contacto con la protectora local y
+ * valoraciones de 1 a 5 estrellas (RF-06, RF-23).
  *
- * Esqueleto: sin métodos implementados todavía.
+ * Esqueleto: sin métodos implementados todavía. Crear valoraciones es del
+ * bloque 9; hasta entonces VALORACION no tiene quien escriba en ella.
+ *
+ * El panel de gestión de RF-10 vive en ProtectoraPanelService, no aquí.
  */
 @Service
 @RequiredArgsConstructor
