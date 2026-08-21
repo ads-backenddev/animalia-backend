@@ -744,7 +744,7 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 323 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 321 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los tres sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec` y
 `MatchService.resolverAutor`), y ese último es un `switch` exhaustivo sin rama por defecto, así que
