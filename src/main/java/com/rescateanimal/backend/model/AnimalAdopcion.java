@@ -69,7 +69,21 @@ public class AnimalAdopcion {
     @Column(name = "zona_geografica", length = 150)
     private String zonaGeografica;
 
-    /** Pasa a ADOPTADO al confirmarse la adopción (RF-20). */
+    /**
+     * Pasa a ADOPTADO al confirmarse la adopción (RF-20) y a RETIRADO cuando la
+     * protectora lo saca del catálogo, en lugar de borrarse la ficha.
+     *
+     * LIMITACIÓN CONOCIDA, de baja prioridad: la entidad no lleva @Version, así
+     * que dos peticiones simultáneas de la misma protectora —confirmar la
+     * adopción y retirar el animal— pueden leer las dos DISPONIBLE y gana la
+     * última en escribir. Cerrarlo es añadir bloqueo optimista y devolver 409 a
+     * la perdedora. Se deja fuera con el mismo criterio que la comprobación de
+     * duplicados de RF-25 (ver AlertaService.comprobarQueNoEsDuplicada): el
+     * escenario exige dos acciones de la misma cuenta en el mismo instante, y
+     * el desenlace es siempre uno de los dos estados legales, nunca una fila
+     * incoherente. Lo que se pierde es saber cuál de las dos acciones se
+     * aplicó, no la integridad del dato.
+     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private EstadoAnimal estado;
