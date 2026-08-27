@@ -277,6 +277,15 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * SIN valoracionMedia, y no es un campo que se haya olvidado: este DTO solo
+     * se construye al registrar una protectora, y una que acaba de nacer no
+     * tiene ninguna valoración por definición. Antes se copiaba
+     * PROTECTORA.valoracion_media, que era nula siempre porque nadie la
+     * mantenía; la columna se eliminó en la migración V9 y la media se calcula
+     * donde de verdad se lee (ValoracionService). Aquí el valor correcto es la
+     * ausencia, y el campo se omite del JSON.
+     */
     private ProtectoraResponse aProtectoraResponse(Protectora protectora) {
         return ProtectoraResponse.builder()
                 .id(protectora.getId())
@@ -284,7 +293,6 @@ public class AuthService {
                 .direccion(protectora.getDireccion())
                 .zonaGeografica(protectora.getZonaGeografica())
                 .estado(protectora.getEstado())
-                .valoracionMedia(protectora.getValoracionMedia())
                 .createdAt(protectora.getCreatedAt())
                 .usuario(aUsuarioResponse(protectora.getUsuario()))
                 .build();

@@ -436,20 +436,13 @@ class ProtectoraPanelServiceTest {
                     .containsExactly(5, 4, 3);
         }
 
-        @Test
-        @DisplayName("La media sale de las valoraciones, no de PROTECTORA.valoracionMedia")
-        void laMediaNoSaleDeLaColumna() {
-            // La columna está documentada como derivada y sin mantener: si el
-            // service la leyera, aquí saldría 1.00 en vez de 5.00.
-            Protectora conMediaFalsa = protectora(ID_PROTECTORA, ID_CUENTA, EstadoProtectora.ACTIVA);
-            conMediaFalsa.setValoracionMedia(new BigDecimal("1.00"));
-            when(protectoraRepository.findByUsuarioId(ID_CUENTA))
-                    .thenReturn(Optional.of(conMediaFalsa));
-            when(valoracionRepository.buscarDeProtectoraConAutor(ID_PROTECTORA))
-                    .thenReturn(List.of(valoracion(1L, 5)));
-
-            assertThat(panel.valoraciones(ID_CUENTA).getMedia()).isEqualByComparingTo("5.00");
-        }
+        // YA NO HAY PRUEBA DE QUE LA MEDIA NO SALGA DE PROTECTORA.valoracion_media,
+        // y su desaparición es la buena: existía para vigilar que el panel no
+        // leyera aquella columna derivada, que nadie mantenía. La columna se
+        // eliminó en la migración V9, así que la equivocación que vigilaba ya no
+        // se puede cometer —no compila— y una prueba que no puede fallar solo da
+        // una seguridad falsa. Que la media sale de las valoraciones reales lo
+        // sigue demostrando la prueba de aquí arriba, que promedia 5, 4 y 3.
     }
 
     // ---------------------------------------------------------------------

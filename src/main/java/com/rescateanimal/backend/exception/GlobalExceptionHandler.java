@@ -140,6 +140,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "CHAT_AJENO", ex.getMessage(), request);
     }
 
+    /** 403 — valorar una protectora con la que nunca se ha tratado (RF-23). */
+    @ExceptionHandler(SinInteraccionPreviaException.class)
+    public ResponseEntity<ErrorResponse> sinInteraccionPrevia(SinInteraccionPreviaException ex,
+                                                              WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "SIN_INTERACCION_PREVIA", ex.getMessage(), request);
+    }
+
     /** 403 — el animal en adopción pertenece a otra protectora (RF-07). */
     @ExceptionHandler(AnimalAjenoException.class)
     public ResponseEntity<ErrorResponse> animalAjeno(AnimalAjenoException ex, WebRequest request) {

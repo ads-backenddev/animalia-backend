@@ -18,7 +18,6 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
@@ -57,9 +56,13 @@ public class Protectora {
     @Column(nullable = false, length = 20)
     private EstadoProtectora estado;
 
-    /** Media de las valoraciones recibidas, de 1 a 5 estrellas (RF-23). */
-    @Column(name = "valoracion_media", precision = 3, scale = 2)
-    private BigDecimal valoracionMedia;
+    // NO HAY CAMPO valoracionMedia, y su ausencia es una decisión, no un olvido.
+    // Existió como columna derivada y nadie la mantenía: ningún código la
+    // escribía, así que era nula para todas las protectoras y lo habría seguido
+    // siendo mientras se acumulaban valoraciones reales debajo. La media se
+    // calcula donde se lee, con AVG y COUNT sobre VALORACION (ver
+    // ValoracionService), de modo que no puede quedar desfasada. La columna se
+    // eliminó en la migración V9.
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)

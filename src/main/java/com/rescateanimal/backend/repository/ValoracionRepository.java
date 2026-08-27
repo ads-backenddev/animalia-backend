@@ -7,16 +7,23 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Capa de datos de Valoracion. Sin lógica de negocio.
- *
- * Todo lo de aquí es de lectura, y hoy siempre devuelve vacío: la tabla existe
- * desde la migración V1, pero nada puede insertar en ella hasta que el bloque 9
- * traiga ValoracionService y el endpoint de valorar (RF-23).
  */
 @Repository
 public interface ValoracionRepository extends JpaRepository<Valoracion, Long> {
+
+    /**
+     * La valoración que un usuario ya emitió sobre una protectora, si la hay.
+     *
+     * Es lo que hace idempotente a PUT /api/protectoras/{id}/valoracion: volver
+     * a valorar actualiza esta fila en vez de crear una segunda. La restricción
+     * UNIQUE de V9 respalda la intención para el caso de dos peticiones
+     * simultáneas, que esta consulta por sí sola no puede cubrir.
+     */
+    Optional<Valoracion> findByUsuarioIdAndProtectoraId(Long usuarioId, Long protectoraId);
 
     /**
      * Valoraciones recibidas por una protectora, más recientes primero (RF-10).
