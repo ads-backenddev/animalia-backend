@@ -69,6 +69,11 @@ import java.time.Instant;
 public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
 
     static final String CODIGO = "DEMASIADOS_INTENTOS";
+    static final String CODIGO_CUERPO = "CUERPO_DEMASIADO_GRANDE";
+
+    static final String RUTA_LOGIN = "/api/auth/login";
+    private static final String RUTA_REGISTRO = "/api/auth/registro";
+    private static final String RUTA_RECUPERAR = "/api/auth/recuperar-password";
 
     /**
      * Rutas vigiladas. restablecer-password queda fuera a propósito: su credencial
@@ -76,18 +81,22 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
      * bloquearlo dejaría sin salida justo a quien está intentando recuperar una
      * cuenta comprometida.
      */
-    private static final String[] RUTAS = {
-            "/api/auth/login",
-            "/api/auth/registro",
-            "/api/auth/recuperar-password"
-    };
+    private static final String[] RUTAS = {RUTA_LOGIN, RUTA_REGISTRO, RUTA_RECUPERAR};
 
     /**
      * Tope de cuerpo que se acepta cargar en memoria para leer el email. Los
-     * cuerpos de autenticación son de unos cientos de bytes; por encima de esto
-     * no se inspecciona, para no convertir el filtro en una forma de agotar la
-     * memoria del servidor a base de peticiones enormes. La petición sigue su
-     * curso y la sigue cubriendo el límite por IP.
+     * cuerpos de autenticación son de unos cientos de bytes; por encima de esto la
+     * petición se rechaza con 413, para no convertir el filtro en una forma de
+     * agotar la memoria del servidor a base de peticiones enormes.
+     *
+     * EL TOPE LO IMPONE LA LECTURA, NO LA CABECERA Content-Length, y la distinción
+     * es justo el agujero que tenía antes: getContentLengthLong() devuelve -1
+     * cuando la longitud no se conoce —cualquier petición con
+     * Transfer-Encoding: chunked, que es HTTP corriente—, y -1 pasa cualquier
+     * comparación de «menor que». Con eso, un anónimo mandaba un cuerpo
+     * arbitrariamente grande a un endpoint público y el filtro se lo cargaba
+     * entero en memoria. Fiarse de una cifra que declara el cliente para decidir
+     * cuánto leer no tenía arreglo con un ajuste; se lee acotado y punto.
      */
     private static final int MAXIMO_CUERPO_BYTES = 16 * 1024;
 
@@ -135,16 +144,18 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(@NonNull HttpServletRequest request) {
-        if (!"POST".equalsIgnoreCase(request.getMethod())) {
-            return true;
-        }
+        return !"POST".equalsIgnoreCase(request.getMethod()) || rutaVigilada(request) == null;
+    }
+
+    /** La ruta vigilada que atiende esta petición, o null si no es ninguna. */
+    private static String rutaVigilada(HttpServletRequest request) {
         String ruta = request.getRequestURI();
         for (String vigilada : RUTAS) {
             if (ruta.startsWith(vigilada)) {
-                return false;
+                return vigilada;
             }
         }
-        return true;
+        return null;
     }
 
     @Override
@@ -153,6 +164,7 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
                                     @NonNull FilterChain filterChain)
             throws ServletException, IOException {
 
+        String accion = rutaVigilada(request);
         String clavePorIp = "ip:" + request.getRemoteAddr();
         if (controlIntentos.registrarYComprobar(clavePorIp, maximoPorIp, ventana)) {
             log.warn("Demasiados intentos de autenticación desde una misma dirección en {}",
@@ -163,16 +175,26 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
             return;
         }
 
-        HttpServletRequest peticion = request;
-        String email = null;
+        CuerpoRepetibleRequest peticion =
+                new CuerpoRepetibleRequest(request, MAXIMO_CUERPO_BYTES);
 
-        if (request.getContentLengthLong() <= MAXIMO_CUERPO_BYTES) {
-            CuerpoRepetibleRequest repetible = new CuerpoRepetibleRequest(request);
-            peticion = repetible;
-            email = extraerEmail(repetible.getCuerpo());
+        if (peticion.isDesbordado()) {
+            log.warn("Cuerpo por encima de {} bytes en {}", MAXIMO_CUERPO_BYTES, request.getRequestURI());
+            responder(response, HttpStatus.PAYLOAD_TOO_LARGE, CODIGO_CUERPO,
+                    "El cuerpo de la petición es demasiado grande", request.getRequestURI(), null);
+            return;
         }
 
-        String clavePorCuenta = email == null ? null : "cuenta:" + email;
+        String email = extraerEmail(peticion.getCuerpo());
+
+        // LA CLAVE LLEVA LA ACCIÓN, y no es cosmético: con una sola clave por
+        // email, los contadores de las tres rutas eran el mismo, y como
+        // recuperar-password responde 204 SIEMPRE —no revela si la cuenta existe,
+        // ver AuthController—, bastaba con intercalar una llamada suya para que el
+        // reinicio por éxito borrase los intentos fallidos de login. Cuatro
+        // contraseñas, una solicitud de recuperación, otras cuatro contraseñas, y
+        // el límite por cuenta no se disparaba jamás.
+        String clavePorCuenta = email == null ? null : "cuenta:" + accion + ":" + email;
 
         if (clavePorCuenta != null
                 && controlIntentos.registrarYComprobar(clavePorCuenta, maximoPorCuenta, ventana)) {
@@ -187,9 +209,12 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
 
         filterChain.doFilter(peticion, response);
 
-        // Al entrar bien, los fallos previos dejan de contar para esa cuenta.
-        // Solo el contador por cuenta: ver el javadoc de la clase.
-        if (clavePorCuenta != null && esExito(response.getStatus())) {
+        // SOLO UN LOGIN CORRECTO DEVUELVE EL CUPO. Es lo único que demuestra que
+        // quien está al otro lado es el dueño de la cuenta; un 201 de registro o
+        // un 204 de recuperación no demuestran nada, porque se obtienen sin
+        // conocer la contraseña. Y solo el contador por cuenta: reiniciar el de la
+        // IP permitiría renovar el cupo entre tanteos con tener una cuenta propia.
+        if (clavePorCuenta != null && RUTA_LOGIN.equals(accion) && esExito(response.getStatus())) {
             controlIntentos.reiniciar(clavePorCuenta);
         }
     }
@@ -228,29 +253,37 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
         return estado >= 200 && estado < 300;
     }
 
+    /** El 429 del límite de intentos, con lo que falta para volver a probar. */
+    private void rechazar(HttpServletResponse response, String clave, String mensaje, String ruta)
+            throws IOException {
+
+        responder(response, HttpStatus.TOO_MANY_REQUESTS, CODIGO, mensaje, ruta,
+                controlIntentos.segundosParaReintentar(clave, ventana));
+    }
+
     /**
-     * Devuelve el 429 con el mismo cuerpo que GlobalExceptionHandler daría a
-     * cualquier otro error.
+     * Escribe el mismo cuerpo de error que GlobalExceptionHandler daría a
+     * cualquier otro fallo.
      *
      * Se escribe a mano porque un filtro se ejecuta antes del DispatcherServlet:
      * una excepción lanzada aquí no llega a ningún @ExceptionHandler, así que
      * dejarla subir daría una página de error de Tomcat en lugar de JSON.
      */
-    private void rechazar(HttpServletResponse response, String clave, String mensaje, String ruta)
-            throws IOException {
+    private void responder(HttpServletResponse response, HttpStatus estado, String codigo,
+                           String mensaje, String ruta, Long esperaSegundos) throws IOException {
 
-        long esperaSegundos = controlIntentos.segundosParaReintentar(clave, ventana);
-
-        response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+        response.setStatus(estado.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(esperaSegundos));
+        if (esperaSegundos != null) {
+            response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(esperaSegundos));
+        }
 
         ErrorResponse cuerpo = ErrorResponse.builder()
                 .timestamp(Instant.now())
-                .status(HttpStatus.TOO_MANY_REQUESTS.value())
-                .error(HttpStatus.TOO_MANY_REQUESTS.getReasonPhrase())
-                .codigo(CODIGO)
+                .status(estado.value())
+                .error(estado.getReasonPhrase())
+                .codigo(codigo)
                 .mensaje(mensaje)
                 .ruta(ruta)
                 .build();

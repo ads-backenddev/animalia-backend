@@ -27,23 +27,48 @@ import java.nio.charset.StandardCharsets;
  * detrás; solo sirve para inspeccionar el cuerpo DESPUÉS de que otro lo haya
  * consumido, que es el caso contrario a este.
  *
- * El cuerpo se lee entero en el constructor y cada llamada obtiene un flujo
- * nuevo sobre la misma copia. Quien construya esto es responsable de no hacerlo
- * con peticiones grandes: aquí solo se envuelven cuerpos de autenticación, que
- * son unos cientos de bytes, y el filtro comprueba el tamaño antes.
+ * El cuerpo se lee en el constructor y cada llamada obtiene un flujo nuevo sobre
+ * la misma copia.
+ *
+ * LA LECTURA VA ACOTADA, y el límite es parte del contrato de esta clase, no una
+ * comprobación que pueda quedarse fuera. Antes leía con readAllBytes() y confiaba
+ * en que quien la construyera hubiera mirado el tamaño; ese "mirar antes"
+ * consistía en consultar Content-Length, que vale -1 cuando el cliente manda el
+ * cuerpo con Transfer-Encoding: chunked, y -1 pasa cualquier comparación de
+ * «cabe». El resultado era que un anónimo podía hacer que un endpoint público se
+ * tragara en memoria un cuerpo del tamaño que quisiera. Con el tope aquí dentro,
+ * el problema no puede volver por descuido de quien la use.
  */
 public class CuerpoRepetibleRequest extends HttpServletRequestWrapper {
 
     private final byte[] cuerpo;
+    private final boolean desbordado;
 
-    public CuerpoRepetibleRequest(HttpServletRequest original) throws IOException {
+    /**
+     * @param maximoBytes lo máximo que se acepta cargar en memoria. Si el cuerpo
+     *                    lo supera, la petición queda marcada como desbordada y
+     *                    NO se conserva: quien la construya debe rechazarla, no
+     *                    dejarla seguir con un cuerpo a medias.
+     */
+    public CuerpoRepetibleRequest(HttpServletRequest original, int maximoBytes) throws IOException {
         super(original);
-        this.cuerpo = original.getInputStream().readAllBytes();
+
+        // Un byte de más que el tope: es lo que distingue "justo en el límite" de
+        // "se ha pasado" sin llegar a cargar lo que sobra.
+        byte[] leido = original.getInputStream().readNBytes(maximoBytes + 1);
+
+        this.desbordado = leido.length > maximoBytes;
+        this.cuerpo = desbordado ? new byte[0] : leido;
     }
 
     /** El cuerpo tal cual llegó, para inspeccionarlo sin consumir nada. */
     public byte[] getCuerpo() {
         return cuerpo;
+    }
+
+    /** Cierto si el cuerpo excedía el tope: entonces no hay cuerpo utilizable. */
+    public boolean isDesbordado() {
+        return desbordado;
     }
 
     @Override

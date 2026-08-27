@@ -61,6 +61,9 @@ class LimiteIntentosAutenticacionFilterTest {
     private static final int MAXIMO_POR_IP = 30;
     private static final Duration VENTANA = Duration.ofMinutes(15);
 
+    /** La clave del contador por cuenta lleva la ruta, para que cada accion cuente aparte. */
+    private static final String CLAVE_CUENTA_LOGIN = "cuenta:" + LOGIN + ":" + EMAIL;
+
     private ControlIntentosService control;
     private ObjectMapper objectMapper;
     private LimiteIntentosAutenticacionFilter filtro;
@@ -213,7 +216,7 @@ class LimiteIntentosAutenticacionFilterTest {
 
             assertThat(cortado.estado()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
             assertThat(textoDe(cortado, "mensaje")).contains("conexión");
-            verify(control, never()).registrarYComprobar(eq("cuenta:" + EMAIL), anyInt(), any());
+            verify(control, never()).registrarYComprobar(eq(CLAVE_CUENTA_LOGIN), anyInt(), any());
         }
     }
 
@@ -254,6 +257,62 @@ class LimiteIntentosAutenticacionFilterTest {
             assertThat(fallo("victima@test.es").estado())
                     .as("treinta aciertos no compran un cupo nuevo")
                     .isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+        }
+
+        @Test
+        @DisplayName("Pedir recuperar la contraseña NO devuelve el cupo del login")
+        void elRecuperarPasswordNoDevuelveElCupoDelLogin() throws Exception {
+            // ESTE ERA EL AGUJERO: recuperar-password responde 204 SIEMPRE, exista o
+            // no la cuenta, para no delatar qué emails están registrados. Con un
+            // contador compartido entre las tres rutas y un reinicio disparado por
+            // cualquier 2xx, bastaba intercalar una solicitud de recuperación para
+            // borrar los intentos fallidos de login. Cuatro contraseñas, una
+            // llamada aquí, otras cuatro, y el límite no saltaba nunca.
+            for (int i = 0; i < MAXIMO_POR_CUENTA - 1; i++) {
+                fallo(EMAIL);
+            }
+
+            Resultado recuperacion = intentar(
+                    "/api/auth/recuperar-password", IP, cuerpo(EMAIL), HttpStatus.NO_CONTENT.value());
+            assertThat(recuperacion.estado()).isEqualTo(HttpStatus.NO_CONTENT.value());
+
+            assertThat(fallo(EMAIL).estado())
+                    .as("el quinto fallo aún cabe")
+                    .isEqualTo(HttpStatus.UNAUTHORIZED.value());
+            assertThat(fallo(EMAIL).estado())
+                    .as("y el sexto tiene que cortarse: la recuperación no ha devuelto cupo")
+                    .isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+        }
+
+        @Test
+        @DisplayName("Un registro correcto tampoco devuelve el cupo del login")
+        void elRegistroNoDevuelveElCupoDelLogin() throws Exception {
+            for (int i = 0; i < MAXIMO_POR_CUENTA - 1; i++) {
+                fallo(EMAIL);
+            }
+
+            intentar("/api/auth/registro/ciudadano", IP, cuerpo(EMAIL), HttpStatus.CREATED.value());
+
+            fallo(EMAIL);
+            assertThat(fallo(EMAIL).estado()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+        }
+
+        @Test
+        @DisplayName("Cada ruta lleva su propio contador por cuenta")
+        void cadaRutaCuentaPorSeparado() throws Exception {
+            // Agotar el cupo de recuperación no puede dejar a nadie sin poder entrar:
+            // si compartieran contador, un tercero cerraría el login de cualquiera
+            // con solo pedir cinco veces su enlace de recuperación.
+            for (int i = 0; i <= MAXIMO_POR_CUENTA; i++) {
+                intentar("/api/auth/recuperar-password", IP, cuerpo(EMAIL), HttpStatus.NO_CONTENT.value());
+            }
+
+            assertThat(intentar("/api/auth/recuperar-password", IP, cuerpo(EMAIL), 204).estado())
+                    .as("la recuperación sí tiene su propio límite")
+                    .isEqualTo(HttpStatus.TOO_MANY_REQUESTS.value());
+            assertThat(fallo(EMAIL).estado())
+                    .as("pero el login de esa cuenta sigue disponible")
+                    .isEqualTo(HttpStatus.UNAUTHORIZED.value());
         }
 
         @Test
@@ -306,23 +365,67 @@ class LimiteIntentosAutenticacionFilterTest {
         }
 
         @Test
-        @DisplayName("Un cuerpo enorme no se carga en memoria: pasa intacto y solo cuenta por IP")
-        void elCuerpoEnormeNoSeInspecciona() throws Exception {
+        @DisplayName("Un cuerpo enorme se rechaza con 413 y no llega al controller")
+        void elCuerpoEnormeSeRechaza() throws Exception {
             // El filtro no puede convertirse en la forma de agotar la memoria del
-            // servidor a base de peticiones gigantes.
-            byte[] enorme = new byte[17 * 1024];
-            java.util.Arrays.fill(enorme, (byte) 'a');
-
+            // servidor a base de peticiones gigantes. En estos tres endpoints no hay
+            // ningún cuerpo legítimo de 17 KB: son cuatro campos de texto.
             MockHttpServletRequest peticion = peticionPost(LOGIN, IP);
-            peticion.setContent(enorme);
+            peticion.setContent(relleno(17 * 1024));
             MockHttpServletResponse respuesta = new MockHttpServletResponse();
             Cadena cadena = new Cadena(200);
+
             filtro.doFilter(peticion, respuesta, cadena);
 
-            assertThat(cadena.llamadas).isOne();
-            assertThat(cadena.cuerpoVisto).hasSize(enorme.length);
-            verify(control, never()).registrarYComprobar(startsWith("cuenta:"), anyInt(), any());
-            verify(control).registrarYComprobar(eq("ip:" + IP), anyInt(), any());
+            assertThat(respuesta.getStatus()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE.value());
+            assertThat(cadena.llamadas).isZero();
+            assertThat(objectMapper.readTree(respuesta.getContentAsString()).get("codigo").asString())
+                    .isEqualTo(LimiteIntentosAutenticacionFilter.CODIGO_CUERPO);
+        }
+
+        @Test
+        @DisplayName("Sin Content-Length conocido el tope sigue valiendo: no se lee sin freno")
+        void elCuerpoSinLongitudDeclaradaTambienSeAcota() throws Exception {
+            // Es el caso de Transfer-Encoding: chunked, que es HTTP corriente y no
+            // un truco. Ahí getContentLengthLong() vale -1, y mientras el tope se
+            // decidía mirando esa cifra, -1 pasaba por "cabe de sobra" y el filtro
+            // se cargaba en memoria un cuerpo del tamaño que el cliente quisiera.
+            MockHttpServletRequest peticion = new MockHttpServletRequest("POST", LOGIN) {
+                @Override
+                public long getContentLengthLong() {
+                    return -1;
+                }
+
+                @Override
+                public int getContentLength() {
+                    return -1;
+                }
+            };
+            peticion.setRemoteAddr(IP);
+            peticion.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            peticion.setContent(relleno(17 * 1024));
+            MockHttpServletResponse respuesta = new MockHttpServletResponse();
+            Cadena cadena = new Cadena(200);
+
+            filtro.doFilter(peticion, respuesta, cadena);
+
+            assertThat(respuesta.getStatus())
+                    .as("una longitud desconocida no puede ser un salvoconducto")
+                    .isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE.value());
+            assertThat(cadena.llamadas).isZero();
+        }
+
+        @Test
+        @DisplayName("Un cuerpo justo en el tope sí pasa")
+        void elCuerpoEnElLimitePasa() throws Exception {
+            String cuerpo = cuerpo(EMAIL);
+            String relleno = "x".repeat(16 * 1024 - cuerpo.length() - 12);
+            String justo = "{\"email\":\"" + EMAIL + "\",\"password\":\"" + relleno + "\"}";
+
+            Resultado resultado = intentar(LOGIN, IP, justo, 401);
+
+            assertThat(resultado.estado()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
+            assertThat(resultado.cadena().cuerpoVisto).isEqualTo(justo);
         }
 
         @Test
@@ -408,7 +511,7 @@ class LimiteIntentosAutenticacionFilterTest {
                     .as("y con su cuerpo intacto, envuelto dos veces o no")
                     .isEqualTo(cuerpo(EMAIL));
             verify(control, times(1))
-                    .registrarYComprobar(eq("cuenta:" + EMAIL), anyInt(), any());
+                    .registrarYComprobar(eq(CLAVE_CUENTA_LOGIN), anyInt(), any());
             verify(control, times(1))
                     .registrarYComprobar(eq("ip:" + IP), anyInt(), any());
         }
@@ -484,6 +587,12 @@ class LimiteIntentosAutenticacionFilterTest {
         peticion.setRemoteAddr(ip);
         peticion.setContentType(MediaType.APPLICATION_JSON_VALUE);
         return peticion;
+    }
+
+    private static byte[] relleno(int bytes) {
+        byte[] datos = new byte[bytes];
+        java.util.Arrays.fill(datos, (byte) 97);
+        return datos;
     }
 
     private static String cuerpo(String email) {

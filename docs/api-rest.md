@@ -130,11 +130,11 @@ RF-01, RF-13, RF-16, RF-17.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409`, `429` |
-| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `429` |
-| `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403`, `429` |
+| `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409`, `413`, `429` |
+| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `413`, `429` |
+| `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403`, `413`, `429` |
 | `POST` | `/api/auth/logout` | Cierra la sesión del cliente e invalida el token en la lista de revocados | Autenticado | — | — | `204`, `401` |
-| `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400`, `429` |
+| `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400`, `413`, `429` |
 | `POST` | `/api/auth/restablecer-password` | Fija la nueva contraseña a partir del token del enlace | Público | `RestablecerPasswordRequest`: `token`, `nuevaPassword` | — | `204`, `400` |
 
 **`403` en login:** cuenta bloqueada por el administrador (`activo = false`), con código
@@ -148,13 +148,27 @@ minutos**:
 
 | Contador | Límite | Se reinicia |
 |---|---|---|
-| Por cuenta (el `email` del cuerpo, normalizado) | 5 | Al autenticarse con éxito |
+| Por cuenta **y ruta** (el `email` del cuerpo, normalizado) | 5 | Solo tras un **login** correcto |
 | Por dirección de origen | 30 | Nunca dentro de la ventana |
+
+**El contador por cuenta es independiente en cada ruta, y solo un login correcto devuelve el cupo.**
+Las dos cosas son necesarias por el mismo motivo: `recuperar-password` responde `204` siempre, exista o
+no el email. Con un contador compartido y un reinicio disparado por cualquier `2xx`, bastaba intercalar
+una solicitud de recuperación entre tanteos para borrar los intentos fallidos de login, y el límite no
+saltaba nunca. Separarlos evita además el efecto contrario: que pedir cinco veces el enlace de
+recuperación de otra persona le cierre el acceso.
 
 La respuesta lleva la cabecera **`Retry-After`** con los segundos que faltan y el cuerpo de error
 habitual. El corte ocurre en un filtro, **antes** del controller, así que un ataque no llega a gastar
 BCrypt ni a consultar la base de datos. El mensaje es el mismo exista o no la cuenta, para no
 convertir el 429 en un detector de cuentas registradas.
+
+**`413 CUERPO_DEMASIADO_GRANDE`:** las tres rutas rechazan un cuerpo mayor de 16 KB. El filtro tiene
+que leer el `email` del JSON antes de que llegue al controller, y cargar en memoria un cuerpo sin
+límite en un endpoint público sería una forma cómoda de tumbar el servidor. El tope lo impone la
+lectura, no la cabecera `Content-Length`: esa cifra la declara el cliente y vale `-1` cuando el cuerpo
+viaja con `Transfer-Encoding: chunked`. Ningún cuerpo legítimo de estos endpoints pasa de unos cientos
+de bytes.
 
 Los tres valores se configuran con `app.auth.max-intentos-cuenta`, `app.auth.max-intentos-ip` y
 `app.auth.ventana-intentos-minutos`. No están fijados en el código porque un despliegue detrás de una
@@ -990,7 +1004,7 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 471 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 476 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
 `MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
