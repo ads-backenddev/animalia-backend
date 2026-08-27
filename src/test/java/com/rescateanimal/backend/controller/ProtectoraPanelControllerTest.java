@@ -11,6 +11,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.ProtectoraPanelService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.AfterEach;
@@ -87,6 +88,8 @@ class ProtectoraPanelControllerTest {
     private UserDetailsServiceImpl userDetailsService;
     @MockitoBean
     private TokenRevocadoService tokenRevocadoService;
+    @MockitoBean
+    private ControlIntentosService controlIntentosService;
 
     @AfterEach
     void limpiarContexto() {
