@@ -31,10 +31,25 @@ public class SecurityConfig {
     private final JwtAuthFilter jwtAuthFilter;
     private final LimiteIntentosAutenticacionFilter limiteIntentosFilter;
 
+    /**
+     * Coste de BCrypt. El valor por defecto de Spring es 10; se sube a 12, que es
+     * lo que recomienda hoy OWASP y multiplica por cuatro el trabajo de probar
+     * una contraseña (cada punto duplica el número de iteraciones).
+     *
+     * NO INVALIDA NINGUNA CONTRASEÑA YA GUARDADA: el coste con el que se calculó
+     * un hash viaja dentro del propio hash, así que BCrypt verifica igual de bien
+     * los antiguos de coste 10. Lo que sí ocurre es que esas cuentas siguen con
+     * el coste viejo hasta que su dueño cambie la contraseña; rehashearlas exige
+     * la contraseña en claro, que solo está disponible durante un login correcto.
+     * Reencriptar ahí es lo que haría un sistema maduro y queda anotado como
+     * pendiente en docs/api-rest.md.
+     */
+    private static final int COSTE_BCRYPT = 12;
+
     /** BCrypt para el hash de las contraseñas (RNF-03). */
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+        return new BCryptPasswordEncoder(COSTE_BCRYPT);
     }
 
     @Bean
