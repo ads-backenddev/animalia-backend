@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.server.HandshakeInterceptor;
 
+import java.time.Instant;
 import java.util.Map;
 
 /**
@@ -31,6 +32,25 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
 
     /** Clave con la que el usuario autenticado queda disponible para la sesión. */
     public static final String ATRIBUTO_USUARIO = "usuarioAutenticado";
+
+    /** Clave con la que viajan los datos del token para poder revalidarlo después. */
+    public static final String ATRIBUTO_TOKEN = "datosDelToken";
+
+    /**
+     * Lo que hay que recordar del token para volver a comprobarlo sin guardarlo.
+     *
+     * NO SE GUARDA EL TOKEN, y es a propósito: un token completo es una credencial
+     * utilizable, y tenerlo en la memoria de la sesión durante horas es una copia
+     * más de la que preocuparse. Con estos tres datos se puede rehacer todo lo que
+     * el handshake comprobó —si caducó, si se revocó, si es anterior a un cambio
+     * de contraseña— sin conservar nada que sirva para autenticarse.
+     *
+     * @param jti        identificador del token, con el que se consulta la revocación
+     * @param expiraEn   cuándo deja de valer por sí solo
+     * @param emitidoEn  claim "iat", para contrastarlo con passwordChangedAt
+     */
+    public record DatosToken(String jti, Instant expiraEn, Instant emitidoEn) {
+    }
 
     private static final String CABECERA = "Authorization";
     private static final String PREFIJO = "Bearer ";
@@ -67,14 +87,21 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
             }
 
             // Queda accesible desde los handlers de mensajes de la sesión.
-            //
-            // PENDIENTE: esto no convierte al usuario en el Principal de la
-            // sesión STOMP, y el prefijo /user/ (que usará
-            // /user/queue/notificaciones, RF-05) se resuelve contra ese
-            // Principal. Antes de implementarlo hay que sobrescribir
-            // determineUser en un DefaultHandshakeHandler. Para /topic/mapa no
-            // hace falta: es difusión a cualquier autenticado.
+            // UsuarioHandshakeHandler lo recoge inmediatamente después para
+            // convertirlo en el Principal de la sesión STOMP, que es contra lo
+            // que se resuelve el prefijo /user/ y de donde lo lee
+            // ChatSuscripcionInterceptor.
             attributes.put(ATRIBUTO_USUARIO, usuario);
+
+            // Y con esto, la sesión puede volver a comprobar su propio token cada
+            // vez que se suscriba a algo. Hace falta porque este handshake ocurre
+            // UNA sola vez: sin ello, una conexión abierta sobrevive al logout, al
+            // bloqueo por un administrador y al cambio de contraseña, y sigue
+            // recibiendo mensajes durante horas.
+            attributes.put(ATRIBUTO_TOKEN, new DatosToken(
+                    jwtService.getJti(claims),
+                    jwtService.getExpiracion(claims),
+                    jwtService.getEmitidoEn(claims)));
             log.debug("Handshake WebSocket aceptado para el usuario {}", usuario.getId());
             return true;
 

@@ -1,6 +1,7 @@
 package com.rescateanimal.backend.security;
 
 import com.rescateanimal.backend.service.ChatService;
+import com.rescateanimal.backend.service.TokenRevocadoService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.Message;
@@ -10,9 +11,12 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 
+import java.time.Instant;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -29,11 +33,31 @@ import java.util.regex.Pattern;
  * vez abierta la conexión, los SUBSCRIBE ya no son peticiones HTTP y no pasan
  * por SecurityConfig ni por @PreAuthorize.
  *
- * Solo gobierna los destinos de chat: cualquier otro —/topic/mapa,
- * /user/queue/…— lo deja pasar tal cual, porque su autorización es simplemente
- * estar autenticado, que ya se resolvió en el handshake.
+ * HACE DOS COSAS, y conviene distinguirlas porque tienen alcances distintos:
  *
- * Dentro de su espacio de nombres deniega por defecto. La distinción importa
+ * 1. REVALIDA LA SESIÓN en CADA suscripción, sea al destino que sea. El
+ *    handshake comprueba el token una sola vez, al abrir la conexión, y a partir
+ *    de ahí la sesión vive por su cuenta: sin esto, una conexión abierta
+ *    sobrevive al logout, al bloqueo por un administrador y al cambio de
+ *    contraseña, y sigue admitiendo suscripciones nuevas durante horas. Choca de
+ *    frente con el cuidado del lado REST, donde JwtAuthFilter recarga el usuario
+ *    en cada petición precisamente para que un bloqueo surta efecto en el acto.
+ *
+ * 2. AUTORIZA los destinos de chat en concreto. Cualquier otro —/topic/mapa,
+ *    /user/queue/…— pasa una vez revalidada la sesión, porque su autorización es
+ *    simplemente estar autenticado.
+ *
+ * LIMITACIÓN CONOCIDA, Y NO ES PEQUEÑA: revalidar aquí impide suscripciones
+ * NUEVAS, pero NO cierra la conexión ni cancela las suscripciones que ya
+ * estuvieran hechas. Un usuario bloqueado mientras tenía abierto un chat sigue
+ * recibiendo lo que se publique en él hasta que su cliente se desconecte. Cerrar
+ * sesiones activas exige un registro de sesiones WebSocket vivas por usuario —
+ * escuchar SessionConnectedEvent y SessionDisconnectEvent, guardar el sessionId
+ * y cerrarlas desde AdminService al bloquear—, y eso es una pieza nueva que
+ * queda fuera de alcance (ver docs/api-rest.md §17). Lo que sí se cierra es la
+ * puerta a abrir nada nuevo, que es por donde se entra a un chat ajeno.
+ *
+ * Dentro del espacio de nombres del chat deniega por defecto. La distinción importa
  * porque el bróker no reparte comparando cadenas: DefaultSubscriptionRegistry
  * usa un AntPathMatcher, así que una suscripción a /topic/chat/* o a /topic/**
  * recibe lo que se publique en /topic/chat/42. Un destino que no case
@@ -64,6 +88,8 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
     private static final AntPathMatcher COMPARADOR = new AntPathMatcher();
 
     private final ChatService chatService;
+    private final TokenRevocadoService tokenRevocadoService;
+    private final UserDetailsServiceImpl userDetailsService;
 
     @Override
     public Message<?> preSend(Message<?> mensaje, MessageChannel canal) {
@@ -78,6 +104,15 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
         if (destino == null) {
             return mensaje;
         }
+
+        UsuarioPrincipal usuario = UsuarioPrincipal.desde(accesor.getUser());
+        if (usuario == null) {
+            throw new MessagingException("No se puede suscribir a un chat sin sesión autenticada");
+        }
+
+        // Antes que cualquier decisión sobre el destino: si la sesión ya no vale,
+        // da igual a qué se quiera suscribir.
+        revalidarSesion(accesor, usuario);
 
         // Un destino con comodines no es un destino: es un patrón, y el bróker lo
         // trata como tal al repartir. Suscribirse a /topic/chat/* o a /topic/**
@@ -108,11 +143,6 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
             return mensaje;
         }
 
-        UsuarioPrincipal usuario = UsuarioPrincipal.desde(accesor.getUser());
-        if (usuario == null) {
-            throw new MessagingException("No se puede suscribir a un chat sin sesión autenticada");
-        }
-
         long chatId = Long.parseLong(coincidencia.group(1));
         if (!chatService.esParticipante(chatId, usuario.getId())) {
             // Un chat inexistente y uno ajeno se rechazan igual: en STOMP no hay
@@ -125,5 +155,65 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
 
         log.debug("Suscripción al chat {} autorizada para el usuario {}", chatId, usuario.getId());
         return mensaje;
+    }
+
+    /**
+     * Vuelve a comprobar lo que el handshake comprobó al abrir la conexión.
+     *
+     * Son las mismas cuatro condiciones que JwtAuthFilter aplica a cada petición
+     * HTTP, y en el mismo orden, para que una sesión WebSocket no sea una forma de
+     * conservar privilegios que la API REST ya habría retirado:
+     * el token no ha caducado, no se ha revocado con un logout, la cuenta sigue
+     * activa y el token no es anterior al último cambio de contraseña.
+     *
+     * El usuario se recarga de la base de datos, no se reutiliza el que quedó en
+     * los atributos de la sesión: aquel es una foto del momento del handshake, y
+     * es justo lo que puede haber quedado obsoleto. El coste es una consulta por
+     * suscripción, que es una operación poco frecuente —una por conversación que
+     * se abre—, no por mensaje.
+     *
+     * SIN DATOS DEL TOKEN SE RECHAZA, en vez de dejar pasar por no poder
+     * comprobar. Solo se llegaría ahí con una sesión abierta antes de que esto
+     * existiera o si alguien retirase JwtHandshakeInterceptor de la cadena; en los
+     * dos casos, no poder verificar una sesión es motivo para no fiarse de ella.
+     */
+    private void revalidarSesion(StompHeaderAccessor accesor, UsuarioPrincipal usuario) {
+        Map<String, Object> atributos = accesor.getSessionAttributes();
+        Object datos = atributos == null ? null : atributos.get(JwtHandshakeInterceptor.ATRIBUTO_TOKEN);
+
+        if (!(datos instanceof JwtHandshakeInterceptor.DatosToken token)) {
+            log.warn("Suscripción rechazada: la sesión del usuario {} no lleva datos del token",
+                    usuario.getId());
+            throw new MessagingException("Vuelve a conectarte para continuar");
+        }
+
+        if (token.expiraEn() != null && !Instant.now().isBefore(token.expiraEn())) {
+            log.debug("Suscripción rechazada: el token del usuario {} ha caducado", usuario.getId());
+            throw new MessagingException("Tu sesión ha caducado");
+        }
+
+        if (tokenRevocadoService.estaRevocado(token.jti())) {
+            log.debug("Suscripción rechazada: el usuario {} había cerrado sesión", usuario.getId());
+            throw new MessagingException("Tu sesión ya no es válida");
+        }
+
+        UsuarioPrincipal actual;
+        try {
+            actual = (UsuarioPrincipal) userDetailsService.loadUserByUsername(usuario.getUsername());
+        } catch (UsernameNotFoundException e) {
+            log.warn("Suscripción rechazada: la cuenta del usuario {} ya no existe", usuario.getId());
+            throw new MessagingException("Tu sesión ya no es válida");
+        }
+
+        if (!actual.isEnabled()) {
+            log.warn("Suscripción rechazada: la cuenta del usuario {} está bloqueada", usuario.getId());
+            throw new MessagingException("Tu cuenta ha sido bloqueada por un administrador");
+        }
+
+        if (!actual.tokenEmitidoSigueVigente(token.emitidoEn())) {
+            log.debug("Suscripción rechazada: el token del usuario {} es anterior al cambio de contraseña",
+                    usuario.getId());
+            throw new MessagingException("Tu sesión ya no es válida: la contraseña ha cambiado");
+        }
     }
 }
