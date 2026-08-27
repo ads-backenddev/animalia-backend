@@ -30,8 +30,6 @@ public class JwtService {
     public static final String TIPO_RESET = "reset";
 
     private static final String CLAIM_TIPO = "tipo";
-    private static final String CLAIM_USUARIO_ID = "uid";
-    private static final String CLAIM_ROL = "rol";
 
     private final String secreto;
     private final long expiracionAccesoMs;
@@ -74,7 +72,22 @@ public class JwtService {
     public record TokenAcceso(String token, Instant expiraEn) {
     }
 
-    /** Token de acceso para las peticiones autenticadas a la API. */
+    /**
+     * Token de acceso para las peticiones autenticadas a la API.
+     *
+     * LLEVA LO MÍNIMO, Y ESO ES DELIBERADO. Antes incluía además el id y el rol
+     * del usuario, que no leía nadie: JwtAuthFilter recarga la fila en cada
+     * petición y construye las autoridades desde ella, precisamente para que un
+     * bloqueo o un cambio de rol surtan efecto en el acto en vez de esperar a que
+     * caduque el token. Los dos claims solo servían para publicar quién eres y
+     * qué puedes hacer a cualquiera que leyera el token —un JWT va firmado, no
+     * cifrado, así que su contenido se lee en claro— y el token aparece en sitios
+     * incómodos, como la query del handshake WebSocket, que acaba en los registros
+     * del servidor (RNF-10).
+     *
+     * Queda el subject con el email, que sí hace falta para localizar la cuenta,
+     * y el jti, con el que se revoca en el logout.
+     */
     public TokenAcceso generarTokenAcceso(UsuarioPrincipal usuario) {
         Instant ahora = Instant.now();
         Instant expiracion = ahora.plusMillis(expiracionAccesoMs);
@@ -82,8 +95,6 @@ public class JwtService {
                 .subject(usuario.getEmail())
                 .id(UUID.randomUUID().toString())
                 .claim(CLAIM_TIPO, TIPO_ACCESO)
-                .claim(CLAIM_USUARIO_ID, usuario.getId())
-                .claim(CLAIM_ROL, usuario.getRol().name())
                 .issuedAt(Date.from(ahora))
                 .expiration(Date.from(expiracion))
                 .signWith(clave)

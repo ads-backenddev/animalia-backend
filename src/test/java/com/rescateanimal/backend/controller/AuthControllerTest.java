@@ -10,6 +10,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.service.AuthService;
+import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -58,6 +59,8 @@ class AuthControllerTest {
     private UserDetailsServiceImpl userDetailsService;
     @MockitoBean
     private TokenRevocadoService tokenRevocadoService;
+    @MockitoBean
+    private ControlIntentosService controlIntentosService;
 
     private static final String REGISTRO_VALIDO = """
             {"nombre":"Ana","email":"ana@test.es","password":"passw0rd123"}

@@ -1,6 +1,7 @@
 package com.rescateanimal.backend.config;
 
 import com.rescateanimal.backend.security.JwtAuthFilter;
+import com.rescateanimal.backend.security.LimiteIntentosAutenticacionFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,11 +29,27 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
+    private final LimiteIntentosAutenticacionFilter limiteIntentosFilter;
+
+    /**
+     * Coste de BCrypt. El valor por defecto de Spring es 10; se sube a 12, que es
+     * lo que recomienda hoy OWASP y multiplica por cuatro el trabajo de probar
+     * una contraseña (cada punto duplica el número de iteraciones).
+     *
+     * NO INVALIDA NINGUNA CONTRASEÑA YA GUARDADA: el coste con el que se calculó
+     * un hash viaja dentro del propio hash, así que BCrypt verifica igual de bien
+     * los antiguos de coste 10. Lo que sí ocurre es que esas cuentas siguen con
+     * el coste viejo hasta que su dueño cambie la contraseña; rehashearlas exige
+     * la contraseña en claro, que solo está disponible durante un login correcto.
+     * Reencriptar ahí es lo que haría un sistema maduro y queda anotado como
+     * pendiente en docs/api-rest.md.
+     */
+    private static final int COSTE_BCRYPT = 12;
 
     /** BCrypt para el hash de las contraseñas (RNF-03). */
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+        return new BCryptPasswordEncoder(COSTE_BCRYPT);
     }
 
     @Bean
@@ -71,7 +88,23 @@ public class SecurityConfig {
                 .exceptionHandling(errores -> errores
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
 
-                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                // El límite de intentos va ANTES de autenticar: su trabajo es que
+                // una petición de fuerza bruta no llegue a costar ni una consulta
+                // ni un BCrypt. Es un OncePerRequestFilter, así que la doble
+                // inscripción que Spring Boot hace de cualquier bean de tipo
+                // Filter no lo ejecuta dos veces ni cuenta el intento por
+                // duplicado; hay una prueba que lo fija.
+                //
+                // EL ORDEN DE ESTAS DOS LÍNEAS NO ES INTERCAMBIABLE. Anclar un
+                // filtro a una clase propia solo vale si esa clase ya se ha
+                // colocado: addFilterBefore apunta el orden de lo que inserta en un
+                // registro, y consultarlo antes de tiempo aborta el arranque con
+                // "The Filter class JwtAuthFilter does not have a registered order".
+                // Por eso JwtAuthFilter se sitúa primero respecto a una clase de
+                // Spring Security, que sí viene registrada de fábrica, y el límite
+                // de intentos se ancla después a él.
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(limiteIntentosFilter, JwtAuthFilter.class);
 
         return http.build();
     }

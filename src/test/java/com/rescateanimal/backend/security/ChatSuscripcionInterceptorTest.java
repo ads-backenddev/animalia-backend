@@ -2,6 +2,8 @@ package com.rescateanimal.backend.security;
 
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.service.ChatService;
+import com.rescateanimal.backend.service.TokenRevocadoService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -21,20 +23,28 @@ import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
 import java.security.Principal;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Autorización de las suscripciones a /topic/chat/{chatId} (RF-12).
+ * Autorización de las suscripciones a /topic/chat/{chatId} (RF-12) y
+ * revalidación de la sesión en cada SUBSCRIBE.
  *
  * Es la pieza que impide escuchar conversaciones ajenas adivinando su id, así
  * que lo que se prueba aquí no es que el camino feliz funcione, sino que todo
@@ -46,20 +56,47 @@ import static org.mockito.Mockito.when;
  * mire "¿es esto /topic/chat/<número>?" y deje pasar lo que no reconoce se
  * salta entero. La última prueba lo comprueba contra el registro de
  * suscripciones de verdad, no contra la idea que tenemos de él.
+ *
+ * El grupo de la revalidación cubre la otra mitad: el handshake comprueba el
+ * token UNA vez, al abrir la conexión, así que sin volver a mirarlo en cada
+ * suscripción una sesión abierta sobreviviría al logout, al bloqueo por un
+ * administrador y al cambio de contraseña. Todas esas pruebas dan por bueno el
+ * Principal de la sesión —que es una foto del handshake— y cambian solo lo que
+ * dice la base de datos ahora, que es justo el desfase que hay que detectar.
  */
 @ExtendWith(MockitoExtension.class)
 class ChatSuscripcionInterceptorTest {
 
     private static final Long ID_USUARIO = 7L;
     private static final Long ID_CHAT = 42L;
+    private static final String EMAIL = "ana@test.es";
+    private static final String JTI = "jti-1";
 
     @Mock
     private ChatService chatService;
+    @Mock
+    private TokenRevocadoService tokenRevocadoService;
+    @Mock
+    private UserDetailsServiceImpl userDetailsService;
     @Mock
     private MessageChannel canal;
 
     @InjectMocks
     private ChatSuscripcionInterceptor interceptor;
+
+    /**
+     * Por defecto, la sesión sigue siendo válida: cuenta activa, token sin
+     * revocar y sin cambios de contraseña. Se declara lenient porque las pruebas
+     * que rechazan antes de llegar a la revalidación —sin Principal, o una trama
+     * que no es SUBSCRIBE— no llegan a usarlo, y eso no es un stub sobrante sino
+     * el punto de partida común.
+     */
+    @BeforeEach
+    void sesionValidaPorDefecto() {
+        lenient().when(tokenRevocadoService.estaRevocado(anyString())).thenReturn(false);
+        lenient().when(userDetailsService.loadUserByUsername(EMAIL))
+                .thenReturn(usuario(true, null));
+    }
 
     @Nested
     @DisplayName("Suscripción a un chat concreto")
@@ -200,6 +237,137 @@ class ChatSuscripcionInterceptorTest {
         }
     }
 
+    @Nested
+    @DisplayName("Revalidación de la sesión en cada suscripción")
+    @MockitoSettings(strictness = Strictness.LENIENT)
+    class RevalidacionDeLaSesion {
+
+        @Test
+        @DisplayName("Un usuario bloqueado no puede suscribirse a un chat nuevo aunque su token siga siendo válido")
+        void elBloqueadoNoEntraEnUnChatNuevo() {
+            // El Principal de la sesión sigue diciendo que la cuenta está activa,
+            // porque es la foto del handshake; la base de datos ya dice que no. Es
+            // exactamente lo que pasa cuando un administrador bloquea a alguien que
+            // tenía el WebSocket abierto (RF-11).
+            when(userDetailsService.loadUserByUsername(EMAIL)).thenReturn(usuario(false, null));
+            when(chatService.esParticipante(anyLong(), any())).thenReturn(true);
+
+            assertThatThrownBy(() -> interceptor.preSend(
+                    subscribe("/topic/chat/42", autenticado(ID_USUARIO)), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("bloqueada");
+
+            // Y se corta antes de mirar siquiera si participa: el bloqueo no depende
+            // de a qué se quiera suscribir.
+            verify(chatService, never()).esParticipante(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("Al bloqueado tampoco le vale otro destino, como el mapa")
+        void elBloqueadoNoEntraEnNingunDestino() {
+            when(userDetailsService.loadUserByUsername(EMAIL)).thenReturn(usuario(false, null));
+
+            assertThatThrownBy(() -> interceptor.preSend(destino("/topic/mapa"), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("bloqueada");
+        }
+
+        @Test
+        @DisplayName("La cuenta se recarga de la base de datos, no se reutiliza la del handshake")
+        void laCuentaSeRecargaEnCadaSuscripcion() {
+            when(chatService.esParticipante(anyLong(), any())).thenReturn(true);
+
+            interceptor.preSend(subscribe("/topic/chat/42", autenticado(ID_USUARIO)), canal);
+            interceptor.preSend(subscribe("/topic/chat/42", autenticado(ID_USUARIO)), canal);
+
+            verify(userDetailsService, times(2)).loadUserByUsername(EMAIL);
+        }
+
+        @Test
+        @DisplayName("Token revocado por un logout -> rechazo (RF-16)")
+        void elTokenRevocadoNoSirve() {
+            when(tokenRevocadoService.estaRevocado(JTI)).thenReturn(true);
+
+            assertThatThrownBy(() -> interceptor.preSend(destino("/topic/chat/42"), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("ya no es válida");
+
+            verify(chatService, never()).esParticipante(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("Token caducado -> rechazo, aunque la conexión lleve horas abierta")
+        void elTokenCaducadoNoSirve() {
+            Message<?> mensaje = subscribe("/topic/chat/42", autenticado(ID_USUARIO),
+                    sesionCon(new JwtHandshakeInterceptor.DatosToken(
+                            JTI, Instant.now().minusSeconds(60), Instant.now().minusSeconds(3660))));
+
+            assertThatThrownBy(() -> interceptor.preSend(mensaje, canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("caducado");
+        }
+
+        @Test
+        @DisplayName("Token anterior al último cambio de contraseña -> rechazo (RF-17)")
+        void elTokenAnteriorAlCambioDePasswordNoSirve() {
+            when(userDetailsService.loadUserByUsername(EMAIL))
+                    .thenReturn(usuario(true, Instant.now()));
+
+            Message<?> mensaje = subscribe("/topic/chat/42", autenticado(ID_USUARIO),
+                    sesionCon(new JwtHandshakeInterceptor.DatosToken(
+                            JTI, Instant.now().plusSeconds(3600), Instant.now().minusSeconds(3600))));
+
+            assertThatThrownBy(() -> interceptor.preSend(mensaje, canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("contraseña ha cambiado");
+        }
+
+        @Test
+        @DisplayName("Cuenta borrada después del handshake -> rechazo limpio, no un error del canal")
+        void laCuentaBorradaSeRechazaSinRomper() {
+            when(userDetailsService.loadUserByUsername(EMAIL))
+                    .thenThrow(new UsernameNotFoundException("no existe"));
+
+            assertThatThrownBy(() -> interceptor.preSend(destino("/topic/chat/42"), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("ya no es válida");
+        }
+
+        @Test
+        @DisplayName("Sesión sin datos del token -> se rechaza, no se deja pasar por no poder comprobar")
+        void sinDatosDelTokenSeRechaza() {
+            // Solo se llegaría aquí con una sesión abierta antes de que esto
+            // existiera, o si alguien retirase JwtHandshakeInterceptor de la cadena.
+            // En los dos casos, no poder verificar una sesión es motivo para no
+            // fiarse de ella: fallar cerrado, no abierto.
+            Message<?> mensaje = subscribe("/topic/chat/42", autenticado(ID_USUARIO), new HashMap<>());
+
+            assertThatThrownBy(() -> interceptor.preSend(mensaje, canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("Vuelve a conectarte");
+
+            verify(chatService, never()).esParticipante(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("Sesión sin atributos siquiera -> mismo rechazo, sin NullPointerException")
+        void sinAtributosDeSesionSeRechaza() {
+            Message<?> mensaje = subscribe("/topic/chat/42", autenticado(ID_USUARIO), null);
+
+            assertThatThrownBy(() -> interceptor.preSend(mensaje, canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("Vuelve a conectarte");
+        }
+
+        @Test
+        @DisplayName("Con la sesión en regla, la suscripción sigue su curso normal")
+        void laSesionValidaNoEstorba() {
+            when(chatService.esParticipante(ID_CHAT, ID_USUARIO)).thenReturn(true);
+
+            assertThat(interceptor.preSend(destino("/topic/chat/42"), canal)).isNotNull();
+        }
+    }
+
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
@@ -209,18 +377,44 @@ class ChatSuscripcionInterceptorTest {
     }
 
     private static Message<?> subscribe(String destino, Principal usuario) {
+        return subscribe(destino, usuario, sesionCon(tokenVigente()));
+    }
+
+    private static Message<?> subscribe(String destino, Principal usuario,
+                                        Map<String, Object> atributosDeSesion) {
         StompHeaderAccessor accesor = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
         accesor.setDestination(destino);
         accesor.setSessionId("sesion-1");
         accesor.setSubscriptionId("sub-0");
         accesor.setUser(usuario);
+        if (atributosDeSesion != null) {
+            accesor.setSessionAttributes(atributosDeSesion);
+        }
         return MessageBuilder.createMessage(new byte[0], accesor.getMessageHeaders());
+    }
+
+    /** Los atributos que JwtHandshakeInterceptor deja en la sesión al aceptarla. */
+    private static Map<String, Object> sesionCon(JwtHandshakeInterceptor.DatosToken datos) {
+        Map<String, Object> atributos = new HashMap<>();
+        atributos.put(JwtHandshakeInterceptor.ATRIBUTO_TOKEN, datos);
+        return atributos;
+    }
+
+    private static JwtHandshakeInterceptor.DatosToken tokenVigente() {
+        return new JwtHandshakeInterceptor.DatosToken(
+                JTI, Instant.now().plusSeconds(3600), Instant.now());
     }
 
     /** El Principal tiene la forma que le da UsuarioHandshakeHandler. */
     private static Principal autenticado(Long id) {
         UsuarioPrincipal usuario = new UsuarioPrincipal(
-                id, "ana@test.es", "$2a$10$hash", Rol.CIUDADANO, true, null);
+                id, EMAIL, "$2a$10$hash", Rol.CIUDADANO, true, null);
         return new UsernamePasswordAuthenticationToken(usuario, null, usuario.getAuthorities());
+    }
+
+    /** Lo que la base de datos responde ahora, que puede no ser lo del handshake. */
+    private static UsuarioPrincipal usuario(boolean activo, Instant passwordChangedAt) {
+        return new UsuarioPrincipal(
+                ID_USUARIO, EMAIL, "$2a$10$hash", Rol.CIUDADANO, activo, passwordChangedAt);
     }
 }

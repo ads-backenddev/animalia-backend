@@ -11,6 +11,7 @@ import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.MatchService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.AfterEach;
@@ -69,6 +70,8 @@ class MatchControllerTest {
     private UserDetailsServiceImpl userDetailsService;
     @MockitoBean
     private TokenRevocadoService tokenRevocadoService;
+    @MockitoBean
+    private ControlIntentosService controlIntentosService;
 
     @BeforeEach
     void autenticarUsuario() {

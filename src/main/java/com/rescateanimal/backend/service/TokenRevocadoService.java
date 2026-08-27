@@ -1,11 +1,13 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.model.TokenRevocado;
+import com.rescateanimal.backend.repository.TokenRevocadoRepository;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Registro de tokens invalidados antes de su caducidad natural.
@@ -15,61 +17,76 @@ import java.util.concurrent.ConcurrentHashMap;
  * - el restablecimiento de contraseña (RF-17), donde el token del enlace debe
  *   servir una sola vez.
  *
- * Se indexa por el jti del token, no por el token entero, para no guardar
- * credenciales completas en memoria.
+ * AHORA PERSISTE EN LA BASE DE DATOS, y ese es el cambio importante. Antes esto
+ * era un ConcurrentHashMap y las revocaciones se perdían al reiniciar la
+ * aplicación: un token del que alguien había hecho logout volvía a autenticar
+ * durante lo que le quedara de sus 24 horas, y reiniciar no es un caso raro sino
+ * cada despliegue. El razonamiento completo está en la migración V8.
  *
- * LIMITACIÓN CONOCIDA: el almacenamiento es en memoria, así que las revocaciones
- * se pierden al reiniciar y no se comparten entre varias instancias de la
- * aplicación. Es suficiente para el despliegue de una sola instancia previsto;
- * si se escala horizontalmente habrá que sustituirlo por Redis o una tabla, sin
- * cambiar esta interfaz.
+ * El contrato hacia fuera no ha cambiado: los dos métodos son los mismos, con la
+ * misma firma y el mismo significado, así que AuthService, JwtAuthFilter y
+ * JwtHandshakeInterceptor no se enteran. Lo que sí cambia es que ahora también
+ * funciona con varias instancias de la aplicación, porque la lista deja de ser
+ * de cada proceso.
+ *
+ * SE INDEXA POR EL jti Y NO POR EL TOKEN ENTERO: el jti no sirve para
+ * autenticarse, de modo que ni esta tabla ni sus copias de seguridad contienen
+ * credenciales utilizables.
+ *
+ * COSTE, QUE CONVIENE TENER PRESENTE: estaRevocado se llama en CADA petición
+ * autenticada, así que ahora hay una consulta por petición donde antes había un
+ * acceso a memoria. Es una búsqueda por clave primaria, que es lo más barato que
+ * hace la base de datos, y a cambio la garantía es real. Si algún día el perfil
+ * de carga lo pide, el sitio donde poner una caché es aquí dentro, sin tocar a
+ * quien llama.
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class TokenRevocadoService {
 
-    /** jti -> instante en que el token caduca por sí solo y ya no hace falta recordarlo. */
-    private final Map<String, Instant> revocados = new ConcurrentHashMap<>();
+    private final TokenRevocadoRepository tokenRevocadoRepository;
 
     /**
      * Marca un token como no utilizable. Guardar su caducidad permite olvidarlo
-     * cuando expire, de modo que el mapa no crece indefinidamente.
+     * cuando expire, de modo que la tabla no crece indefinidamente.
+     *
+     * Es idempotente: el jti es la clave primaria, así que revocar dos veces el
+     * mismo token deja una sola fila.
      */
+    @Transactional
     public void revocar(String jti, Instant expiracion) {
         if (jti == null) {
             return;
         }
-        revocados.put(jti, expiracion);
+
+        TokenRevocado revocado = new TokenRevocado();
+        revocado.setJti(jti);
+        revocado.setExpiraEn(expiracion);
+        tokenRevocadoRepository.save(revocado);
+
         purgarCaducados();
     }
 
+    @Transactional(readOnly = true)
     public boolean estaRevocado(String jti) {
         if (jti == null) {
             return false;
         }
-        Instant expiracion = revocados.get(jti);
-        if (expiracion == null) {
-            return false;
-        }
-        // Si ya caducó por sí solo, el token es invalido de todas formas y se
-        // deja de rastrear.
-        if (expiracion.isBefore(Instant.now())) {
-            revocados.remove(jti);
-            return false;
-        }
-        return true;
+        return tokenRevocadoRepository.existsByJtiAndExpiraEnAfter(jti, Instant.now());
     }
 
     /**
-     * Elimina las entradas que ya han caducado. Se ejecuta al revocar en lugar de
-     * con una tarea programada: el coste es proporcional al número de logouts, y
-     * evita añadir @EnableScheduling solo para esto.
+     * Elimina las filas de tokens que ya han caducado por sí solos.
+     *
+     * Se ejecuta al revocar en lugar de con una tarea programada, igual que
+     * cuando esto vivía en memoria y por el mismo motivo: el coste es
+     * proporcional al número de logouts, y evita añadir @EnableScheduling solo
+     * para esto. Una fila caducada no es peligrosa —el token ya no vale por su
+     * propia firma—, solo es basura.
      */
     private void purgarCaducados() {
-        Instant ahora = Instant.now();
-        int antes = revocados.size();
-        revocados.entrySet().removeIf(entrada -> entrada.getValue().isBefore(ahora));
-        int purgados = antes - revocados.size();
+        int purgados = tokenRevocadoRepository.purgarCaducadosAntesDe(Instant.now());
         if (purgados > 0) {
             log.debug("Purgados {} tokens revocados ya caducados", purgados);
         }

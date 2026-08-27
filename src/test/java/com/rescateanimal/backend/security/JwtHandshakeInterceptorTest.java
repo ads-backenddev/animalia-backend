@@ -73,6 +73,7 @@ class JwtHandshakeInterceptorTest {
         when(jwtService.getJti(claims)).thenReturn(JTI);
         when(jwtService.getEmail(claims)).thenReturn(EMAIL);
         when(jwtService.getEmitidoEn(claims)).thenReturn(Instant.now());
+        when(jwtService.getExpiracion(claims)).thenReturn(Instant.now().plusSeconds(3600));
     }
 
     @Nested
@@ -191,6 +192,38 @@ class JwtHandshakeInterceptorTest {
 
             assertThat(ejecutar()).isTrue();
             assertThat(atributos).containsKey(JwtHandshakeInterceptor.ATRIBUTO_USUARIO);
+        }
+
+        @Test
+        @DisplayName("La sesión se lleva jti, caducidad y emisión, para poder revalidarse después")
+        void laSesionGuardaLosDatosDelToken() {
+            // Es lo que ChatSuscripcionInterceptor necesita para volver a comprobar
+            // el token en cada SUBSCRIBE. Sin estos datos falla cerrado y no deja
+            // suscribirse a nada, así que el handshake tiene que dejarlos puestos.
+            conTokenValido();
+            when(userDetailsService.loadUserByUsername(EMAIL)).thenReturn(principal(true, null));
+
+            assertThat(ejecutar()).isTrue();
+
+            Object datos = atributos.get(JwtHandshakeInterceptor.ATRIBUTO_TOKEN);
+            assertThat(datos).isInstanceOf(JwtHandshakeInterceptor.DatosToken.class);
+
+            JwtHandshakeInterceptor.DatosToken token = (JwtHandshakeInterceptor.DatosToken) datos;
+            assertThat(token.jti()).isEqualTo(JTI);
+            assertThat(token.expiraEn()).isAfter(Instant.now());
+            assertThat(token.emitidoEn()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("El token entero NO se guarda en la sesión: sería una credencial más de la que preocuparse")
+        void elTokenEnteroNoSeGuarda() {
+            conTokenValido();
+            when(userDetailsService.loadUserByUsername(EMAIL)).thenReturn(principal(true, null));
+
+            assertThat(ejecutar()).isTrue();
+            assertThat(atributos.values())
+                    .as("con el jti basta para revalidar, y no sirve para autenticarse")
+                    .doesNotContain(TOKEN);
         }
     }
 
