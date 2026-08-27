@@ -130,17 +130,38 @@ RF-01, RF-13, RF-16, RF-17.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409` |
-| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409` |
-| `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403` |
+| `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409`, `429` |
+| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `429` |
+| `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403`, `429` |
 | `POST` | `/api/auth/logout` | Cierra la sesión del cliente e invalida el token en la lista de revocados | Autenticado | — | — | `204`, `401` |
-| `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400` |
+| `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400`, `429` |
 | `POST` | `/api/auth/restablecer-password` | Fija la nueva contraseña a partir del token del enlace | Público | `RestablecerPasswordRequest`: `token`, `nuevaPassword` | — | `204`, `400` |
 
 **`403` en login:** cuenta bloqueada por el administrador (`activo = false`), con código
 `CUENTA_BLOQUEADA`, o protectora en estado `PENDIENTE` / `RECHAZADA`, con `PROTECTORA_PENDIENTE` o
 `PROTECTORA_RECHAZADA`. El bloqueo no espera a que caduque el token que el usuario ya tuviera: se
 comprueba en cada petición, así que sus llamadas pasan a `401` en el acto (§11).
+
+**`429 DEMASIADOS_INTENTOS`:** límite de intentos contra los tres endpoints donde se adivinan
+contraseñas. Hay dos contadores independientes, los dos sobre una **ventana deslizante de 15
+minutos**:
+
+| Contador | Límite | Se reinicia |
+|---|---|---|
+| Por cuenta (el `email` del cuerpo, normalizado) | 5 | Al autenticarse con éxito |
+| Por dirección de origen | 30 | Nunca dentro de la ventana |
+
+La respuesta lleva la cabecera **`Retry-After`** con los segundos que faltan y el cuerpo de error
+habitual. El corte ocurre en un filtro, **antes** del controller, así que un ataque no llega a gastar
+BCrypt ni a consultar la base de datos. El mensaje es el mismo exista o no la cuenta, para no
+convertir el 429 en un detector de cuentas registradas.
+
+Los tres valores se configuran con `app.auth.max-intentos-cuenta`, `app.auth.max-intentos-ip` y
+`app.auth.ventana-intentos-minutos`. No están fijados en el código porque un despliegue detrás de una
+NAT compartida —un instituto, una oficina— manda a mucha gente por la misma dirección y necesita subir
+el tope por IP sin recompilar.
+
+`POST /api/auth/restablecer-password` **no** se limita, y es deliberado: ver §17.
 
 ---
 
@@ -812,6 +833,16 @@ para escuchar conversaciones ajenas. Lo comprueba `ChatSuscripcionInterceptor` e
 rechaza igual el chat ajeno que el inexistente —en un canal STOMP no hay `403` frente a `404` que
 distinguir—.
 
+**Cada `SUBSCRIBE` revalida la sesión**, sea al destino que sea, antes de decidir nada sobre él: que
+el token no haya caducado, que no se haya revocado con un *logout*, que la cuenta siga activa y que
+el token no sea anterior al último cambio de contraseña. Son las mismas comprobaciones que
+`JwtAuthFilter` hace en cada petición REST, y hacen falta porque el handshake ocurre **una sola vez**:
+sin ellas una conexión abierta seguiría admitiendo suscripciones nuevas durante horas después de que
+el usuario cerrara sesión o un administrador lo bloqueara. Los errores son `Tu sesión ha caducado`,
+`Tu sesión ya no es válida` y `Tu cuenta ha sido bloqueada por un administrador`, y llegan por
+`/user/queue/errores`. **Lo que esto no hace es cerrar la conexión ni cancelar las suscripciones ya
+hechas**: ver la limitación conocida en §17.
+
 **No se admiten suscripciones con comodín.** El bróker no reparte comparando cadenas: usa un
 `AntPathMatcher`, así que un `SUBSCRIBE` a `/topic/chat/*` o a `/topic/**` recibiría todo lo que se
 publique en `/topic/chat/{chatId}`, de cualquier conversación. Como ningún destino documentado aquí
@@ -934,6 +965,15 @@ aviso, dejando el código y la base de datos describiendo cosas distintas.
 de una notificación del tipo nuevo fallaría en ejecución. La migración borra y recrea
 `notificacion_tipo_check` con los nueve valores.
 
+**Las pruebas no estaban corriendo con `validate`, y ahora sí.** `application-test.properties` importa
+el `.env` para no versionar credenciales, y ese `.env` arrastraba un `JPA_DDL_AUTO=update` de la época
+anterior a Flyway. Como `application.properties` declara
+`spring.jpa.hibernate.ddl-auto=${JPA_DDL_AUTO:validate}`, el resultado era que la suite se ejecutaba
+con **`update`** sin que nada lo dijera: Hibernate podía crear al vuelo la columna que a una migración
+se le hubiera olvidado, que es exactamente lo que estas pruebas existen para detectar. El perfil de
+test fija ahora `validate` de forma explícita. Conviene leer con esa reserva cualquier afirmación
+anterior sobre migraciones «verificadas contra `validate`»: hasta este cambio, no lo estaban.
+
 **Sobre `V7`.** La columna se añade en tres pasos —nulable, `UPDATE` de las filas existentes a
 `'VISIBLE'`, y solo entonces `SET NOT NULL`— porque `AVISTAMIENTO` puede tener filas y un
 `ADD COLUMN NOT NULL` sin defecto las rechazaría. **No** lleva `DEFAULT` en la base de datos a
@@ -950,7 +990,7 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 416 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 471 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
 `MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
@@ -982,3 +1022,108 @@ bloque 5.
 | `MATCH_REGISTRO` no tiene índice por `(tipo_publicacion, interesado)`. Las consultas del panel de RF-10 filtran por ahí, y el único índice existente empieza por `usuario_id`, así que no las sirve. Con los volúmenes del proyecto no se nota | Cuando el panel tenga volumen que lo justifique |
 | El `motivo` de un bloqueo o un rechazo no llega al usuario: solo queda en el log, porque `NOTIFICACION` no tiene campo de texto (§11). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
 | No hay endpoint de alta de administradores, ni debe haberlo: la cuenta `ADMIN` se crea desde la base de datos, como la cuenta raíz de cualquier panel | Fuera de alcance |
+
+---
+
+## 17. Bloque de refuerzo de la autenticación
+
+Cierre de los riesgos que salieron de la auditoría de tokens y sesiones. No añade ningún requisito
+funcional: endurece RF-13, RF-16 y RF-17 sobre lo que ya existía.
+
+### Lo que cambió en el contrato
+
+| Cambio | Dónde |
+|---|---|
+| Nuevo `429 DEMASIADOS_INTENTOS`, con cabecera `Retry-After`, en login, registro y recuperación | §2 |
+| El coste de BCrypt sube de 10 a 12 | `SecurityConfig` |
+| El JWT de acceso pierde los claims `uid` y `rol`: solo lleva `sub`, `jti`, `tipo`, `iat` y `exp` | `JwtService` |
+| Las revocaciones de token pasan a la tabla `TOKEN_REVOCADO` (`V8`) y sobreviven al reinicio | `TokenRevocadoService` |
+| Cada `SUBSCRIBE` de WebSocket revalida token, revocación y estado de la cuenta | §13 |
+
+**Sobre los claims retirados.** No los leía nadie: `JwtAuthFilter` recarga la fila del usuario en
+cada petición y construye las autoridades desde ella, precisamente para que un bloqueo o un cambio de
+rol surtan efecto en el acto en vez de esperar a que caduque el token. Lo único que hacían era
+publicar quién eres y qué puedes hacer a cualquiera que leyera el token —un JWT va **firmado, no
+cifrado**, así que su contenido se lee en claro—, y el token aparece en sitios incómodos, como la
+query del handshake WebSocket, que acaba en los registros del servidor (RNF-10).
+
+**Sobre el coste 12 de BCrypt.** El coste viaja dentro del propio hash, así que subirlo **no**
+invalida las contraseñas ya guardadas: siguen verificándose con el 10 con el que se crearon. Lo que
+queda pendiente es rehashearlas al entrar (ver más abajo).
+
+**Sobre `V8`.** La lista de tokens revocados vivía en un `ConcurrentHashMap` dentro del service, de
+modo que cada despliegue la vaciaba y un token del que alguien había hecho *logout* volvía a
+autenticar durante lo que le quedara de sus 24 horas. La tabla guarda **solo el `jti`** y su
+caducidad, nunca el token entero, y se purga sola al revocar. `TokenRevocadoService` conserva su
+interfaz —`revocar` y `estaRevocado`—, así que ningún otro punto del código cambió.
+
+### La revalidación en cada `SUBSCRIBE`
+
+El handshake comprueba el token **una sola vez**, al abrir la conexión. A partir de ahí la sesión
+vivía por su cuenta: sobrevivía al logout, al bloqueo por un administrador y al cambio de contraseña,
+y seguía admitiendo suscripciones nuevas durante horas. Chocaba de frente con el cuidado del lado
+REST, donde cada petición recarga el usuario para que un bloqueo se note en el acto.
+
+`ChatSuscripcionInterceptor` repite ahora, en cada suscripción y antes de decidir nada sobre el
+destino, las mismas cuatro comprobaciones de `JwtAuthFilter` y en el mismo orden: el token no ha
+caducado, no está revocado, la cuenta sigue activa y el token no es anterior al último cambio de
+contraseña. La sesión guarda el `jti`, la caducidad y la emisión —**no el token**, que sería una
+credencial utilizable más de la que preocuparse—, y si esos datos faltan la suscripción se rechaza en
+vez de dejarla pasar por no poder comprobarla.
+
+### Limitaciones aceptadas, con su razón
+
+Se estudiaron en este bloque y se dejaron como están. Queda escrito para que no se lean como
+descuidos ni se retomen por inercia.
+
+**La expiración sigue en 24 h y no hay tokens de refresco.** Es la decisión de alcance más grande del
+bloque, y es consciente. Ningún RF exige sesiones cortas ni revocación por dispositivo, y el patrón
+—JWT puro con caducidad larga y una lista de revocados— es conocido y aceptable para un proyecto de
+este tamaño. Los tokens de refresco no son una mejora gratuita: traen una tabla de refresco, rotación
+con detección de reutilización, un endpoint nuevo y su propio manejo en el cliente, y cada una de esas
+piezas es una superficie que se puede implementar mal. Lo que de verdad reduce la ventana de un token
+robado ya está puesto: el logout revoca de verdad —y ahora sobrevive al reinicio—, un cambio de
+contraseña invalida de golpe todo lo emitido antes, y un bloqueo se nota en la siguiente petición.
+Se reabre si aparece un requisito de sesión por dispositivo o de cierre remoto.
+
+**Una conexión WebSocket ya abierta no se cierra al bloquear ni al cerrar sesión.** La revalidación
+impide suscripciones **nuevas**, pero no cancela las que ya estuvieran hechas: un usuario bloqueado
+mientras tenía un chat abierto sigue recibiendo lo que se publique en él hasta que su cliente se
+desconecte. Cerrarlas exige un registro de sesiones WebSocket vivas por usuario —escuchar
+`SessionConnectedEvent` y `SessionDisconnectEvent`, guardar el `sessionId` y cerrarlo desde
+`AdminService`—, que es una pieza nueva con su propio estado que mantener. Lo que sí queda cerrado es
+la puerta a abrir nada nuevo, que es por donde se entra a un chat ajeno.
+
+**`POST /api/auth/restablecer-password` no lleva límite de intentos.** Su credencial no es una
+contraseña que se pueda adivinar a mano, sino un JWT firmado: lo que habría que acertar es una firma
+HMAC-SHA256 de 256 bits, y eso no se hace a base de peticiones. Además, limitarlo dejaría sin salida
+justo a quien está intentando recuperar una cuenta comprometida. **La contrapartida hay que decirla:**
+esa garantía no es independiente, es exactamente la fuerza de `JWT_SECRET`. Con un secreto adivinable
+el ataque ni siquiera sería online —basta registrarse, quedarse un token propio y romper el secreto
+fuera del servidor— y quien lo lograra podría fabricarse un enlace de recuperación para cualquier
+cuenta. Por eso el secreto **debe** generarse al azar (`openssl rand -base64 48`) y nunca elegirse a
+mano.
+
+**El límite por cuenta es un arma de doble filo, y se asume.** Un tercero puede dispararlo contra la
+cuenta de otro y dejarlo sin entrar hasta quince minutos. Es el precio conocido de cualquier bloqueo
+por cuenta. Se mitiga con que un intento ya bloqueado **no** se apunta, de modo que la ventana no se
+renueva por insistir: el castigo tiene techo y no depende de cuánto aporree el atacante.
+
+**Los contadores viven en memoria.** Un reinicio los borra —una ventana de quince minutos de
+tolerancia, no una sesión resucitada— y no se comparten entre instancias, así que con la API
+replicada el límite efectivo se multiplicaría por el número de réplicas. Persistirlos en base de datos
+haría escribir en cada intento fallido, que es justo lo que un ataque provoca en masa; lo razonable
+llegado el caso sería Redis, y eso es una dependencia de infraestructura que este proyecto no tiene.
+
+**La dirección se toma de `getRemoteAddr()`, no de `X-Forwarded-For`.** Esa cabecera la pone el
+cliente y se falsifica sola: fiarse de ella convertiría el límite por IP en un adorno, porque bastaría
+con mandar una distinta en cada intento. Si esto se despliega detrás de un proxy inverso habrá que
+leerla, pero **solo** tras configurar la lista de proxies de confianza.
+
+### Fuera de alcance, pendientes
+
+| Pendiente | Bloque |
+|---|---|
+| Rehash al entrar: las contraseñas guardadas siguen con el coste 10 con el que se crearon. Subirlas al 12 exige recodificarlas en el login, cuando la contraseña en claro está disponible y ya se ha comprobado | Sin bloque asignado |
+| Purga periódica de `TOKEN_REVOCADO`: hoy se limpia al revocar, así que una instalación sin logouts acumularía filas caducadas indefinidamente. Una tarea `@Scheduled` lo resolvería | Sin bloque asignado |
+| Cierre activo de sesiones WebSocket al bloquear una cuenta (ver arriba) | Sin bloque asignado |
