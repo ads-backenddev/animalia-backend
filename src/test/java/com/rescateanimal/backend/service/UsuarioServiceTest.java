@@ -326,10 +326,61 @@ class UsuarioServiceTest {
             assertThat(usuario.getActivo()).isFalse();
         }
 
+        @Test
+        @DisplayName("Si era una persona física, su nombre y su dirección también desaparecen")
+        void laPersonaFisicaSeAnonimizaEntera() {
+            // El caso real: alguien que rescata por su cuenta, sin estructura
+            // legal, que puso su propio nombre como organización y su domicilio
+            // como dirección. Conservarlos sería dejar expuesta a una persona que
+            // acaba de pedir que la borren.
+            Protectora particular = protectora();
+            particular.setEsPersonaFisica(true);
+            particular.setNombreOrganizacion("María Gómez Ruiz");
+            particular.setDireccion("C/ del Olmo 14, 3ºB");
+            prepararProtectora(particular, List.of());
+
+            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
+
+            assertThat(particular.getNombreOrganizacion()).isEqualTo("Protectora eliminada");
+            assertThat(particular.getDireccion()).isNull();
+        }
+
+        @Test
+        @DisplayName("Si era una entidad, el nombre y la dirección se conservan")
+        void laEntidadConservaSusDatos() {
+            // Son datos de una organización, no de una persona, y siguen
+            // explicando de dónde salió cada animal que publicó.
+            Protectora asociacion = protectora();
+            asociacion.setEsPersonaFisica(false);
+            prepararProtectora(asociacion, List.of());
+
+            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
+
+            assertThat(asociacion.getNombreOrganizacion()).isEqualTo("Huellas");
+            assertThat(asociacion.getDireccion()).isEqualTo("C/ Mayor 1");
+        }
+
+        @Test
+        @DisplayName("La zona geográfica no se toca en ningún caso: no identifica a nadie")
+        void laZonaSeConservaSiempre() {
+            Protectora particular = protectora();
+            particular.setEsPersonaFisica(true);
+            prepararProtectora(particular, List.of());
+
+            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
+
+            // Es una comarca o una ciudad, y es lo que permite que el histórico
+            // siga diciendo dónde operaba quien publicó cada animal.
+            assertThat(particular.getZonaGeografica()).isEqualTo("Madrid");
+        }
+
         private void prepararProtectoraCon(List<AnimalAdopcion> disponibles) {
+            prepararProtectora(protectora(), disponibles);
+        }
+
+        private void prepararProtectora(Protectora protectora, List<AnimalAdopcion> disponibles) {
             usuario.setRol(Rol.PROTECTORA);
-            when(protectoraRepository.findByUsuarioId(ID_USUARIO))
-                    .thenReturn(Optional.of(protectora()));
+            when(protectoraRepository.findByUsuarioId(ID_USUARIO)).thenReturn(Optional.of(protectora));
             when(animalAdopcionRepository.findByProtectoraIdAndEstado(
                     ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(disponibles);
         }
@@ -357,7 +408,10 @@ class UsuarioServiceTest {
         Protectora protectora = new Protectora();
         protectora.setId(ID_PROTECTORA);
         protectora.setNombreOrganizacion("Huellas");
+        protectora.setDireccion("C/ Mayor 1");
+        protectora.setZonaGeografica("Madrid");
         protectora.setEstado(EstadoProtectora.ACTIVA);
+        protectora.setEsPersonaFisica(false);
         return protectora;
     }
 

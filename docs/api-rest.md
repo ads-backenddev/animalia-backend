@@ -131,7 +131,7 @@ RF-01, RF-13, RF-16, RF-17.
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409`, `413`, `429` |
-| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `413`, `429` |
+| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica`, `esPersonaFisica?` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `413`, `429` |
 | `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403`, `413`, `429` |
 | `POST` | `/api/auth/logout` | Cierra la sesión del cliente e invalida el token en la lista de revocados | Autenticado | — | — | `204`, `401` |
 | `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400`, `413`, `429` |
@@ -1399,10 +1399,28 @@ ofrece», el mismo al que llegan la retirada manual y la administrativa.
 el hecho de que ese animal encontró casa, que es el dato que da sentido al histórico que esta baja se
 esfuerza en conservar.
 
-**La fila de `PROTECTORA` no se anonimiza.** El nombre de la organización, su dirección y su zona son
-datos de una entidad, no de una persona, y siguen apareciendo en las fichas de los animales que
-publicó: borrarlos dejaría cada adopción histórica sin decir de dónde salió el animal. La cuenta que
-la gestionaba sí queda anonimizada e inutilizable, que es lo que RF-19 pide.
+**La fila de `PROTECTORA` se anonimiza solo si detrás había una persona**, y lo decide el campo
+`esPersonaFisica` que la propia protectora declara al registrarse (`V12`).
+
+| `esPersonaFisica` | Al darse de baja |
+|---|---|
+| `false` — una asociación registrada | `nombreOrganizacion`, `direccion` y `zonaGeografica` **se conservan** |
+| `true` — un particular que rescata por su cuenta | `nombreOrganizacion` → `"Protectora eliminada"`, `direccion` → `null` |
+
+Los dos casos existen y no se distinguen mirando el dato. Para una asociación, el nombre y la
+dirección son de la entidad y son los que explican de dónde salió cada animal publicado; borrarlos
+dejaría cada adopción histórica sin procedencia. Pero en España es muy común que una protectora sea
+alguien que rescata por su cuenta, sin estructura legal, que pone **su propio nombre** como
+organización y **su domicilio particular** como dirección: para esa persona esas dos columnas son
+datos personales tan identificables como su teléfono, y conservarlas sería dejar expuesta a quien
+acaba de pedir que la borren.
+
+**Se declara, no se deduce.** Nada en una cadena de texto distingue con fiabilidad «Huellas de
+Getafe» de «María Gómez Ruiz», y equivocarse cuesta en las dos direcciones. Es un campo opcional en el
+registro y **ausente equivale a `false`**, que es el caso mayoritario y el que conserva el histórico.
+
+**La zona geográfica no se toca nunca**: es una comarca o una ciudad, no identifica a nadie, y es lo
+que permite que el histórico siga diciendo dónde operaba quien publicó cada animal.
 
 ### Idioma (RF-18)
 
@@ -1432,6 +1450,15 @@ liberaría en silencio todos los emails borrados —un fallo peor, porque no se 
 contenido que escribió: si alguien firmó un mensaje con su nombre, ahí sigue. Rastrearlo exigiría
 analizar texto libre, con los falsos positivos que eso trae, y borraría contenido de una conversación
 que pertenece también a la otra parte.
+
+**Las protectoras registradas antes de `V12` quedan en `esPersonaFisica = false`, y no hay forma
+retroactiva de saber cuáles eran personas.** Una protectora anterior a esa migración que sí lo fuera
+seguirá sin la protección hasta que alguien lo declare a mano, porque el dato solo lo sabe ella y no
+se puede inferir de su nombre. No se eligió `true` como valor por defecto porque sería peor:
+anonimizaría el nombre de asociaciones reales al darse de baja, dejando sin procedencia el histórico
+de adopciones que este diseño se esfuerza en conservar. Entre dejar un dato de más y borrar uno que
+hacía falta, se deja el de más y se dice en voz alta. Cerrarlo requiere o bien preguntárselo a las
+protectoras existentes, o bien un endpoint para que rectifiquen su ficha, que RF-10 no contempla.
 
 **Nadie puede registrarse en `@cuenta-eliminada.invalid`**, y la prohibición no es celo de más. Los
 emails anonimizados son deterministas, así que sin ella quien conociera el email de otra persona podía

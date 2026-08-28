@@ -132,7 +132,7 @@ class AuthServiceTest {
         void laProtectoraNacePendiente() {
             RegistroProtectoraRequest peticion = new RegistroProtectoraRequest(
                     "Refugio", "refugio@test.es", "passw0rd123", null,
-                    "Huellas", "C/ Mayor 1", "Madrid");
+                    "Huellas", "C/ Mayor 1", "Madrid", null);
             when(usuarioRepository.existsByEmail("refugio@test.es")).thenReturn(false);
             when(passwordEncoder.encode(anyString())).thenReturn("$2a$10$hash");
             when(usuarioRepository.save(any(Usuario.class))).thenAnswer(i -> i.getArgument(0));

@@ -1,7 +1,9 @@
 package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -9,6 +11,7 @@ import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.MensajeRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
+import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.net.URI;
@@ -69,6 +73,10 @@ class GestionCuentaFlujoCompletoTest {
     @Autowired
     private UsuarioRepository usuarioRepository;
     @Autowired
+    private ProtectoraRepository protectoraRepository;
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+    @Autowired
     private AlertaRepository alertaRepository;
     @Autowired
     private AvistamientoRepository avistamientoRepository;
@@ -92,8 +100,10 @@ class GestionCuentaFlujoCompletoTest {
     private Long idTestigo;
     private Long idAlerta;
     private Long idAvistamiento;
+    private String tokenAdmin;
 
     private final List<Long> usuariosCreados = new ArrayList<>();
+    private final List<Long> protectorasCreadas = new ArrayList<>();
 
     @BeforeEach
     void prepararEscenario() throws Exception {
@@ -141,6 +151,7 @@ class GestionCuentaFlujoCompletoTest {
         if (idAlerta != null) {
             alertaRepository.deleteById(idAlerta);
         }
+        protectoraRepository.deleteAllById(protectorasCreadas);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 
@@ -343,9 +354,97 @@ class GestionCuentaFlujoCompletoTest {
         assertThat(registro.statusCode()).isEqualTo(409);
     }
 
+    @Test
+    @DisplayName("Una protectora que es persona física pierde también nombre y dirección")
+    void laProtectoraPersonaFisicaSeAnonimizaEntera() throws Exception {
+        long[] particular = registrarProtectora("particular", "María Gómez Ruiz",
+                "C/ del Olmo 14, 3ºB", true);
+        String token = entrar(emailDe("particular"));
+
+        assertThat(enviar("DELETE", "/api/usuarios/me", token,
+                "{\"password\":\"" + CLAVE + "\"}").statusCode()).isEqualTo(204);
+
+        Protectora anonimizada = protectoraRepository.findById(particular[1]).orElseThrow();
+        assertThat(anonimizada.getNombreOrganizacion()).isEqualTo("Protectora eliminada");
+        assertThat(anonimizada.getDireccion()).isNull();
+        assertThat(anonimizada.getZonaGeografica())
+                .as("una comarca no identifica a nadie y sostiene el histórico")
+                .isEqualTo("Madrid");
+    }
+
+    @Test
+    @DisplayName("Una protectora que es entidad conserva su nombre y su dirección")
+    void laProtectoraEntidadConservaSusDatos() throws Exception {
+        long[] asociacion = registrarProtectora("asociacion", "Huellas de Getafe",
+                "C/ Mayor 1", false);
+        String token = entrar(emailDe("asociacion"));
+
+        assertThat(enviar("DELETE", "/api/usuarios/me", token,
+                "{\"password\":\"" + CLAVE + "\"}").statusCode()).isEqualTo(204);
+
+        // Son datos de una organización, no de una persona, y siguen explicando de
+        // dónde salió cada animal que publicó.
+        Protectora intacta = protectoraRepository.findById(asociacion[1]).orElseThrow();
+        assertThat(intacta.getNombreOrganizacion()).isEqualTo("Huellas de Getafe");
+        assertThat(intacta.getDireccion()).isEqualTo("C/ Mayor 1");
+    }
+
+    @Test
+    @DisplayName("Sin declararlo, una protectora nace como entidad")
+    void sinDeclararloEsEntidad() throws Exception {
+        long[] callada = registrarProtectora("callada", "Refugio del Sur", "C/ Sur 3", null);
+
+        assertThat(protectoraRepository.findById(callada[1]).orElseThrow().getEsPersonaFisica())
+                .as("ausente equivale a no: es el caso mayoritario y conserva el histórico")
+                .isFalse();
+    }
+
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
+
+    /** @return {id de la cuenta, id de la protectora} */
+    private long[] registrarProtectora(String papel, String nombreOrganizacion,
+                                       String direccion, Boolean esPersonaFisica) throws Exception {
+
+        String declaracion = esPersonaFisica == null
+                ? ""
+                : ",\"esPersonaFisica\":" + esPersonaFisica;
+
+        HttpResponse<String> registro = enviar("POST", "/api/auth/registro/protectora", null, """
+                {"nombre":"Titular","email":"%s","password":"%s",
+                 "nombreOrganizacion":"%s","direccion":"%s","zonaGeografica":"Madrid"%s}
+                """.formatted(emailDe(papel), CLAVE, nombreOrganizacion, direccion, declaracion));
+        assertThat(registro.statusCode()).isEqualTo(201);
+
+        Long cuentaId = usuarioRepository.findByEmail(emailDe(papel)).orElseThrow().getId();
+        usuariosCreados.add(cuentaId);
+
+        Long protectoraId = protectoraRepository.findByUsuarioId(cuentaId).orElseThrow().getId();
+        protectorasCreadas.add(protectoraId);
+
+        // Sin aprobar no puede ni entrar; la baja no depende del estado, pero el
+        // login sí.
+        aprobarProtectora(protectoraId);
+        return new long[]{cuentaId, protectoraId};
+    }
+
+    /** El administrador se crea a mano: no hay endpoint de alta para ADMIN. */
+    private void aprobarProtectora(Long protectoraId) throws Exception {
+        if (tokenAdmin == null) {
+            Usuario admin = new Usuario();
+            admin.setNombre("Administrador");
+            admin.setEmail(emailDe("admin"));
+            admin.setPasswordHash(passwordEncoder.encode(CLAVE));
+            admin.setRol(Rol.ADMIN);
+            admin.setActivo(true);
+            admin.setIdioma("es");
+            usuariosCreados.add(usuarioRepository.save(admin).getId());
+            tokenAdmin = entrar(emailDe("admin"));
+        }
+        assertThat(enviar("PUT", "/api/admin/protectoras/" + protectoraId + "/aprobar",
+                tokenAdmin, null).statusCode()).isEqualTo(200);
+    }
 
     /**
      * Monta el escenario mínimo con un chat entre los dos: una alerta del dueño,

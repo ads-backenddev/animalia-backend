@@ -46,4 +46,21 @@ public class RegistroProtectoraRequest {
     @NotBlank(message = "la zona geográfica es obligatoria")
     @Size(max = 150, message = "la zona geográfica no puede superar los 150 caracteres")
     private String zonaGeografica;
+
+    /**
+     * Si detrás de la protectora hay una persona particular y no una entidad.
+     *
+     * Opcional, y ausente equivale a `false`: quien no responda queda como
+     * organización, que es el caso mayoritario y el que conserva el histórico
+     * intacto. Marcarlo cambia qué pasa al darse de baja — el nombre y la
+     * dirección se anonimizan también (RF-19, §19) — porque para un particular
+     * que rescata por su cuenta esos dos campos son su nombre y su domicilio.
+     *
+     * SE PREGUNTA PORQUE NO SE PUEDE DEDUCIR. Nada en una cadena de texto
+     * distingue con fiabilidad "Huellas de Getafe" de "María Gómez Ruiz", y
+     * equivocarse tiene coste en las dos direcciones: borrar de más deja el
+     * histórico de adopciones sin procedencia, borrar de menos deja expuesta a
+     * una persona.
+     */
+    private Boolean esPersonaFisica;
 }

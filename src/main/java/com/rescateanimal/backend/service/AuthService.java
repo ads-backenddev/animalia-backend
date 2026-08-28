@@ -107,6 +107,10 @@ public class AuthService {
         protectora.setDireccion(peticion.getDireccion());
         protectora.setZonaGeografica(peticion.getZonaGeografica());
         protectora.setEstado(EstadoProtectora.PENDIENTE);
+        // Ausente equivale a "no": quien no responda queda como organización, que
+        // es el caso mayoritario y el que conserva el histórico intacto. Ver
+        // RegistroProtectoraRequest.esPersonaFisica.
+        protectora.setEsPersonaFisica(Boolean.TRUE.equals(peticion.getEsPersonaFisica()));
 
         return aProtectoraResponse(protectoraRepository.save(protectora));
     }

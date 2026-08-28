@@ -167,7 +167,7 @@ public class UsuarioService {
         }
 
         if (usuario.getRol() == Rol.PROTECTORA) {
-            retirarAnimalesDeLaProtectora(usuarioId);
+            darDeBajaLaProtectora(usuarioId);
         }
 
         usuario.setNombre(anonimizacion.nombreAnonimo());
@@ -202,15 +202,10 @@ public class UsuarioService {
      * el dato que da sentido al histórico que esta baja se esfuerza en conservar.
      * Los ya RETIRADO tampoco, porque no hay nada que cambiar.
      *
-     * LA FILA DE PROTECTORA NO SE ANONIMIZA. El nombre de la organización, su
-     * dirección y su zona son datos de una entidad, no de una persona, y siguen
-     * apareciendo en las fichas de los animales que publicó: borrarlos dejaría
-     * cada adopción histórica sin decir de dónde salió el animal. La cuenta que la
-     * gestionaba sí queda anonimizada e inutilizable, que es lo que RF-19 pide.
-     * Si algún día una protectora fuera una persona física con su nombre por
-     * rótulo, esto habría que revisarlo; queda anotado en docs/api-rest.md §19.
+     * LA FILA DE PROTECTORA SOLO SE ANONIMIZA SI ERA UNA PERSONA. Ver
+     * anonimizarSiEsPersonaFisica.
      */
-    private void retirarAnimalesDeLaProtectora(Long usuarioId) {
+    private void darDeBajaLaProtectora(Long usuarioId) {
         Protectora protectora = protectoraRepository.findByUsuarioId(usuarioId).orElse(null);
         if (protectora == null) {
             // Una cuenta con rol PROTECTORA sin fila de organización no debería
@@ -219,6 +214,11 @@ public class UsuarioService {
             return;
         }
 
+        retirarAnimalesDisponibles(protectora);
+        anonimizarSiEsPersonaFisica(protectora);
+    }
+
+    private void retirarAnimalesDisponibles(Protectora protectora) {
         List<AnimalAdopcion> disponibles = animalAdopcionRepository
                 .findByProtectoraIdAndEstado(protectora.getId(), EstadoAnimal.DISPONIBLE);
 
@@ -228,6 +228,40 @@ public class UsuarioService {
             log.info("Retirados {} animales de la protectora {} al darse de baja",
                     disponibles.size(), protectora.getId());
         }
+    }
+
+    /**
+     * Borra el nombre y la dirección cuando detrás de la protectora había una
+     * persona particular, no una entidad.
+     *
+     * POR QUÉ DEPENDE DE UN CAMPO Y NO ES SIEMPRE. Para una asociación
+     * registrada, el nombre y la dirección son datos de la entidad: siguen
+     * apareciendo en las fichas de los animales que publicó, y borrarlos dejaría
+     * cada adopción histórica sin decir de dónde salió el animal. Pero en España
+     * es muy común que una protectora sea alguien que rescata por su cuenta, sin
+     * estructura legal, y entonces esas dos columnas son su nombre y su domicilio
+     * particular: conservarlas sería dejar expuesta a una persona que acaba de
+     * pedir que la borren. Los dos casos existen y no se distinguen mirando el
+     * dato, así que se pregunta al registrarse (RF-19, §19).
+     *
+     * LA ZONA GEOGRÁFICA NO SE TOCA. Es una comarca o una ciudad —"Madrid",
+     * "Bajo Deba"—, no una dirección: no identifica a nadie y es lo que permite
+     * que el histórico siga diciendo dónde operaba quien publicó cada animal.
+     *
+     * ES TAN IRREVERSIBLE COMO EL RESTO: no se guarda copia en ninguna parte, ni
+     * hay tabla de auditoría de la que rescatarlo.
+     */
+    private void anonimizarSiEsPersonaFisica(Protectora protectora) {
+        if (!Boolean.TRUE.equals(protectora.getEsPersonaFisica())) {
+            return;
+        }
+
+        protectora.setNombreOrganizacion(anonimizacion.organizacionAnonima());
+        protectora.setDireccion(null);
+
+        // Sin el nombre ni la dirección en el log, por lo mismo que en la cuenta:
+        // la baja es justo el momento en que dejan de poder guardarse (RNF-10).
+        log.info("Protectora {} anonimizada: era una persona física", protectora.getId());
     }
 
     // ---------------------------------------------------------------------

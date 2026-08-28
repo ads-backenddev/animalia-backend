@@ -56,6 +56,9 @@ public class AnonimizacionService {
     /** Lo que ve la otra parte de una conversación donde alguien se dio de baja. */
     static final String NOMBRE_ANONIMO = "Usuario eliminado";
 
+    /** Lo que queda como organizacion cuando la protectora era una persona. */
+    static final String ORGANIZACION_ANONIMA = "Protectora eliminada";
+
     /**
      * El email con el que queda una cuenta borrada: irreversible y siempre el
      * mismo para el mismo email de partida.
@@ -72,6 +75,20 @@ public class AnonimizacionService {
     /** El nombre que sustituye al real. Igual para todos: no distingue a nadie. */
     public String nombreAnonimo() {
         return NOMBRE_ANONIMO;
+    }
+
+    /**
+     * El nombre con el que queda la organización de una protectora que era una
+     * persona particular.
+     *
+     * Igual para todas, por lo mismo que el de usuario: uno con el id dentro
+     * seguiría distinguiendo una de otra. Y no se deja en blanco porque la
+     * columna es NOT NULL y porque el histórico necesita decir algo — las fichas
+     * de los animales que publicó siguen ahí, y "Protectora eliminada" explica
+     * por qué no hay más.
+     */
+    public String organizacionAnonima() {
+        return ORGANIZACION_ANONIMA;
     }
 
     /**
