@@ -143,10 +143,6 @@ public class ProtectoraPanelService {
     /**
      * Valoraciones recibidas, con la media ya calculada (RF-10, RF-23).
      *
-     * Hoy devuelve siempre lista vacía y media nula, y no es un endpoint a
-     * medias: la lectura es real, lo que no existe todavía es forma de crear
-     * valoraciones. Ver ValoracionesPanelResponse.
-     *
      * La media se calcula sobre lo que se acaba de leer en vez de pedirla otra
      * vez a la base de datos: ya están todas en memoria, y así media y listado
      * no pueden discrepar.

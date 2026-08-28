@@ -15,23 +15,17 @@ import java.time.Instant;
 /**
  * Un reporte pendiente de revisar por el administrador (RF-11, RF-26).
  *
- * DEPENDE DE UN BLOQUE QUE AÚN NO EXISTE, IGUAL QUE LAS VALORACIONES DEL PANEL
- * DE PROTECTORA. La lectura es real y funciona contra la tabla REPORTE, que
- * existe desde la migración V1, pero NADA puede insertar en ella todavía: no hay
- * ReporteService implementado ni endpoint para reportar contenido, que son del
- * bloque 9 (RF-26). Hasta entonces GET /api/admin/reportes devuelve siempre lista
- * vacía. En cuanto ese bloque exista, empieza a devolver datos sin tocarlo.
+ * QUÉ SE ENSEÑA DEL OBJETIVO, Y POR QUÉ NO MÁS. Solo el par (tipoObjetivo,
+ * objetivoId), más tipoContenido cuando el objetivo es una publicación. No se
+ * resuelve el contenido reportado ni su autor, y no es una simplificación
+ * pendiente de completar: un reporte es una acusación SIN REVISAR, y devolver los
+ * datos de la persona reportada —a quien la denuncia, en la respuesta del POST, o
+ * a cualquiera que liste la cola— convertiría el endpoint en una forma cómoda de
+ * sacarle el contacto a alguien con quien se ha discutido (RNF-10). Con el par
+ * basta para actuar: DELETE /api/admin/publicaciones/{id} recibe exactamente eso.
  *
- * Tampoco existe todavía la acción de resolver un reporte: el tipo de
- * notificación REPORTE_RESUELTO está en el enum desde el principio, esperándola.
- *
- * QUÉ SE ENSEÑA DEL OBJETIVO. Solo el par (tipoObjetivo, objetivoId), más
- * tipoContenido cuando el objetivo es una publicación. No se resuelve el
- * contenido reportado ni su autor: son tres tablas distintas según el
- * discriminador, y decidir qué se muestra de cada una es parte de diseñar la
- * pantalla de revisión, que pertenece al bloque 9. El administrador ya puede
- * actuar con lo que hay, porque DELETE /api/admin/publicaciones/{id} recibe
- * exactamente ese par.
+ * Del autor sí van id, nombre y foto, vía AutorResponse: son los datos públicos
+ * que ya viajan en cualquier otro listado, sin email ni teléfono.
  */
 @Data
 @Builder

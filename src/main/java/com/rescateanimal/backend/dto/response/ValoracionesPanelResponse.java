@@ -13,20 +13,12 @@ import java.util.List;
  * Valoraciones recibidas por la protectora, con la media ya calculada (RF-10,
  * RF-23).
  *
- * DEPENDE DE UN BLOQUE QUE AÚN NO EXISTE, Y CONVIENE SABERLO. Hoy este endpoint
- * devuelve siempre una lista vacía y una media nula, y no porque esté sin
- * implementar: la lectura es real y funciona contra la tabla VALORACION, pero
- * NADA puede escribir en esa tabla todavía. No hay ValoracionService ni
- * POST /api/protectoras/{id}/valoracion, que son del bloque 9. En cuanto ese
- * bloque exista, este endpoint empieza a devolver datos sin tocarlo.
- *
- * POR QUÉ LA MEDIA NO SALE DE PROTECTORA.valoracionMedia. Esa columna existe,
- * pero está documentada como derivada y sin mantener: ningún código la
- * actualiza, así que hoy es nula para todas las protectoras y en cuanto el
- * bloque 9 empiece a insertar valoraciones seguiría siéndolo hasta que alguien
- * la recalcule. La media que se devuelve aquí se calcula sobre las valoraciones
- * reales, de modo que es correcta por construcción y no puede quedar desfasada.
- * Mantener esa columna —o eliminarla— es trabajo del bloque 9.
+ * LA MEDIA SE CALCULA, NO SE LEE DE NINGUNA COLUMNA. PROTECTORA tuvo una
+ * valoracion_media que nadie mantenía —ningún código la actualizaba, así que era
+ * nula para todas las protectoras— y se eliminó en la migración V9. La media que
+ * se devuelve aquí sale de las valoraciones reales, de modo que es correcta por
+ * construcción y no puede quedar desfasada. Es el mismo número, y calculado de la
+ * misma forma, que expone el detalle de un animal en adopción.
  */
 @Data
 @Builder
@@ -34,7 +26,7 @@ import java.util.List;
 @AllArgsConstructor
 public class ValoracionesPanelResponse {
 
-    /** Más recientes primero. Vacía mientras el bloque 9 no exista. */
+    /** Más recientes primero. */
     private List<ValoracionResponse> valoraciones;
 
     /**

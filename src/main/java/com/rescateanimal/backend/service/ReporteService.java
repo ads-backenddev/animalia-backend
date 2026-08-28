@@ -35,9 +35,17 @@ import org.springframework.transaction.annotation.Transactional;
  * DELETE /api/admin/publicaciones/{id} (RF-11).
  *
  * EL OBJETIVO SE COMPRUEBA, no se cree. Un reporte contra algo que no existe no
- * es inofensivo: llena la cola del administrador de trabajo imposible de juzgar y
- * permitiría sondear qué ids existen si además se respondiera distinto. Se
- * responde 404 igual para lo inexistente que para lo mal formado.
+ * es inofensivo: llena la cola del administrador de trabajo imposible de juzgar,
+ * y quien la atiende no puede ni saber si el caso fue real.
+ *
+ * ESO TIENE UNA CONTRAPARTIDA QUE CONVIENE DECIR: al responder 404 para lo
+ * inexistente y 201 para lo que sí está, este endpoint permite a un autenticado
+ * averiguar qué ids de usuario existen, probándolos uno a uno. Se asume, por tres
+ * cosas. Lo que se aprende es solo "el id N existe", sin nombre, email ni
+ * teléfono. Cada sondeo positivo deja un reporte en la cola, así que es un canal
+ * ruidoso y rastreable, no discreto. Y la alternativa —aceptar en silencio
+ * reportes contra objetivos inexistentes— empeora el problema que este endpoint
+ * existe para resolver. Queda anotado en docs/api-rest.md §18.
  */
 @Slf4j
 @Service
@@ -61,7 +69,7 @@ public class ReporteService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El usuario " + usuarioId + " no existe"));
 
-        exigirObjetivoValido(peticion, usuarioId);
+        String objetivo = exigirObjetivoValido(peticion, usuarioId);
 
         Reporte reporte = new Reporte();
         reporte.setUsuario(autor);
@@ -76,8 +84,8 @@ public class ReporteService {
         // No se registra a quién se reporta: el log lo lee cualquiera con acceso
         // al servidor, y una acusación sin revisar no es un dato que deba quedar
         // ahí (RNF-10). El caso completo está en la tabla, para el administrador.
-        log.info("Reporte {} registrado por el usuario {} sobre un objetivo de tipo {}",
-                guardado.getId(), usuarioId, peticion.getTipoObjetivo());
+        log.info("Reporte {} registrado por el usuario {} sobre {}",
+                guardado.getId(), usuarioId, objetivo);
 
         return aResponse(guardado);
     }
@@ -85,13 +93,24 @@ public class ReporteService {
     /**
      * Comprueba que lo reportado existe y que los campos son coherentes entre sí.
      *
-     * El switch sobre TipoObjetivo no lleva rama por defecto: si algún día se
-     * admite reportar algo más —un mensaje de chat, por ejemplo— esto deja de
-     * compilar y señala el sitio, en vez de aceptar en silencio un reporte que
-     * nadie sabría contra qué contrastar.
+     * EL SWITCH ES UNA EXPRESIÓN, no una sentencia, y la diferencia es la razón de
+     * ser de este método: solo un switch que PRODUCE un valor obliga al compilador
+     * a exigir que estén todos los casos del enum. Con una sentencia —que es como
+     * estaba escrito primero— el día que se admita reportar algo más (un mensaje
+     * de chat, por ejemplo) esto compilaría igual, no entraría por ninguna rama, y
+     * se guardaría un reporte con un objetivoId que nadie ha contrastado contra
+     * nada. Es exactamente el fallo que ya se coló en AdminService.retirarPublicacion
+     * y que allí se cerró de esta misma forma; el comentario de aquel decía
+     * "exhaustivo" y no lo era.
+     *
+     * El valor que produce no es un pretexto para forzar la expresión: es la
+     * descripción del objetivo que va al log, y describir "publicación de tipo
+     * ALERTA" o "usuario" es justo lo que cambia entre las dos ramas.
+     *
+     * @return descripción del objetivo, para el registro
      */
-    private void exigirObjetivoValido(CrearReporteRequest peticion, Long usuarioId) {
-        switch (peticion.getTipoObjetivo()) {
+    private String exigirObjetivoValido(CrearReporteRequest peticion, Long usuarioId) {
+        return switch (peticion.getTipoObjetivo()) {
             case PUBLICACION -> {
                 if (peticion.getTipoContenido() == null) {
                     throw new ParametrosInvalidosException(
@@ -99,6 +118,7 @@ public class ReporteService {
                 }
                 publicacionService.exigirQueExista(
                         peticion.getTipoContenido(), peticion.getObjetivoId());
+                yield "una publicación de tipo " + peticion.getTipoContenido();
             }
             case USUARIO -> {
                 if (peticion.getTipoContenido() != null) {
@@ -119,8 +139,9 @@ public class ReporteService {
                     throw new ResourceNotFoundException(
                             "El usuario " + peticion.getObjetivoId() + " no existe");
                 }
+                yield "otro usuario";
             }
-        }
+        };
     }
 
     // ---------------------------------------------------------------------

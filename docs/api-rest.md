@@ -631,14 +631,14 @@ su teléfono**. No es una omisión temporal: el modelo no tiene ningún campo co
 declare que quiere compartir su contacto, así que no hay forma de saber si lo ha consentido y
 RNF-10 no permite suponerlo. El canal por el que el ciudadano los comparte si quiere es el chat.
 
-**`/panel/valoraciones` depende del bloque 9 y hoy devuelve vacío.** La lectura es real y funciona
-contra `VALORACION`, pero nada puede escribir en esa tabla todavía: no existen `ValoracionService`
-ni `POST /api/protectoras/{id}/valoracion`. Hasta entonces la respuesta es `valoraciones: []`,
-`total: 0` y `media` ausente. En cuanto ese bloque exista, el endpoint devuelve datos sin tocarlo.
+**`/panel/valoraciones` ya devuelve datos reales**: `PUT /api/protectoras/{id}/valoracion` existe
+desde el bloque 9 y alimenta la tabla. El endpoint no hizo falta tocarlo — su consulta ya era real y
+su media ya se calculaba sobre las valoraciones—, solo faltaba que alguien pudiera escribir.
 
-La media se calcula sobre las valoraciones reales y **no** sale de `PROTECTORA.valoracion_media`, que
-está documentada como derivada y sin mantener (§16). Se omite del JSON cuando no hay ninguna, en vez
-de viajar como `0`: un cero se leería como la peor nota posible.
+La media se calcula sobre las valoraciones reales y **no** salía ya de `PROTECTORA.valoracion_media`,
+columna que además se eliminó en `V9` (§18). Se omite del JSON cuando no hay ninguna, en vez de
+viajar como `0`: un cero se leería como la peor nota posible. Es el mismo criterio, y el mismo número,
+que expone `GET /api/adopcion/{id}`.
 
 **`/panel/resumen`** devuelve `animalesDisponibles`, `animalesAdoptados`, `animalesRetirados`,
 `animalesTotales`, `solicitudesPendientes`, `solicitudesTotales`, `valoracionMedia?` y
@@ -1221,6 +1221,7 @@ tratado, y avisar de contenido que incumple las normas.
 | Valorar pasa de `POST`/`201`/`409` a **`PUT` idempotente** con `200` | §9 |
 | Nuevo `403 SIN_INTERACCION_PREVIA`: no se valora sin contacto previo | §9 |
 | `PROTECTORA.valoracion_media` **desaparece**; la media se calcula al leer (`V9`) | §9, §16 |
+| Nuevo índice `idx_valoracion_protectora` para esa lectura (`V10`) | §18 |
 | `GET /api/adopcion/{id}` gana `protectoraValoracionTotal` y omite la media cuando no la hay | §8 |
 | `POST /api/reportes` implementado; se retira el `409` por duplicado | §10 |
 | Nuevo `PUT /api/admin/reportes/{id}/resolver`, noveno endpoint del panel | §11 |
@@ -1268,6 +1269,24 @@ endpoint que devolviera el contacto del acusado sería una forma cómoda de saca
 alguien con quien se ha discutido. Por eso tampoco existe un `GET /api/reportes/mios`: leer reportes
 es trabajo de moderación, y quien denuncia no gana por ello ningún acceso a la otra parte.
 
+### Limitaciones aceptadas
+
+**`POST /api/reportes` es un oráculo de existencia de usuarios.** Responde `404` si el id no existe y
+`201` si el reporte se crea, así que un autenticado puede averiguar qué ids de usuario existen
+probándolos uno a uno. Se asume por tres motivos: lo que se aprende es solo *"el id N existe"*, sin
+nombre, email ni teléfono; cada sondeo positivo **deja un reporte en la cola del administrador**, de
+modo que es un canal ruidoso y rastreable, no discreto; y la alternativa —aceptar en silencio reportes
+contra objetivos inexistentes— empeora justo el problema que la comprobación resuelve. Para calibrarlo:
+`POST /api/auth/registro` ya revela con un `409` si un **email** está registrado, que es un oráculo
+bastante más útil para quien quiera enumerar cuentas.
+
+**El índice de `V9` no sirve para leer por protectora, y por eso hay un `V10`.** `UNIQUE (usuario_id,
+protectora_id)` es un B-tree compuesto que solo se recorre por un prefijo de sus columnas: vale para
+"las valoraciones de este usuario", no para "las de esta protectora", que es lo que consultan la media
+y el recuento. Al mover la media de una columna guardada a una agregación en lectura, cada
+`GET /api/adopcion/{id}` habría provocado un recorrido secuencial de `VALORACION`. Ninguna prueba lo
+detecta: la suite corre con un puñado de filas, donde el recorrido secuencial es más rápido.
+
 ### Fuera de alcance, pendientes
 
 | Pendiente | Bloque |
@@ -1275,4 +1294,6 @@ es trabajo de moderación, y quien denuncia no gana por ello ningún acceso a la
 | RF-06 sigue sin implementar: `ProtectoraController` y `ProtectoraService` son esqueletos. El listado, el detalle y el contacto con la protectora local están diseñados en §9 pero no construidos | Sin bloque asignado |
 | Reportes duplicados: hoy un usuario puede reportar el mismo objetivo tantas veces como quiera. Impedirlo exige `UNIQUE (usuario_id, tipo_objetivo, objetivo_id)` y decidir qué hacer con un segundo reporte por un motivo distinto, que puede ser información legítima y no ruido | Sin bloque asignado |
 | Índice sobre `REPORTE (estado, created_at)`: la cola del administrador filtra y ordena por ahí. Con los volúmenes del proyecto no se nota | Cuando la cola tenga volumen que lo justifique |
+| `GET /api/admin/reportes` no pagina. Sigue el patrón de la cola de protectoras pendientes —una bandeja que se consume entera—, pero esta puede crecer sin límite, y a diferencia del listado de usuarios no tiene tope de página | Cuando la cola tenga volumen que lo justifique |
+| `mediaDeProtectora` y `countByProtectoraId` son dos consultas donde cabría una: `SELECT AVG(...), COUNT(...)` ahorraría un viaje a la base de datos por cada detalle de animal | Optimización menor, sin bloque asignado |
 | Una protectora puede ser valorada por quien contactó con ella y nunca llegó a hablar: el criterio es el deslizamiento a favor, no el mensaje enviado. Afinarlo exigiría mirar `MENSAJE`, y dejaría fuera al que contactó y no recibió respuesta, que es justo la queja más común | Decisión tomada, se reabre si aparece abuso |
