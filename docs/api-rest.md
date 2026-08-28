@@ -731,7 +731,8 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 > `204`, para que el cliente pinte la fila sin una segunda petición. Los dos `motivo` son obligatorios,
 > no opcionales. El filtro `email` de `GET /api/admin/usuarios` se descarta: buscar por email es
 > superficie de enumeración de RNF-10, y `rol` + `activo` cubren el trabajo real. Y
-> `PATCH /api/admin/reportes/{id}/revisado` no se implementa aquí (ver más abajo).
+> `PATCH /api/admin/reportes/{id}/revisado` llegó en el bloque 9 como
+> `PUT /api/admin/reportes/{id}/resolver` (ver más abajo).
 
 ### El rol es toda la comprobación, y va en la clase
 
@@ -827,7 +828,7 @@ quién lo retiró queda en el log. Un estado más solo añadiría una rama que n
 distinguir.
 
 **Retirar una publicación no notifica a nadie.** `REPORTE_RESUELTO` va dirigido a quien reportó, no al
-autor de lo retirado, y pertenece al bloque 9; aquí no hay reporte del que colgarlo.
+autor de lo retirado, y se emite al resolverlo, no al retirar: aquí no hay reporte del que colgarlo.
 
 ### La cola de reportes, y qué significa resolver uno
 
@@ -996,7 +997,7 @@ modelo que hicieron falta para sostenerlos:
 | `GET /api/adopcion/feed` | RF-09 + RF-15: el swipe de adopción necesita su propio feed, igual que el de avistamientos |
 | `POST /api/protectoras/local/contactar` | RF-06 pide una «opción específica» para la protectora de la localidad, que no puede resolverse con un `{id}` en la ruta porque el usuario aún no lo conoce |
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
-| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición. **Aplazado al bloque 9**, junto con la creación de reportes (§11) |
+| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición. **Implementado en el bloque 9 como `PUT /api/admin/reportes/{id}/resolver`** (§11, §18): fija por completo el estado, como el resto de transiciones de esta API, en vez de modificar un campo suelto |
 | `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
 | `POST /api/chats/{id}/mensajes`, `PUT /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |

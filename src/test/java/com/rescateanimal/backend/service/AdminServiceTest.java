@@ -571,8 +571,9 @@ class AdminServiceTest {
 
             admin.retirarPublicacion(TipoContenido.ALERTA, ID_PUBLICACION, ID_ADMIN);
 
-            // REPORTE_RESUELTO es del bloque 9 y se manda al que reportó, no al
-            // autor de la publicación. Aquí no hay reporte del que colgarlo.
+            // REPORTE_RESUELTO se manda al que reportó, no al autor de la
+            // publicación, y se emite al resolver el reporte. Aquí no hay
+            // reporte del que colgarlo.
             verifyNoInteractions(notificacionService);
         }
     }
