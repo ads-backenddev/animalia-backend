@@ -14,11 +14,16 @@ import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.repository.ValoracionRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -73,6 +78,14 @@ public class ValoracionService {
      */
     public record ResumenValoraciones(BigDecimal media, long total) {
     }
+
+    /**
+     * Lo que se devuelve de una protectora a la que nadie ha valorado todavía.
+     *
+     * Media nula y total cero, que no es lo mismo que un cero en la media: el
+     * total sí se conoce y es ninguna; la media, sin datos, no existe.
+     */
+    private static final ResumenValoraciones SIN_VALORACIONES = new ResumenValoraciones(null, 0L);
 
     // ---------------------------------------------------------------------
     // Emitir (RF-23)
@@ -158,6 +171,70 @@ public class ValoracionService {
         long total = valoracionRepository.countByProtectoraId(protectoraId);
 
         return new ResumenValoraciones(redondear(media), total);
+    }
+
+    /**
+     * Lo mismo, para varias protectoras de una vez (RF-06).
+     *
+     * EXISTE PARA QUE EL DIRECTORIO NO SEA UN N+1. Su listado devuelve hasta cien
+     * protectoras y cada una lleva su nota: llamar a resumenDe dentro del bucle
+     * habría costado dos consultas por fila. Aquí es una sola, agrupada.
+     *
+     * SE LLAMA "VARIAS" Y NO ES UNA SOBRECARGA DE resumenDe, aunque lo pedía el
+     * cuerpo. Con los dos métodos compartiendo nombre, un {@code resumenDe(any())}
+     * en cualquier prueba deja de compilar por ambiguo —los dos aceptan el
+     * comodín— y rompe pruebas que no tienen nada que ver con esto. Un nombre
+     * distinto cuesta menos que esa trampa.
+     *
+     * LAS QUE NO TIENEN NINGUNA VALORACIÓN NO VIENEN EN LA CONSULTA —un GROUP BY
+     * no inventa grupos vacíos— y por eso el mapa se rellena antes con el resumen
+     * vacío para TODOS los ids pedidos, y solo después se pisan los que sí tienen
+     * datos. Devolver un mapa incompleto habría obligado a quien llama a
+     * acordarse del caso, y olvidarlo da un NullPointerException en la protectora
+     * recién verificada, que es justo la que más probable es que no tenga
+     * ninguna.
+     *
+     * @return un resumen por cada id pedido, sin faltar ninguno
+     */
+    @Transactional(readOnly = true)
+    public Map<Long, ResumenValoraciones> resumenDeVarias(Collection<Long> protectoraIds) {
+        if (protectoraIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<Long, ResumenValoraciones> resumenes = new HashMap<>();
+        protectoraIds.forEach(id -> resumenes.put(id, SIN_VALORACIONES));
+
+        valoracionRepository.resumirPorProtectora(protectoraIds).forEach(fila ->
+                resumenes.put(fila.getProtectoraId(),
+                        new ResumenValoraciones(redondear(fila.getMedia()), fila.getTotal())));
+
+        return resumenes;
+    }
+
+    /**
+     * Las valoraciones más recientes de una protectora, con quién las emitió
+     * (RF-06).
+     *
+     * VA ACOTADA A PROPÓSITO, y ahí está la diferencia con el panel de RF-10, que
+     * las devuelve todas: aquello es una protectora leyendo su propio histórico,
+     * y esto es una ficha pública que se sirve en cada visita al directorio.
+     * Traer mil valoraciones para pintar las cinco primeras sería trabajo tirado
+     * en el endpoint más consultado de RF-06.
+     *
+     * El recuento real NO sale de aquí sino de resumenDe, que hace un COUNT sobre
+     * la tabla. Es deliberado: contar lo que devuelve esta lista diría "5
+     * valoraciones" en una protectora que tiene ciento treinta y siete.
+     *
+     * @param maximo cuántas devolver como mucho; quien llama fija la política
+     */
+    @Transactional(readOnly = true)
+    public List<ValoracionResponse> ultimasDe(Long protectoraId, int maximo) {
+        return valoracionRepository
+                .buscarDeProtectoraConAutor(protectoraId, PageRequest.of(0, Math.max(1, maximo)))
+                .stream()
+                .map(ValoracionService::aResponse)
+                .toList();
     }
 
     /**

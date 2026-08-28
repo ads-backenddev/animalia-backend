@@ -127,6 +127,29 @@ public final class CatalogoAdopcionSpec {
         return (raiz, consulta, cb) -> cb.equal(raiz.get("protectora").get("id"), protectoraId);
     }
 
+    /**
+     * Los animales de una protectora en UN estado concreto, para la ficha
+     * pública del directorio (RF-06).
+     *
+     * ES LA COMBINACIÓN DE LAS DOS ANTERIORES, y por eso se compone en vez de
+     * escribirse entera: acota a una protectora como deLaProtectora y exige un
+     * estado como de(...). La ficha pasa DISPONIBLE, porque es un escaparate;
+     * el panel de RF-10 sigue usando deLaProtectora sin estado, porque es un
+     * histórico de gestión y su protectora tiene que ver también los ADOPTADO y
+     * los RETIRADO. La diferencia entre los dos listados es exactamente este
+     * argumento.
+     *
+     * Y ES UN ESTADO EXIGIDO, no una lista de excluidos: cualquier estado que se
+     * añada a EstadoAnimal nace fuera del escaparate, que es el valor por defecto
+     * seguro. El mismo criterio que sigue el catálogo de RF-22.
+     */
+    public static Specification<AnimalAdopcion> deLaProtectoraEnEstado(Long protectoraId,
+                                                                      EstadoAnimal estado) {
+
+        return deLaProtectora(protectoraId)
+                .and((raiz, consulta, cb) -> cb.equal(raiz.get("estado"), estado));
+    }
+
     /** Un filtro vacío o en blanco es un filtro que no se aplica. */
     private static String normalizar(String filtro) {
         if (filtro == null || filtro.isBlank()) {

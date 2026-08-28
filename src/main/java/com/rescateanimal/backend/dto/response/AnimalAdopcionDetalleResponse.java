@@ -20,8 +20,17 @@ import java.time.Instant;
  *
  * Deliberadamente NO se reutiliza ProtectoraResponse, que arrastra dentro un
  * UsuarioResponse con email y teléfono. Aquí solo viaja lo público de la
- * organización (RNF-10); para hablar con ella está
- * POST /api/protectoras/{id}/contactar, que no expone sus datos de contacto.
+ * organización: quien quiera contactar tiene el chat que abre el match (RF-12),
+ * y desde RF-06 también la ficha de la protectora en
+ * GET /api/protectoras/{id}, que sí lleva su contacto porque es un directorio y
+ * el requisito lo pide. La diferencia de criterio entre los dos endpoints está
+ * razonada en docs/api-rest.md §9.
+ *
+ * OJO CON protectoraDireccion: se devuelve mire quien mire y sin consultar
+ * esPersonaFisica, así que si detrás de la protectora hay un particular esto
+ * publica su domicilio. El directorio de RF-06 ya no lo hace —lo omite en ese
+ * caso—, y que aquí siga saliendo es una incoherencia conocida, anotada con su
+ * arreglo en docs/api-rest.md §20.
  */
 @Data
 @Builder

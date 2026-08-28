@@ -47,7 +47,16 @@ public class Protectora {
     @Column(length = 250)
     private String direccion;
 
-    /** Zona de actuación, usada para contactar con la protectora local (RF-06). */
+    /**
+     * Zona de actuación: comarca o ciudad, no una dirección.
+     *
+     * Es el filtro {@code zona} del directorio de RF-06, que es donde un
+     * ciudadano encuentra a la protectora de su localidad. Por ser una zona y no
+     * un domicilio, es de los pocos datos de esta tabla que la baja de cuenta NO
+     * anonimiza aunque detrás haya una persona física: no identifica a nadie y es
+     * lo que permite que el histórico siga diciendo dónde operaba quien publicó
+     * cada animal (RF-19, V12).
+     */
     @Column(name = "zona_geografica", length = 150)
     private String zonaGeografica;
 
