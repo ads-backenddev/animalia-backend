@@ -224,10 +224,21 @@ class ChatSuscripcionInterceptorTest {
         }
 
         @Test
-        @DisplayName("Una trama que no es SUBSCRIBE ni se mira")
+        @DisplayName("Un SEND con la sesión en regla pasa, y no se le aplican las reglas de destino")
+        void elEnvioConSesionValidaPasa() {
+            // Las reglas de /topic/chat/{id} son para suscribirse. A quién
+            // pertenece el chat al que se escribe lo comprueba MensajeService.
+            assertThatCode(() -> interceptor.preSend(envio("/app/chat/42/enviar"), canal))
+                    .doesNotThrowAnyException();
+
+            verify(chatService, never()).esParticipante(anyLong(), any());
+        }
+
+        @Test
+        @DisplayName("Una trama que no es ni SUBSCRIBE ni SEND ni se mira")
         void otrasTramasNoSeInspeccionan() {
-            StompHeaderAccessor accesor = StompHeaderAccessor.create(StompCommand.SEND);
-            accesor.setDestination("/app/chat/42/enviar");
+            StompHeaderAccessor accesor = StompHeaderAccessor.create(StompCommand.UNSUBSCRIBE);
+            accesor.setSessionId("sesion-1");
 
             assertThatCode(() -> interceptor.preSend(
                     MessageBuilder.createMessage(new byte[0], accesor.getMessageHeaders()), canal))
@@ -366,6 +377,47 @@ class ChatSuscripcionInterceptorTest {
 
             assertThat(interceptor.preSend(destino("/topic/chat/42"), canal)).isNotNull();
         }
+
+        @Test
+        @DisplayName("Un usuario bloqueado tampoco puede ESCRIBIR en un chat que ya tenía abierto")
+        void elBloqueadoNoPuedeEscribir() {
+            // ESTE ERA EL AGUJERO. Solo se revalidaban los SUBSCRIBE, así que
+            // alguien dado de baja o bloqueado por un administrador podía seguir
+            // mandando mensajes nuevos mientras su conexión siguiera abierta:
+            // bastaba con haber entrado al chat antes. El envío no pasa por
+            // JwtAuthFilter —no es HTTP— y MensajeService solo mira la pertenencia
+            // al chat, no si la cuenta sigue activa. Escribir es peor que leer:
+            // deja datos nuevos en nombre de quien ya no debería poder actuar.
+            when(userDetailsService.loadUserByUsername(EMAIL)).thenReturn(usuario(false, null));
+
+            assertThatThrownBy(() -> interceptor.preSend(envio("/app/chat/42/enviar"), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("bloqueada");
+        }
+
+        @Test
+        @DisplayName("Tras cerrar sesión tampoco se puede escribir por una conexión abierta")
+        void elDeslogueadoNoPuedeEscribir() {
+            when(tokenRevocadoService.estaRevocado(JTI)).thenReturn(true);
+
+            assertThatThrownBy(() -> interceptor.preSend(envio("/app/chat/42/enviar"), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("ya no es válida");
+        }
+
+        @Test
+        @DisplayName("Un SEND sin sesión autenticada se rechaza")
+        void elEnvioSinPrincipalSeRechaza() {
+            StompHeaderAccessor accesor = StompHeaderAccessor.create(StompCommand.SEND);
+            accesor.setDestination("/app/chat/42/enviar");
+            accesor.setSessionId("sesion-1");
+            accesor.setSessionAttributes(sesionCon(tokenVigente()));
+
+            assertThatThrownBy(() -> interceptor.preSend(
+                    MessageBuilder.createMessage(new byte[0], accesor.getMessageHeaders()), canal))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageContaining("sin sesión autenticada");
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -378,6 +430,16 @@ class ChatSuscripcionInterceptorTest {
 
     private static Message<?> subscribe(String destino, Principal usuario) {
         return subscribe(destino, usuario, sesionCon(tokenVigente()));
+    }
+
+    /** Una trama de envío al destino de aplicación, con la sesión en regla. */
+    private static Message<?> envio(String destino) {
+        StompHeaderAccessor accesor = StompHeaderAccessor.create(StompCommand.SEND);
+        accesor.setDestination(destino);
+        accesor.setSessionId("sesion-1");
+        accesor.setUser(autenticado(ID_USUARIO));
+        accesor.setSessionAttributes(sesionCon(tokenVigente()));
+        return MessageBuilder.createMessage(new byte[0], accesor.getMessageHeaders());
     }
 
     private static Message<?> subscribe(String destino, Principal usuario,

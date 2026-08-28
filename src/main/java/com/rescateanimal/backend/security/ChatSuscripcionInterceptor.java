@@ -47,15 +47,24 @@ import java.util.regex.Pattern;
  *    /user/queue/…— pasa una vez revalidada la sesión, porque su autorización es
  *    simplemente estar autenticado.
  *
- * LIMITACIÓN CONOCIDA, Y NO ES PEQUEÑA: revalidar aquí impide suscripciones
- * NUEVAS, pero NO cierra la conexión ni cancela las suscripciones que ya
- * estuvieran hechas. Un usuario bloqueado mientras tenía abierto un chat sigue
- * recibiendo lo que se publique en él hasta que su cliente se desconecte. Cerrar
- * sesiones activas exige un registro de sesiones WebSocket vivas por usuario —
- * escuchar SessionConnectedEvent y SessionDisconnectEvent, guardar el sessionId
- * y cerrarlas desde AdminService al bloquear—, y eso es una pieza nueva que
- * queda fuera de alcance (ver docs/api-rest.md §17). Lo que sí se cierra es la
- * puerta a abrir nada nuevo, que es por donde se entra a un chat ajeno.
+ * SE REVALIDA TAMBIÉN EN LOS SEND, no solo en los SUBSCRIBE, y esto llegó tarde:
+ * durante un tiempo solo se miraban las suscripciones, de modo que una cuenta
+ * dada de baja o bloqueada por un administrador podía SEGUIR ESCRIBIENDO mensajes
+ * nuevos mientras su conexión siguiera abierta. Bastaba con haber entrado al chat
+ * antes. El envío no pasa por JwtAuthFilter —no es una petición HTTP— y
+ * MensajeService solo comprueba la pertenencia al chat, no si la cuenta sigue
+ * activa, así que no había nadie mirando. Escribir es peor que leer: deja datos
+ * nuevos en nombre de alguien que ya no debería poder actuar.
+ *
+ * LIMITACIÓN QUE SIGUE EN PIE: revalidar aquí impide suscribirse y escribir, pero
+ * NO cierra la conexión ni cancela las suscripciones ya hechas. Un usuario
+ * bloqueado mientras tenía abierto un chat sigue RECIBIENDO lo que se publique en
+ * él hasta que su cliente se desconecte. Cerrar sesiones activas exige un registro
+ * de sesiones WebSocket vivas por usuario —escuchar SessionConnectedEvent y
+ * SessionDisconnectEvent, guardar el sessionId y cerrarlas desde AdminService al
+ * bloquear—, y eso es una pieza nueva que queda fuera de alcance (ver
+ * docs/api-rest.md §17). La diferencia con lo anterior importa: lo que queda
+ * abierto es recibir, que es pasivo; escribir ya está cerrado.
  *
  * Dentro del espacio de nombres del chat deniega por defecto. La distinción importa
  * porque el bróker no reparte comparando cadenas: DefaultSubscriptionRegistry
@@ -96,7 +105,33 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
         StompHeaderAccessor accesor =
                 MessageHeaderAccessor.getAccessor(mensaje, StompHeaderAccessor.class);
 
-        if (accesor == null || StompCommand.SUBSCRIBE != accesor.getCommand()) {
+        if (accesor == null) {
+            return mensaje;
+        }
+
+        StompCommand comando = accesor.getCommand();
+        if (StompCommand.SUBSCRIBE != comando && StompCommand.SEND != comando) {
+            return mensaje;
+        }
+
+        UsuarioPrincipal usuario = UsuarioPrincipal.desde(accesor.getUser());
+        if (usuario == null) {
+            throw new MessagingException("No se puede operar en el chat sin sesión autenticada");
+        }
+
+        // Antes que cualquier decisión sobre el destino: si la sesión ya no vale,
+        // da igual a qué se quiera suscribir ni qué se quiera mandar.
+        revalidarSesion(accesor, usuario);
+
+        // UN SEND YA NO NECESITA MÁS DE ESTE INTERCEPTOR. Su único destino es
+        // /app/chat/{chatId}/enviar, y a quién pertenece ese chat lo comprueba
+        // MensajeService con exigirParticipante, que es donde vive esa regla. Lo
+        // que aquí faltaba —y es el motivo de que los SEND pasen ahora por este
+        // filtro— era revalidar la sesión: sin ello, una cuenta dada de baja o
+        // bloqueada por un administrador podía SEGUIR ESCRIBIENDO mensajes nuevos
+        // mientras su conexión siguiera abierta, porque exigirParticipante mira la
+        // pertenencia al chat y no si la cuenta sigue activa.
+        if (StompCommand.SEND == comando) {
             return mensaje;
         }
 
@@ -104,15 +139,6 @@ public class ChatSuscripcionInterceptor implements ChannelInterceptor {
         if (destino == null) {
             return mensaje;
         }
-
-        UsuarioPrincipal usuario = UsuarioPrincipal.desde(accesor.getUser());
-        if (usuario == null) {
-            throw new MessagingException("No se puede suscribir a un chat sin sesión autenticada");
-        }
-
-        // Antes que cualquier decisión sobre el destino: si la sesión ya no vale,
-        // da igual a qué se quiera suscribir.
-        revalidarSesion(accesor, usuario);
 
         // Un destino con comodines no es un destino: es un patrón, y el bróker lo
         // trata como tal al repartir. Suscribirse a /topic/chat/* o a /topic/**

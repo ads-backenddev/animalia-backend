@@ -95,4 +95,15 @@ public interface AnimalAdopcionRepository
 
         long getTotal();
     }
+
+    /**
+     * Animales de una protectora en un estado concreto.
+     *
+     * La usa la baja de cuenta (RF-19) para retirar del catálogo lo que la
+     * protectora dejaba publicado: quien lo ofrecía se ha ido, así que nadie puede
+     * responder a una solicitud ni confirmar una adopción. Se pide por estado en
+     * vez de traer todos y filtrar en memoria porque solo interesan los
+     * DISPONIBLE; los ADOPTADO son un desenlace que no hay que deshacer.
+     */
+    List<AnimalAdopcion> findByProtectoraIdAndEstado(Long protectoraId, EstadoAnimal estado);
 }

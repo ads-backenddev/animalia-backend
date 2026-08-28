@@ -131,7 +131,7 @@ RF-01, RF-13, RF-16, RF-17.
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/auth/registro/ciudadano` | Registra un usuario con rol CIUDADANO. La contraseña se guarda con BCrypt (RNF-03) | Público | `RegistroCiudadanoRequest`: `nombre`, `email`, `password`, `telefono?`, `areaGeografica?`, `idioma?` | `UsuarioResponse` | `201`, `400`, `409`, `413`, `429` |
-| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `413`, `429` |
+| `POST` | `/api/auth/registro/protectora` | Registra una protectora. Queda en estado `PENDIENTE` hasta que el administrador la verifica, y no puede iniciar sesión hasta entonces | Público | `RegistroProtectoraRequest`: `nombre`, `email`, `password`, `telefono?`, `nombreOrganizacion`, `direccion`, `zonaGeografica`, `esPersonaFisica?` | `ProtectoraResponse` con `estado: PENDIENTE` | `201`, `400`, `409`, `413`, `429` |
 | `POST` | `/api/auth/login` | Autentica y devuelve el JWT. Debe responder en menos de 2 s (RNF-01) | Público | `LoginRequest`: `email`, `password` | `LoginResponse`: `token`, `tipo: "Bearer"`, `expiraEn`, `usuario` | `200`, `400`, `401`, `403`, `413`, `429` |
 | `POST` | `/api/auth/logout` | Cierra la sesión del cliente e invalida el token en la lista de revocados | Autenticado | — | — | `204`, `401` |
 | `POST` | `/api/auth/recuperar-password` | Envía al email registrado un enlace con token temporal (1 h). Responde `204` siempre, exista o no el email, para no revelar qué cuentas están registradas | Público | `RecuperarPasswordRequest`: `email` | — | `204`, `400`, `413`, `429` |
@@ -187,11 +187,27 @@ RF-02, RF-18, RF-19.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/usuarios/me` | Perfil completo del usuario autenticado | Autenticado | — | `UsuarioResponse` | `200`, `401` |
 | `PUT` | `/api/usuarios/me` | Personaliza el perfil: foto, nombre, área geográfica y teléfono | Autenticado | `ActualizarPerfilRequest`: `nombre`, `telefono?`, `areaGeografica?`, `fotoUrl?` | `UsuarioResponse` | `200`, `400`, `401` |
-| `PATCH` | `/api/usuarios/me/idioma` | Cambia el idioma de la aplicación | Autenticado | `CambiarIdiomaRequest`: `idioma` (`es`, `en`, `ca`, `gl`, `eu`) | `UsuarioResponse` | `200`, `400`, `401` |
-| `DELETE` | `/api/usuarios/me` | Elimina la cuenta y **todos** los datos asociados, en cumplimiento del RGPD (RF-19, RNF-10) | Autenticado | — | — | `204`, `401` |
+| `PUT` | `/api/usuarios/me/idioma` | Cambia el idioma de la aplicación (RF-18) | Autenticado | `CambiarIdiomaRequest`: `idioma` (`es`, `en`, `ca`, `gl`, `eu`) | `UsuarioResponse` | `200`, `400`, `401` |
+| `DELETE` | `/api/usuarios/me` | Da de baja la cuenta propia de forma irreversible: la anonimiza, no la borra (RF-19, RNF-10) | Autenticado | `EliminarCuentaRequest`: `password` | — | `204`, `400`, `401` |
 
-**Borrado RGPD:** el `DELETE` arrastra alertas, avistamientos, matches, mensajes, valoraciones,
-reportes, notificaciones y contadores de límite diario del usuario.
+> **Cambio de contrato, dos.** El idioma pasa de `PATCH` a **`PUT`**: fija por completo el valor del
+> recurso «mi idioma» y repetirlo deja el mismo estado, que es lo que un `PUT` promete y lo que ya
+> hace el resto de transiciones de esta API. Y el `DELETE` **deja de arrastrar** alertas,
+> avistamientos, matches, mensajes, valoraciones, reportes, notificaciones y contadores: ahora
+> conserva todo eso y anonimiza la fila del usuario. El porqué está en §19.
+
+**El `PUT /me` no cambia el email ni la contraseña**, y no es un olvido. RF-02 habla de personalizar
+el perfil y no menciona ninguno de los dos. El email identifica la cuenta y es con lo que se inicia
+sesión: cambiarlo desde aquí permitiría quedarse con una cuenta ajena a partir de una sesión
+olvidada, sin conocer la contraseña, y hacerlo bien exige verificar la dirección nueva antes de
+activarla —correo de confirmación, token, dirección pendiente—, que es un bloque en sí mismo. La
+contraseña ya tiene su camino en RF-17, que además cierra las sesiones abiertas al cambiarla.
+
+**El `DELETE` pide la contraseña en el cuerpo**, y por eso este verbo lleva cuerpo pese a que no sea
+lo habitual. Es la única operación irreversible de la API: un token demuestra que alguien inició
+sesión en las últimas 24 h, no que quien pulsa ahora sea el dueño, y un móvil desbloqueado sobre una
+mesa basta para lo primero. Mandarla en la query la dejaría escrita en los registros del servidor
+(RNF-10). Responde `401` si no coincide, el mismo código que un login fallido: es el mismo hecho.
 
 **No hay endpoint para consultar el perfil de otro usuario.** Sería una superficie de enumeración de
 toda la base de usuarios, incompatible con RNF-10. Los datos públicos del interlocutor (nombre, foto,
@@ -957,7 +973,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF | Dónde se cubre |
 |---|---|
 | RF-01 | `POST /api/auth/registro/ciudadano`, `POST /api/auth/registro/protectora` |
-| RF-02 | `PUT /api/usuarios/me` |
+| RF-02 | `GET` y `PUT /api/usuarios/me` |
 | RF-03 | `POST /api/alertas` |
 | RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
 | RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` |
@@ -973,8 +989,8 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
-| RF-18 | `PATCH /api/usuarios/me/idioma` |
-| RF-19 | `DELETE /api/usuarios/me` |
+| RF-18 | `PUT /api/usuarios/me/idioma` |
+| RF-19 | `DELETE /api/usuarios/me` — anonimiza, no borra (§19) |
 | RF-20 | `PUT /api/adopcion/{id}/adoptado` |
 | RF-21 | `POST /api/avistamientos` (campo `fotoUrl`) |
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
@@ -1095,7 +1111,7 @@ bloque 5.
 | Pendiente | Bloque |
 |---|---|
 | `VALORACION`: unicidad `(usuario_id, protectora_id)` y `PROTECTORA.valoracion_media`, hoy derivada y sin mantener | 9, con `ValoracionService` |
-| Borrado / anonimización de usuario (RF-19): nueve claves ajenas apuntan a `USUARIO` y ninguna dice qué hacer al borrarlo | 10 |
+| ~~Borrado / anonimización de usuario (RF-19)~~ | **Cerrado en el bloque 10**: la baja anonimiza la fila y conserva las nueve tablas que le apuntan (§19) |
 | El día de la cuota está fijado a `Europe/Madrid` (§6): correcto para la península, no para Canarias. Contarla por zona del cliente exige que la envíe y guardarla junto al contador | RF-24 |
 | `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
@@ -1167,12 +1183,20 @@ contraseña invalida de golpe todo lo emitido antes, y un bloqueo se nota en la 
 Se reabre si aparece un requisito de sesión por dispositivo o de cierre remoto.
 
 **Una conexión WebSocket ya abierta no se cierra al bloquear ni al cerrar sesión.** La revalidación
-impide suscripciones **nuevas**, pero no cancela las que ya estuvieran hechas: un usuario bloqueado
-mientras tenía un chat abierto sigue recibiendo lo que se publique en él hasta que su cliente se
+impide suscribirse y **escribir**, pero no cancela las suscripciones ya hechas: un usuario bloqueado
+mientras tenía un chat abierto sigue **recibiendo** lo que se publique en él hasta que su cliente se
 desconecte. Cerrarlas exige un registro de sesiones WebSocket vivas por usuario —escuchar
 `SessionConnectedEvent` y `SessionDisconnectEvent`, guardar el `sessionId` y cerrarlo desde
-`AdminService`—, que es una pieza nueva con su propio estado que mantener. Lo que sí queda cerrado es
-la puerta a abrir nada nuevo, que es por donde se entra a un chat ajeno.
+`AdminService`—, que es una pieza nueva con su propio estado que mantener. Lo que queda abierto es
+recibir, que es pasivo.
+
+> **Corrección.** Este párrafo decía antes que lo único cerrado eran las suscripciones nuevas, y era
+> verdad: `ChatSuscripcionInterceptor` solo miraba los `SUBSCRIBE`, así que una cuenta bloqueada o
+> dada de baja podía **seguir escribiendo mensajes nuevos** por una conexión abierta. El envío va a
+> `/app/chat/{chatId}/enviar`, que no pasa por `JwtAuthFilter` —no es HTTP—, y `MensajeService` solo
+> comprueba la pertenencia al chat, no si la cuenta sigue activa. Se cerró en el bloque 10
+> revalidando también los `SEND`. Escribir es peor que leer: deja datos nuevos en nombre de quien ya
+> no debería poder actuar.
 
 **`POST /api/auth/restablecer-password` no lleva límite de intentos.** Su credencial no es una
 contraseña que se pueda adivinar a mano, sino un JWT firmado: lo que habría que acertar es una firma
@@ -1298,3 +1322,155 @@ detecta: la suite corre con un puñado de filas, donde el recorrido secuencial e
 | `GET /api/admin/reportes` no pagina. Sigue el patrón de la cola de protectoras pendientes —una bandeja que se consume entera—, pero esta puede crecer sin límite, y a diferencia del listado de usuarios no tiene tope de página | Cuando la cola tenga volumen que lo justifique |
 | `mediaDeProtectora` y `countByProtectoraId` son dos consultas donde cabría una: `SELECT AVG(...), COUNT(...)` ahorraría un viaje a la base de datos por cada detalle de animal | Optimización menor, sin bloque asignado |
 | Una protectora puede ser valorada por quien contactó con ella y nunca llegó a hablar: el criterio es el deslizamiento a favor, no el mensaje enviado. Afinarlo exigiría mirar `MENSAJE`, y dejaría fuera al que contactó y no recibió respuesta, que es justo la queja más común | Decisión tomada, se reabre si aparece abuso |
+
+---
+
+## 19. Bloque de gestión de cuenta (RF-02, RF-18, RF-19)
+
+Perfil propio, idioma y baja de cuenta. Cierra el pendiente que el bloque de mantenimiento dejó
+abierto: *«Borrado / anonimización de usuario (RF-19): nueve claves ajenas apuntan a `USUARIO` y
+ninguna dice qué hacer al borrarlo»*.
+
+### La decisión: la baja anonimiza, no borra
+
+Un `DELETE` en cascada sobre `USUARIO` habría arrastrado las **nueve** tablas que le apuntan:
+`PROTECTORA`, `ALERTA`, `AVISTAMIENTO`, `MATCH_REGISTRO`, `MENSAJE`, `VALORACION`, `REPORTE`,
+`NOTIFICACION` y `LIMITE_MATCH_DIARIO`. Y con ellas se habría llevado por delante **la mitad de
+conversaciones ajenas**, porque un chat tiene dos participantes: al borrar a uno, el otro pierde el
+hilo entero de algo que quizá siga en marcha —una mascota que aún no ha aparecido, una adopción a
+medias— y ni siquiera puede releer lo ya hablado.
+
+Quien se da de baja tiene derecho a que sus datos personales desaparezcan. No a borrar la memoria de
+las conversaciones de los demás. Así que las filas se quedan y lo que desaparece es la persona.
+
+| Campo | Queda |
+|---|---|
+| `nombre` | `"Usuario eliminado"`, el mismo para todos |
+| `email` | Un hash suyo en un dominio inexistente (ver abajo) |
+| `password_hash` | Un valor sin formato BCrypt: `matches()` devuelve `false` sin comparar nada |
+| `telefono`, `foto_url` | `null` |
+| `activo` | `false` |
+| `rol`, `created_at`, `id` | **Intactos**: no son datos personales y explican el histórico |
+
+El nombre genérico es el mismo para todos a propósito. Uno con el id dentro —«Usuario 482»— seguiría
+distinguiendo a una persona de otra a lo largo de la aplicación, que es justo lo que se deshace.
+
+### La baja no necesita cerrar sesiones: ya estaba resuelto
+
+Poner `activo = false` basta, y no por casualidad. `JwtAuthFilter` recarga la fila del usuario en
+**cada** petición precisamente para que un bloqueo administrativo surta efecto en el acto (§11), y
+`ChatSuscripcionInterceptor` hace lo mismo en cada `SUBSCRIBE` desde el bloque de refuerzo (§17). La
+baja se apoya en esa maquinaria en lugar de traer la suya: el token que el usuario tenga en la mano
+deja de valer en la siguiente petición, sin revocar nada. Hay una prueba de extremo a extremo que lo
+fija.
+
+### El email no queda libre, y esa fue la parte difícil
+
+Dos exigencias tiran en direcciones opuestas. El email es dato personal y tiene que desaparecer; pero
+si desaparece sin más, la dirección queda libre y **cualquiera podría registrarse con el email de
+quien se fue**. Ante la otra parte de cada conversación abierta, esa persona nueva aparecería como la
+misma con la que estuvo hablando. El histórico se conserva justo para que esas conversaciones sigan
+teniendo sentido, y eso lo volvería del revés.
+
+Se resuelve sustituyendo el email por **un hash suyo**:
+
+```
+sha256(email normalizado) + "@cuenta-eliminada.invalid"
+```
+
+No se puede volver del hash al email —así que el dato original desaparece—, pero sí calcularlo para un
+email candidato, que es todo lo que `AuthService` necesita para rechazar el registro. Es determinista,
+así que ocupa siempre el mismo sitio, y usa el índice único que ya existía: ni columna nueva ni
+migración. El dominio `.invalid` lo reserva el RFC 2606 para que nunca exista, de modo que ningún
+registrador puede venderlo y ningún correo enviado ahí llega a ninguna parte.
+
+El mensaje del `409` es idéntico al de un email ya registrado. Distinguirlos convertiría el registro
+en una forma de averiguar quién se ha ido de la plataforma.
+
+### Si quien se da de baja es una protectora
+
+Sus animales **`DISPONIBLE` pasan a `RETIRADO`**. Un animal en adopción es una invitación a contactar
+con quien lo publicó, y quien lo publicó acaba de irse: nadie va a responder, nadie puede confirmar la
+adopción y nadie puede corregir la ficha. Dejarlos ofreciéndose haría perder el tiempo a cada
+ciudadano que deslizara a favor. Se reutiliza el estado que el catálogo ya tiene para «esto ya no se
+ofrece», el mismo al que llegan la retirada manual y la administrativa.
+
+**Los `ADOPTADO` no se tocan.** Es un desenlace, no una oferta abierta: pasarlos a `RETIRADO` borraría
+el hecho de que ese animal encontró casa, que es el dato que da sentido al histórico que esta baja se
+esfuerza en conservar.
+
+**La fila de `PROTECTORA` se anonimiza solo si detrás había una persona**, y lo decide el campo
+`esPersonaFisica` que la propia protectora declara al registrarse (`V12`).
+
+| `esPersonaFisica` | Al darse de baja |
+|---|---|
+| `false` — una asociación registrada | `nombreOrganizacion`, `direccion` y `zonaGeografica` **se conservan** |
+| `true` — un particular que rescata por su cuenta | `nombreOrganizacion` → `"Protectora eliminada"`, `direccion` → `null` |
+
+Los dos casos existen y no se distinguen mirando el dato. Para una asociación, el nombre y la
+dirección son de la entidad y son los que explican de dónde salió cada animal publicado; borrarlos
+dejaría cada adopción histórica sin procedencia. Pero en España es muy común que una protectora sea
+alguien que rescata por su cuenta, sin estructura legal, que pone **su propio nombre** como
+organización y **su domicilio particular** como dirección: para esa persona esas dos columnas son
+datos personales tan identificables como su teléfono, y conservarlas sería dejar expuesta a quien
+acaba de pedir que la borren.
+
+**Se declara, no se deduce.** Nada en una cadena de texto distingue con fiabilidad «Huellas de
+Getafe» de «María Gómez Ruiz», y equivocarse cuesta en las dos direcciones. Es un campo opcional en el
+registro y **ausente equivale a `false`**, que es el caso mayoritario y el que conserva el histórico.
+
+**La zona geográfica no se toca nunca**: es una comarca o una ciudad, no identifica a nadie, y es lo
+que permite que el histórico siga diciendo dónde operaba quien publicó cada animal.
+
+### Idioma (RF-18)
+
+Cinco: `es`, `en`, `ca`, `gl`, `eu` —las lenguas oficiales de España más el inglés—. Hasta este bloque
+la columna admitía **cualquier cadena de hasta diez caracteres**: «klingon» era un idioma
+perfectamente válido para la base de datos, y no se habría notado hasta ir a traducir la interfaz.
+
+Lo hacen cumplir tres capas, cada una porque falla en un momento distinto: el enum `Idioma` es la
+única lista y da el `400` con los códigos admitidos; el registro cae al idioma por defecto en vez de
+rechazar el alta, porque equivocarse en un campo opcional no es motivo para impedir que alguien se dé
+de alta; y el `CHECK` de la migración `V11` es lo último que queda en pie si alguien escribe por SQL.
+
+`Idioma` **no es el tipo de la columna**, a diferencia del resto de enums del modelo. El valor que
+viaja es un código ISO 639-1, que se escribe en minúscula, y un `@Enumerated(STRING)` escribiría `ES`
+y `CA`: habría que elegir entre romper el contrato o añadir un convertidor para deshacer lo que el
+enum acaba de hacer.
+
+### Limitaciones aceptadas
+
+**La anonimización del email es un seudónimo, no anonimato perfecto.** Quien tenga acceso a la base de
+datos y **ya sospeche** el email de una persona puede calcular el hash y confirmar si tuvo cuenta. Es
+la contrapartida inevitable de poder reconocer el email al registrarse: sin esa capacidad, la
+dirección quedaría libre. Un hash con pimienta lo cerraría, pero entonces perder esa pimienta
+liberaría en silencio todos los emails borrados —un fallo peor, porque no se nota—. Se asume.
+
+**El nombre puede seguir dentro del texto de los mensajes.** Se anonimiza la fila del usuario, no el
+contenido que escribió: si alguien firmó un mensaje con su nombre, ahí sigue. Rastrearlo exigiría
+analizar texto libre, con los falsos positivos que eso trae, y borraría contenido de una conversación
+que pertenece también a la otra parte.
+
+**Las protectoras registradas antes de `V12` quedan en `esPersonaFisica = false`, y no hay forma
+retroactiva de saber cuáles eran personas.** Una protectora anterior a esa migración que sí lo fuera
+seguirá sin la protección hasta que alguien lo declare a mano, porque el dato solo lo sabe ella y no
+se puede inferir de su nombre. No se eligió `true` como valor por defecto porque sería peor:
+anonimizaría el nombre de asociaciones reales al darse de baja, dejando sin procedencia el histórico
+de adopciones que este diseño se esfuerza en conservar. Entre dejar un dato de más y borrar uno que
+hacía falta, se deja el de más y se dice en voz alta. Cerrarlo requiere o bien preguntárselo a las
+protectoras existentes, o bien un endpoint para que rectifiquen su ficha, que RF-10 no contempla.
+
+**Nadie puede registrarse en `@cuenta-eliminada.invalid`**, y la prohibición no es celo de más. Los
+emails anonimizados son deterministas, así que sin ella quien conociera el email de otra persona podía
+calcular su hash, registrarse con esa dirección y dejar una mina: el día que la víctima quisiera darse
+de baja, el `UPDATE` de su email chocaría contra el índice único y la baja fallaría con un `409` que
+no explica nada. Se le habría impedido ejercer RF-19 de forma indefinida. Es un dominio que el
+RFC 2606 reserva para que no exista, así que ninguna dirección legítima puede estar ahí.
+
+### Fuera de alcance, pendientes
+
+| Pendiente | Bloque |
+|---|---|
+| Cambio de email con verificación de la dirección nueva: correo de confirmación, token y dirección pendiente. RF-02 no lo pide | Sin bloque asignado |
+| Exportación de los datos propios (derecho de portabilidad del RGPD, distinto del de supresión que cubre RF-19) | Sin bloque asignado |
+| La baja no avisa a quien tuviera una conversación abierta. Se entera al ver «Usuario eliminado» en el chat | Decisión tomada, se reabre si molesta en uso real |

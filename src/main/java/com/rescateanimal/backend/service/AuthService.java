@@ -15,6 +15,7 @@ import com.rescateanimal.backend.exception.TokenInvalidoException;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoProtectora;
+import com.rescateanimal.backend.model.enums.Idioma;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
@@ -39,7 +40,8 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private static final String IDIOMA_POR_DEFECTO = "es";
+    /** El idioma con el que nace una cuenta que no elige ninguno. La lista vive en Idioma. */
+    private static final String IDIOMA_POR_DEFECTO = Idioma.POR_DEFECTO.getCodigo();
 
     /**
      * Hash BCrypt de una contraseña arbitraria, usado solo para gastar el mismo
@@ -55,6 +57,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final TokenRevocadoService tokenRevocadoService;
     private final EmailService emailService;
+    private final AnonimizacionService anonimizacionService;
 
     // ---------------------------------------------------------------------
     // Registro (RF-01)
@@ -72,7 +75,7 @@ public class AuthService {
         usuario.setTelefono(peticion.getTelefono());
         usuario.setAreaGeografica(peticion.getAreaGeografica());
         usuario.setRol(Rol.CIUDADANO);
-        usuario.setIdioma(peticion.getIdioma() != null ? peticion.getIdioma() : IDIOMA_POR_DEFECTO);
+        usuario.setIdioma(idiomaDe(peticion.getIdioma()));
         usuario.setActivo(true);
 
         return aUsuarioResponse(usuarioRepository.save(usuario));
@@ -104,6 +107,10 @@ public class AuthService {
         protectora.setDireccion(peticion.getDireccion());
         protectora.setZonaGeografica(peticion.getZonaGeografica());
         protectora.setEstado(EstadoProtectora.PENDIENTE);
+        // Ausente equivale a "no": quien no responda queda como organización, que
+        // es el caso mayoritario y el que conserva el histórico intacto. Ver
+        // RegistroProtectoraRequest.esPersonaFisica.
+        protectora.setEsPersonaFisica(Boolean.TRUE.equals(peticion.getEsPersonaFisica()));
 
         return aProtectoraResponse(protectoraRepository.save(protectora));
     }
@@ -230,10 +237,68 @@ public class AuthService {
     // Apoyo
     // ---------------------------------------------------------------------
 
+    /**
+     * Rechaza el registro si el email ya está tomado, y también si lo estuvo.
+     *
+     * LA SEGUNDA COMPROBACIÓN ES LA INTERESANTE. Al darse de baja, el email se
+     * sustituye por un hash suyo (RF-19, ver AnonimizacionService), así que la
+     * dirección original ya no aparece en ninguna fila y la primera comprobación
+     * la daría por libre. Dejar que otro la registrara sería un problema real: en
+     * cada conversación que la persona de baja dejó abierta, el interlocutor
+     * seguiría viendo el mismo hilo, y quien escribiera desde esa dirección
+     * pasaría por ser la misma persona con la que estuvo hablando. El histórico se
+     * conserva justo para que esas conversaciones sigan teniendo sentido, y esto
+     * lo volvería del revés.
+     *
+     * Se busca el email anonimizado en vez del original: es determinista, así que
+     * calcularlo y preguntar si existe basta para reconocerlo sin haber guardado
+     * la dirección en ninguna parte.
+     *
+     * El mensaje es el mismo en los dos casos, a propósito. Distinguir "ya
+     * registrado" de "perteneció a una cuenta dada de baja" convertiría este
+     * endpoint en una forma de averiguar quién se ha ido de la plataforma.
+     */
     private void verificarEmailLibre(String email) {
-        if (usuarioRepository.existsByEmail(normalizarEmail(email))) {
+        String normalizado = normalizarEmail(email);
+
+        // NADIE SE REGISTRA EN EL DOMINIO RESERVADO DE LAS CUENTAS BORRADAS, y
+        // esto no es celo de más: ese dominio es donde acaban los emails
+        // anonimizados, y son deterministas. Sin esta comprobación, quien conociera
+        // el email de otra persona podía calcular su hash, registrarse con esa
+        // dirección y dejar una mina: el día que la víctima quisiera darse de baja,
+        // el UPDATE de su email chocaría contra el índice único y la baja fallaría
+        // con un 409 incomprensible. Es decir, se le podía impedir ejercer RF-19 de
+        // forma indefinida, y sin que el mensaje de error dijera por qué.
+        if (anonimizacionService.esDominioReservado(normalizado)) {
+            log.warn("Intento de registro en el dominio reservado de cuentas eliminadas");
             throw new EmailYaRegistradoException("Ya existe una cuenta con ese email");
         }
+
+        // El || corta: si el email ya está en uso no hace falta calcular el hash
+        // ni volver a consultar. La segunda comprobación solo interesa cuando la
+        // dirección parece libre, que es justo el caso en el que puede no estarlo.
+        if (usuarioRepository.existsByEmail(normalizado)
+                || usuarioRepository.existsByEmail(anonimizacionService.emailAnonimizado(normalizado))) {
+
+            throw new EmailYaRegistradoException("Ya existe una cuenta con ese email");
+        }
+    }
+
+    /**
+     * El idioma con el que nace la cuenta, siempre uno de los admitidos.
+     *
+     * Un código no reconocido cae al por defecto en vez de rechazar el registro:
+     * el idioma es opcional en el alta y equivocarse en él no es motivo para
+     * impedir que alguien se dé de alta. Quien quiera cambiarlo tiene
+     * PUT /api/usuarios/me/idioma, que sí responde 400 y dice cuáles valen, porque
+     * ahí el idioma es lo único que se está pidiendo.
+     *
+     * Antes se guardaba tal cual lo mandara el cliente, con el único límite de
+     * diez caracteres: "klingon" era un idioma perfectamente válido para la base
+     * de datos, y nadie lo habría notado hasta ir a traducir la interfaz.
+     */
+    private static String idiomaDe(String codigo) {
+        return Idioma.desdeCodigo(codigo).orElse(Idioma.POR_DEFECTO).getCodigo();
     }
 
     /** Los emails se guardan en minúsculas para que el login no dependa de cómo se teclee. */
