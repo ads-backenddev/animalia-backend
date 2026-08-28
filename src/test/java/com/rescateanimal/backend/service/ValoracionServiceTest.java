@@ -25,13 +25,16 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.domain.Pageable;
 
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -233,7 +236,133 @@ class ValoracionServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Lectura para el directorio (RF-06)")
+    class Directorio {
+
+        /**
+         * EL CASO QUE SE OLVIDA. Un GROUP BY no devuelve grupos vacíos, así que la
+         * protectora sin ninguna valoración no aparece en el resultado de la
+         * consulta. Si el mapa se construyera solo con lo que vuelve, quien lo lea
+         * se encontraría un null justo en la protectora recién verificada, que es
+         * la que más probable es que no tenga ninguna.
+         */
+        @Test
+        @DisplayName("Devuelve un resumen por cada id pedido, también por los que no tienen ninguna")
+        void ningunIdSeQuedaSinResumen() {
+            when(valoracionRepository.resumirPorProtectora(any()))
+                    .thenReturn(List.of(fila(ID_PROTECTORA, 4.5, 8L)));
+
+            var resumenes = valoracionService.resumenDeVarias(List.of(ID_PROTECTORA, 71L, 72L));
+
+            assertThat(resumenes).containsOnlyKeys(ID_PROTECTORA, 71L, 72L);
+            assertThat(resumenes.get(ID_PROTECTORA).media()).isEqualByComparingTo("4.50");
+            assertThat(resumenes.get(ID_PROTECTORA).total()).isEqualTo(8);
+
+            // Sin valoraciones: media nula, total conocido y cero.
+            assertThat(resumenes.get(71L).media()).isNull();
+            assertThat(resumenes.get(71L).total()).isZero();
+        }
+
+        @Test
+        @DisplayName("Sin ids que consultar no se pregunta a la base de datos")
+        void sinIdsNoSeConsulta() {
+            assertThat(valoracionService.resumenDeVarias(List.of())).isEmpty();
+
+            verify(valoracionRepository, never()).resumirPorProtectora(any());
+        }
+
+        @Test
+        @DisplayName("Redondea igual que el resumen de una sola, para que los dos coincidan")
+        void redondeaIgualQueElIndividual() {
+            when(valoracionRepository.resumirPorProtectora(any()))
+                    .thenReturn(List.of(fila(ID_PROTECTORA, 4.125, 4L)));
+            when(valoracionRepository.mediaDeProtectora(ID_PROTECTORA)).thenReturn(4.125);
+            when(valoracionRepository.countByProtectoraId(ID_PROTECTORA)).thenReturn(4L);
+
+            var enLote = valoracionService.resumenDeVarias(List.of(ID_PROTECTORA))
+                    .get(ID_PROTECTORA);
+            var individual = valoracionService.resumenDe(ID_PROTECTORA);
+
+            assertThat(enLote).isEqualTo(individual);
+        }
+
+        /**
+         * La ficha pública se sirve en cada visita al directorio: traer el
+         * histórico entero para pintar las primeras sería trabajo tirado. El tope
+         * lo fija quien llama, y aquí se comprueba que llega a la consulta.
+         */
+        @Test
+        @DisplayName("Las últimas valoraciones se piden con el tope que da quien llama")
+        void lasUltimasSePidenConTope() {
+            when(valoracionRepository.buscarDeProtectoraConAutor(anyLong(), any()))
+                    .thenReturn(List.of());
+
+            valoracionService.ultimasDe(ID_PROTECTORA, 10);
+
+            ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+            verify(valoracionRepository)
+                    .buscarDeProtectoraConAutor(eq(ID_PROTECTORA), captor.capture());
+            assertThat(captor.getValue().getPageSize()).isEqualTo(10);
+            assertThat(captor.getValue().getPageNumber()).isZero();
+        }
+
+        @Test
+        @DisplayName("Un tope de cero o negativo no se pasa a la consulta, que lo rechazaría")
+        void unTopeAbsurdoSeCorrige() {
+            when(valoracionRepository.buscarDeProtectoraConAutor(anyLong(), any()))
+                    .thenReturn(List.of());
+
+            valoracionService.ultimasDe(ID_PROTECTORA, 0);
+
+            ArgumentCaptor<Pageable> captor = ArgumentCaptor.forClass(Pageable.class);
+            verify(valoracionRepository)
+                    .buscarDeProtectoraConAutor(eq(ID_PROTECTORA), captor.capture());
+            assertThat(captor.getValue().getPageSize()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("El autor viaja sin email ni teléfono, como en el resto de la API")
+        void elAutorViajaSinDatosDeContacto() {
+            Valoracion emitida = new Valoracion();
+            emitida.setId(1L);
+            emitida.setUsuario(usuario());
+            emitida.setProtectora(protectora());
+            emitida.setPuntuacion(5);
+            when(valoracionRepository.buscarDeProtectoraConAutor(anyLong(), any()))
+                    .thenReturn(List.of(emitida));
+
+            ValoracionResponse respuesta = valoracionService.ultimasDe(ID_PROTECTORA, 10).get(0);
+
+            // La excepción de RF-06 es el contacto de la PROTECTORA, no el de quien
+            // la valora: aquí sigue mandando RNF-10.
+            assertThat(respuesta.getAutor().getNombre()).isEqualTo("Ana");
+            assertThat(respuesta.getPuntuacion()).isEqualTo(5);
+        }
+    }
+
     // ---------------------------------------------------------------------
+
+    /** Una fila de la agregación por protectora, que en producción monta Spring Data. */
+    private static ValoracionRepository.ResumenPorProtectora fila(Long protectoraId,
+                                                                 Double media, long total) {
+        return new ValoracionRepository.ResumenPorProtectora() {
+            @Override
+            public Long getProtectoraId() {
+                return protectoraId;
+            }
+
+            @Override
+            public Double getMedia() {
+                return media;
+            }
+
+            @Override
+            public long getTotal() {
+                return total;
+            }
+        };
+    }
 
     private static Protectora protectora() {
         Protectora protectora = new Protectora();

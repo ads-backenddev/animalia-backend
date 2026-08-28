@@ -20,8 +20,14 @@ import java.time.Instant;
  *
  * Deliberadamente NO se reutiliza ProtectoraResponse, que arrastra dentro un
  * UsuarioResponse con email y teléfono. Aquí solo viaja lo público de la
- * organización (RNF-10); para hablar con ella está
- * POST /api/protectoras/{id}/contactar, que no expone sus datos de contacto.
+ * organización: quien quiera contactar tiene el chat que abre el match (RF-12),
+ * y desde RF-06 también la ficha de la protectora en
+ * GET /api/protectoras/{id}, que sí lleva su contacto porque es un directorio y
+ * el requisito lo pide. La diferencia de criterio entre los dos endpoints está
+ * razonada en docs/api-rest.md §9.
+ *
+ * protectoraDireccion se omite cuando la protectora es una persona física, con
+ * el mismo criterio y el mismo método que el directorio de RF-06.
  */
 @Data
 @Builder
@@ -41,7 +47,24 @@ public class AnimalAdopcionDetalleResponse {
 
     private Long protectoraId;
     private String protectoraNombre;
+
+    /**
+     * Dónde está la protectora, omitida cuando es una persona física.
+     *
+     * Para una protectora que es un particular, la "dirección" es su domicilio.
+     * V12 ya lo trataba como dato personal —la baja de cuenta lo borra— y el
+     * directorio de RF-06 no lo publica; seguir enseñándolo aquí convertía esa
+     * protección en un gesto, porque bastaba con abrir la ficha de cualquiera de
+     * sus animales. Lo decide ProtectoraService.direccionPublicaDe, el mismo
+     * método que usa el directorio, para que los dos endpoints no puedan
+     * responder distinto.
+     *
+     * Se omite del JSON en vez de viajar como null, igual que en el directorio:
+     * así "es un particular" y "no puso dirección" se ven igual desde fuera.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String protectoraDireccion;
+
     private String protectoraZonaGeografica;
 
     /**

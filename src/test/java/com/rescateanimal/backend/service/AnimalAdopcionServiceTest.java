@@ -447,6 +447,86 @@ class AnimalAdopcionServiceTest {
             assertThatThrownBy(() -> animalAdopcionService.detalle(ID_ANIMAL))
                     .isInstanceOf(ResourceNotFoundException.class);
         }
+
+        @Test
+        @DisplayName("La dirección de una entidad sí viaja: es donde está la protectora")
+        void laDireccionDeUnaEntidadViaja() {
+            assertThat(animalAdopcionService.detalle(ID_ANIMAL).getProtectoraDireccion())
+                    .isEqualTo("Calle Mayor 1");
+        }
+
+        /**
+         * Para una protectora que es un particular, la "dirección" es su
+         * domicilio. El directorio de RF-06 dejó de publicarla, y mientras este
+         * endpoint siguiera enseñándola aquella protección era un gesto: bastaba
+         * con abrir la ficha de cualquiera de sus animales.
+         */
+        @Test
+        @DisplayName("La de una persona física no, con el mismo criterio que el directorio")
+        void laDireccionDeUnParticularNoViaja() {
+            AnimalAdopcion deUnParticular = animal(EstadoAnimal.DISPONIBLE);
+            deUnParticular.getProtectora().setEsPersonaFisica(true);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                    .thenReturn(Optional.of(deUnParticular));
+
+            assertThat(animalAdopcionService.detalle(ID_ANIMAL).getProtectoraDireccion()).isNull();
+        }
+    }
+
+    @Nested
+    @DisplayName("Retirada del catálogo entero de una protectora")
+    class RetiradaDelCatalogo {
+
+        /**
+         * ESTE MÉTODO ES LO QUE ARREGLÓ EL AGUJERO que encontró la revisión de
+         * RF-06. El código existía, pero como método privado de UsuarioService,
+         * así que solo la baja voluntaria lo aplicaba: rechazar o bloquear a una
+         * protectora dejaba sus animales ofreciéndose con nadie detrás para
+         * responder. Ahora las tres vías pasan por aquí, y por eso se prueba aquí.
+         */
+        @Test
+        @DisplayName("Los disponibles pasan a RETIRADO")
+        void losDisponiblesPasanARetirado() {
+            AnimalAdopcion uno = animal(EstadoAnimal.DISPONIBLE);
+            AnimalAdopcion otro = animal(EstadoAnimal.DISPONIBLE);
+            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+                    ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of(uno, otro));
+
+            int retirados = animalAdopcionService.retirarTodosLosDisponibles(
+                    ID_PROTECTORA, "motivo de prueba");
+
+            assertThat(retirados).isEqualTo(2);
+            assertThat(uno.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+            assertThat(otro.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+        }
+
+        @Test
+        @DisplayName("Solo se piden los DISPONIBLE: un ADOPTADO es un desenlace, no una oferta")
+        void losAdoptadosNoSeTocan() {
+            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+                    ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of());
+
+            animalAdopcionService.retirarTodosLosDisponibles(ID_PROTECTORA, "motivo de prueba");
+
+            // Pasarlos a RETIRADO borraría el hecho de que ese animal encontró
+            // casa, que es el dato que da sentido al histórico que se conserva.
+            verify(animalAdopcionRepository)
+                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.DISPONIBLE);
+            verify(animalAdopcionRepository, never())
+                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.ADOPTADO);
+            verify(animalAdopcionRepository, never())
+                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.RETIRADO);
+        }
+
+        @Test
+        @DisplayName("Sin nada que retirar no falla y devuelve cero")
+        void sinNadaQueRetirarDevuelveCero() {
+            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+                    ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of());
+
+            assertThat(animalAdopcionService.retirarTodosLosDisponibles(
+                    ID_PROTECTORA, "motivo de prueba")).isZero();
+        }
     }
 
     // ---------------------------------------------------------------------

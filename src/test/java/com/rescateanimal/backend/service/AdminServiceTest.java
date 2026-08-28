@@ -48,6 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -84,6 +85,8 @@ class AdminServiceTest {
     @Mock
     private AnimalAdopcionRepository animalAdopcionRepository;
     @Mock
+    private AnimalAdopcionService animalAdopcionService;
+    @Mock
     private NotificacionService notificacionService;
 
     private AdminService admin;
@@ -92,7 +95,7 @@ class AdminServiceTest {
     void prepararServicio() {
         admin = new AdminService(usuarioRepository, protectoraRepository, reporteRepository,
                 alertaRepository, avistamientoRepository, animalAdopcionRepository,
-                notificacionService);
+                animalAdopcionService, notificacionService);
     }
 
     // ---------------------------------------------------------------------
@@ -194,6 +197,67 @@ class AdminServiceTest {
 
             assertThat(usuario.getActivo()).isFalse();
             verifyNoInteractions(notificacionService);
+        }
+
+        /**
+         * BLOQUEAR AMPLÍA SU EFECTO DESDE EL BLOQUE DE RF-06, por lo mismo que
+         * rechazar: el catálogo de adopción nunca ha mirado si la cuenta que
+         * publicó un animal sigue viva, así que los de una protectora bloqueada
+         * seguían ofreciéndose con nadie detrás para responder.
+         */
+        @Test
+        @DisplayName("Bloquear a una protectora le retira además el catálogo")
+        void bloquearUnaProtectoraRetiraSuCatalogo() {
+            Usuario cuenta = usuario(ID_USUARIO, Rol.PROTECTORA, true);
+            when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(cuenta));
+            when(protectoraRepository.findByUsuarioId(ID_USUARIO))
+                    .thenReturn(Optional.of(protectora(EstadoProtectora.ACTIVA)));
+
+            admin.bloquear(ID_USUARIO, "Denuncias confirmadas", ID_ADMIN);
+
+            assertThat(cuenta.getActivo()).isFalse();
+            verify(animalAdopcionService)
+                    .retirarTodosLosDisponibles(eq(ID_PROTECTORA), anyString());
+        }
+
+        @Test
+        @DisplayName("Bloquear a un ciudadano no toca ningún catálogo")
+        void bloquearUnCiudadanoNoTocaElCatalogo() {
+            when(usuarioRepository.findById(ID_USUARIO))
+                    .thenReturn(Optional.of(usuario(ID_USUARIO, Rol.CIUDADANO, true)));
+
+            admin.bloquear(ID_USUARIO, "Insultos reiterados", ID_ADMIN);
+
+            // Sus alertas y avistamientos no son ofertas que alguien tenga que
+            // atender: retirarlas seria otra decision, que RF-11 no pide.
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("Una cuenta PROTECTORA sin organización se bloquea igual, sin reventar")
+        void sinOrganizacionSeBloqueaIgual() {
+            Usuario cuenta = usuario(ID_USUARIO, Rol.PROTECTORA, true);
+            when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(cuenta));
+            when(protectoraRepository.findByUsuarioId(ID_USUARIO)).thenReturn(Optional.empty());
+
+            admin.bloquear(ID_USUARIO, "Insultos reiterados", ID_ADMIN);
+
+            assertThat(cuenta.getActivo()).isFalse();
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("Una cuenta ya bloqueada no vuelve a retirar el catálogo")
+        void laYaBloqueadaNoVuelveARetirar() {
+            when(usuarioRepository.findById(ID_USUARIO))
+                    .thenReturn(Optional.of(usuario(ID_USUARIO, Rol.PROTECTORA, false)));
+
+            admin.bloquear(ID_USUARIO, "Otra vez", ID_ADMIN);
+
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(anyLong(), anyString());
         }
 
         @Test
@@ -354,6 +418,49 @@ class AdminServiceTest {
             assertThat(protectora.getEstado()).isEqualTo(EstadoProtectora.RECHAZADA);
             verify(notificacionService).notificarDecisionAdministrativa(
                     any(), eq(TipoNotificacion.PROTECTORA_RECHAZADA), anyLong());
+        }
+
+        /**
+         * RECHAZAR AMPLÍA SU EFECTO DESDE EL BLOQUE DE RF-06, y esto es lo que lo
+         * fija. Antes solo cambiaba el estado: sus animales seguían DISPONIBLE en
+         * el catálogo y en el feed, y un ciudadano podía deslizar a favor y abrir
+         * un chat con una cuenta que ya no puede entrar.
+         */
+        @Test
+        @DisplayName("Rechazar a una que estaba ACTIVA le retira además el catálogo")
+        void rechazarUnaActivaRetiraSuCatalogo() {
+            when(protectoraRepository.buscarConCuenta(ID_PROTECTORA))
+                    .thenReturn(Optional.of(protectora(EstadoProtectora.ACTIVA)));
+
+            admin.rechazarProtectora(ID_PROTECTORA, "Denuncias confirmadas", ID_ADMIN);
+
+            verify(animalAdopcionService)
+                    .retirarTodosLosDisponibles(eq(ID_PROTECTORA), anyString());
+        }
+
+        @Test
+        @DisplayName("Rechazar a una PENDIENTE no toca ningún catálogo: no pudo publicar nada")
+        void rechazarUnaPendienteNoTocaElCatalogo() {
+            when(protectoraRepository.buscarConCuenta(ID_PROTECTORA))
+                    .thenReturn(Optional.of(protectora(EstadoProtectora.PENDIENTE)));
+
+            admin.rechazarProtectora(ID_PROTECTORA, "Documentación incompleta", ID_ADMIN);
+
+            // Publicar exige un token, y una PENDIENTE no puede ni entrar.
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(anyLong(), anyString());
+        }
+
+        @Test
+        @DisplayName("Rechazar a una ya RECHAZADA no vuelve a retirar nada")
+        void rechazarUnaYaRechazadaNoRetiraNada() {
+            when(protectoraRepository.buscarConCuenta(ID_PROTECTORA))
+                    .thenReturn(Optional.of(protectora(EstadoProtectora.RECHAZADA)));
+
+            admin.rechazarProtectora(ID_PROTECTORA, "Otra vez", ID_ADMIN);
+
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(anyLong(), anyString());
         }
 
         @Test

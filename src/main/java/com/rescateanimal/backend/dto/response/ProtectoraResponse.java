@@ -1,13 +1,11 @@
 package com.rescateanimal.backend.dto.response;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.rescateanimal.backend.model.enums.EstadoProtectora;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
@@ -25,23 +23,20 @@ public class ProtectoraResponse {
     private String direccion;
     private String zonaGeografica;
     private EstadoProtectora estado;
-    /**
-     * Media de 1 a 5 estrellas, omitida del JSON cuando no la hay (RF-23).
-     *
-     * HOY NADIE LA RELLENA, y conviene saberlo: este DTO solo se construye al
-     * registrar una protectora, y una que acaba de nacer no tiene valoraciones
-     * por definición. Antes se copiaba de PROTECTORA.valoracion_media, una
-     * columna derivada que nadie mantenía y que era nula siempre; se eliminó en
-     * la migración V9 y la media se calcula donde de verdad se lee
-     * (ValoracionService). El campo se conserva porque este DTO es también el del
-     * listado y el detalle del directorio de RF-06, que está diseñado y sin
-     * construir: ahí sí tendrá valor, y lo tomará del service.
-     *
-     * El NON_NULL es lo que hace que "no hay media" se diga igual aquí, en el
-     * panel y en el detalle de un animal: omitiendo el campo, no mandando null.
-     */
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    private BigDecimal valoracionMedia;
+
+    // NO HAY CAMPO valoracionMedia, y su ausencia es una decisión. Existió como
+    // copia de PROTECTORA.valoracion_media, una columna derivada que nadie
+    // mantenía —nula para todas, indefinidamente— y que se eliminó en la
+    // migración V9. Después se conservó a la espera del directorio de RF-06, que
+    // estaba diseñado sobre este mismo DTO; al construirlo resultó que no servía
+    // —arrastra dentro un UsuarioResponse entero, con rol, idioma y estado de la
+    // cuenta, que un listado público no tiene por qué enseñar— y el directorio se
+    // quedó con ProtectoraDirectorioResponse y ProtectoraDetalleResponse. Sin
+    // ningún uso previsto ya, se retiró: un campo que siempre vale null es una
+    // promesa que el DTO no cumple. El JSON no cambia, porque era NON_NULL y no
+    // llegaba a serializarse nunca. La media se lee donde de verdad existe
+    // (ValoracionService).
+
     private Instant createdAt;
 
     /** Datos de la cuenta de acceso asociada. */

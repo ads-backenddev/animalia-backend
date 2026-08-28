@@ -196,7 +196,8 @@ class ProtectoraPanelServiceTest {
                     .thenReturn(paginaVacia());
             when(matchRegistroRepository.buscarSolicitudesDeProtectora(anyLong(), any()))
                     .thenReturn(List.of());
-            when(valoracionRepository.buscarDeProtectoraConAutor(anyLong())).thenReturn(List.of());
+            when(valoracionRepository.buscarDeProtectoraConAutor(anyLong(), any()))
+                    .thenReturn(List.of());
             when(animalAdopcionRepository.contarPorEstado(anyLong())).thenReturn(List.of());
 
             Pageable pagina = PageRequest.of(0, 20);
@@ -211,7 +212,7 @@ class ProtectoraPanelServiceTest {
             verify(animalAdopcionService).listarDeLaProtectora(eq(ID_PROTECTORA), any());
             verify(matchRegistroRepository)
                     .buscarSolicitudesDeProtectora(ID_PROTECTORA, TipoPublicacion.ADOPCION);
-            verify(valoracionRepository).buscarDeProtectoraConAutor(ID_PROTECTORA);
+            verify(valoracionRepository).buscarDeProtectoraConAutor(eq(ID_PROTECTORA), any());
             verify(animalAdopcionRepository).contarPorEstado(ID_PROTECTORA);
         }
 
@@ -410,9 +411,9 @@ class ProtectoraPanelServiceTest {
     class Valoraciones {
 
         @Test
-        @DisplayName("Sin el bloque 9 devuelve estructura vacía, no un error")
+        @DisplayName("Una protectora sin valoraciones devuelve estructura vacía, no un error")
         void sinBloque9DevuelveVacio() {
-            when(valoracionRepository.buscarDeProtectoraConAutor(ID_PROTECTORA))
+            when(valoracionRepository.buscarDeProtectoraConAutor(eq(ID_PROTECTORA), any()))
                     .thenReturn(List.of());
 
             ValoracionesPanelResponse respuesta = panel.valoraciones(ID_CUENTA);
@@ -425,7 +426,7 @@ class ProtectoraPanelServiceTest {
         @Test
         @DisplayName("Con valoraciones calcula la media sobre las que devuelve")
         void calculaLaMediaSobreLasDevueltas() {
-            when(valoracionRepository.buscarDeProtectoraConAutor(ID_PROTECTORA))
+            when(valoracionRepository.buscarDeProtectoraConAutor(eq(ID_PROTECTORA), any()))
                     .thenReturn(List.of(valoracion(1L, 5), valoracion(2L, 4), valoracion(3L, 3)));
 
             ValoracionesPanelResponse respuesta = panel.valoraciones(ID_CUENTA);

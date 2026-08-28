@@ -74,6 +74,7 @@ public class AdminService {
     private final AlertaRepository alertaRepository;
     private final AvistamientoRepository avistamientoRepository;
     private final AnimalAdopcionRepository animalAdopcionRepository;
+    private final AnimalAdopcionService animalAdopcionService;
     private final NotificacionService notificacionService;
 
     // ---------------------------------------------------------------------
@@ -144,8 +145,45 @@ public class AdminService {
         log.warn("El administrador {} ha bloqueado al usuario {}. Motivo: {}",
                 adminId, usuarioId, motivo);
 
+        retirarElCatalogoSiEsProtectora(usuario);
+
         notificar(usuario, TipoNotificacion.CUENTA_BLOQUEADA, null);
         return aUsuarioAdminResponse(usuario);
+    }
+
+    /**
+     * Si la cuenta bloqueada era la de una protectora, su catálogo se retira.
+     *
+     * BLOQUEAR AMPLÍA SU EFECTO DESDE EL BLOQUE DE RF-06, y conviene decirlo
+     * porque es un cambio de comportamiento y no una corrección interna: antes
+     * este endpoint solo ponía activo = false. El agujero que cerró es que el
+     * catálogo de adopción nunca ha mirado si la cuenta que publicó un animal
+     * sigue viva, así que los animales de una protectora bloqueada seguían
+     * DISPONIBLE, aparecían en el feed de swipe y admitían un deslizamiento a
+     * favor: se abría un chat con una cuenta que ya no puede entrar y que por
+     * tanto no va a responder nunca.
+     *
+     * Es el mismo argumento que la baja voluntaria ya aplicaba (RF-19), y ahora
+     * pasa por el mismo método, no por una copia.
+     *
+     * SOLO PARA EL ROL PROTECTORA. Bloquear a un ciudadano no toca ningún
+     * catálogo: sus alertas y avistamientos no son ofertas que alguien tenga que
+     * atender, y retirarlas sería otra decisión distinta que RF-11 no pide.
+     *
+     * NO ES REVERSIBLE AL DESBLOQUEAR, y es deliberado: RETIRADO es terminal en
+     * todo el proyecto —tampoco se vuelve de él a mano ni tras una adopción
+     * fallida—, y devolver los animales al escaparate automáticamente reabriría
+     * fichas cuyos matches son de otro ciclo. La protectora desbloqueada vuelve a
+     * publicar lo que siga ofreciendo, que es una decisión suya y no del sistema.
+     */
+    private void retirarElCatalogoSiEsProtectora(Usuario usuario) {
+        if (usuario.getRol() != Rol.PROTECTORA) {
+            return;
+        }
+
+        protectoraRepository.findByUsuarioId(usuario.getId()).ifPresent(protectora ->
+                animalAdopcionService.retirarTodosLosDisponibles(
+                        protectora.getId(), "su cuenta ha sido bloqueada"));
     }
 
     /** Revierte el bloqueo (RF-11). Idempotente, igual que bloquear. */
@@ -239,16 +277,39 @@ public class AdminService {
                 yield aProtectoraAdminResponse(protectora);
             }
 
-            case PENDIENTE, ACTIVA -> {
-                protectora.setEstado(EstadoProtectora.RECHAZADA);
-                log.warn("El administrador {} ha rechazado la protectora {}. Motivo: {}",
-                        adminId, protectoraId, motivo);
+            case PENDIENTE -> {
+                // Nunca llegó a estar verificada, así que no puede tener catálogo:
+                // publicar exige un token, y una PENDIENTE no puede ni entrar.
+                marcarRechazada(protectora, motivo, adminId);
+                yield aProtectoraAdminResponse(protectora);
+            }
 
-                notificar(protectora.getUsuario(), TipoNotificacion.PROTECTORA_RECHAZADA,
-                        protectoraId);
+            case ACTIVA -> {
+                marcarRechazada(protectora, motivo, adminId);
+
+                // Y ESTE ES EL CASO QUE AMPLÍA EL EFECTO DEL ENDPOINT. Estaba
+                // operando, así que puede tener animales publicados; ver abajo.
+                animalAdopcionService.retirarTodosLosDisponibles(
+                        protectoraId, "se le ha retirado la verificación");
                 yield aProtectoraAdminResponse(protectora);
             }
         };
+    }
+
+    /**
+     * El rechazo en sí: cambiar el estado, dejarlo en el log y avisar.
+     *
+     * Separado de las dos ramas del switch porque es lo único que comparten. Lo
+     * que las distingue es si había catálogo que retirar, que es lo que decide
+     * cada rama.
+     */
+    private void marcarRechazada(Protectora protectora, String motivo, Long adminId) {
+        protectora.setEstado(EstadoProtectora.RECHAZADA);
+        log.warn("El administrador {} ha rechazado la protectora {}. Motivo: {}",
+                adminId, protectora.getId(), motivo);
+
+        notificar(protectora.getUsuario(), TipoNotificacion.PROTECTORA_RECHAZADA,
+                protectora.getId());
     }
 
     // ---------------------------------------------------------------------

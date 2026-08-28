@@ -1,0 +1,45 @@
+-- ---------------------------------------------------------------------------
+-- V13 - Indice para el directorio publico de protectoras (RF-06)
+--
+-- QUE CONSULTA SIRVE. El listado de RF-06 filtra por estado y devuelve las
+-- protectoras ordenadas por nombre:
+--
+--     WHERE p.estado IN ('ACTIVA') AND u.activo = true
+--     ORDER BY lower(p.nombre_organizacion), p.id
+--
+-- El indice cubre las dos mitades a la vez, que es para lo que sirve un btree
+-- compuesto: encuentra por el primer campo las filas del estado pedido y las
+-- entrega YA ORDENADAS por el segundo, de modo que la consulta no tiene que
+-- ordenar nada para servir la primera pagina.
+--
+-- POR QUE lower(). El orden se pide sobre lower(nombre_organizacion) y no sobre
+-- la columna en crudo por dos motivos. Uno es que un indice solo sirve para un
+-- ORDER BY si ordena por lo mismo que este pide, asi que con la columna sin
+-- transformar no se usaria. El otro es que sin lower() el resultado depende de
+-- la intercalacion con la que se creo la base de datos: bajo la C locale,
+-- "Zamora" va antes que "abrigo", que en un directorio se lee como un fallo.
+-- Es el mismo recurso, y por el mismo motivo, que uk_usuario_email_lower (V5) e
+-- idx_alerta_especie_lower (V4).
+--
+-- LO QUE NO PUEDE CUBRIR es u.activo, que vive en USUARIO y no en esta tabla.
+-- Esa condicion se resuelve en la union, no aqui. No es un problema: descarta
+-- pocas filas —las cuentas dadas de baja o bloqueadas son una minoria— y llega
+-- cuando el conjunto ya esta acotado por el estado.
+--
+-- HONESTIDAD SOBRE EL TAMANO. PROTECTORA tiene una fila por organizacion dada de
+-- alta, asi que hoy son pocas y un recorrido secuencial seria perfectamente
+-- rapido: esto no arregla ninguna lentitud medida, a diferencia de V10, que
+-- venia de un seq scan real en cada detalle de animal. Se crea porque es el
+-- indice que la forma de la consulta pide y porque la tabla se escribe muy de
+-- vez en cuando —un alta de protectora, una verificacion del administrador—, de
+-- modo que su coste de mantenimiento es practicamente nulo. Si el planificador
+-- decide ignorarlo mientras la tabla sea pequena, hara bien.
+--
+-- NO ACOMPANA A NINGUN CAMBIO DE ENTIDAD: RF-06 no anade ni una columna, solo
+-- lee. Se versiona igualmente porque ddl-auto=validate no comprueba indices, asi
+-- que un @Index en la anotacion no existiria en la base de datos y nadie se
+-- enteraria (CLAUDE.md).
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX idx_protectora_directorio
+    ON protectora USING btree (estado, lower(nombre_organizacion));

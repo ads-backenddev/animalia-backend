@@ -151,8 +151,11 @@ public class ProtectoraPanelService {
     public ValoracionesPanelResponse valoraciones(Long usuarioId) {
         Protectora protectora = exigirProtectoraActiva(usuarioId);
 
-        List<Valoracion> valoraciones =
-                valoracionRepository.buscarDeProtectoraConAutor(protectora.getId());
+        // Sin tope: el panel es el histórico propio de la protectora y las quiere
+        // todas. La ficha pública del directorio (RF-06) usa la misma consulta con
+        // un límite, que es la única diferencia entre los dos usos.
+        List<Valoracion> valoraciones = valoracionRepository
+                .buscarDeProtectoraConAutor(protectora.getId(), Pageable.unpaged());
 
         return ValoracionesPanelResponse.builder()
                 .valoraciones(valoraciones.stream().map(ProtectoraPanelService::aValoracionResponse).toList())
