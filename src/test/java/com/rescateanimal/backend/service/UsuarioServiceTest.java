@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,7 +61,7 @@ class UsuarioServiceTest {
     @Mock
     private ProtectoraRepository protectoraRepository;
     @Mock
-    private AnimalAdopcionRepository animalAdopcionRepository;
+    private AnimalAdopcionService animalAdopcionService;
     @Mock
     private PasswordEncoder passwordEncoder;
 
@@ -73,7 +74,7 @@ class UsuarioServiceTest {
         // demostrar es que el email resultante es irreversible y determinista, y
         // con un mock eso solo diría que se llama a quien hay que llamar.
         usuarioService = new UsuarioService(usuarioRepository, protectoraRepository,
-                animalAdopcionRepository, passwordEncoder, new AnonimizacionService());
+                animalAdopcionService, passwordEncoder, new AnonimizacionService());
 
         usuario = ciudadano();
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario));
@@ -278,30 +279,22 @@ class UsuarioServiceTest {
     @DisplayName("Baja de una protectora")
     class BajaDeProtectora {
 
+        /**
+         * QUÉ se retira y por qué los ADOPTADO no se tocan lo comprueba
+         * AnimalAdopcionServiceTest, que es donde vive el código desde el bloque
+         * de RF-06. Aquí solo importa que la baja lo pida: era un método privado
+         * de UsuarioService, y por serlo la retirada solo ocurría en esta vía
+         * mientras el administrador dejaba los animales en el escaparate.
+         */
         @Test
-        @DisplayName("Sus animales disponibles pasan a RETIRADO: ya no hay quien responda")
-        void losDisponiblesSeRetiran() {
-            AnimalAdopcion disponible = animal(EstadoAnimal.DISPONIBLE);
-            prepararProtectoraCon(List.of(disponible));
+        @DisplayName("La baja manda retirar el catálogo de su protectora")
+        void laBajaRetiraElCatalogo() {
+            prepararProtectora();
 
             usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
 
-            assertThat(disponible.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
-        }
-
-        @Test
-        @DisplayName("Solo se piden los DISPONIBLE: un ADOPTADO es un desenlace, no una oferta")
-        void losAdoptadosNoSeTocan() {
-            prepararProtectoraCon(List.of());
-
-            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
-
-            // Pasarlos a RETIRADO borraría el hecho de que ese animal encontró
-            // casa, que es el dato que da sentido al histórico que se conserva.
-            verify(animalAdopcionRepository)
-                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.DISPONIBLE);
-            verify(animalAdopcionRepository, never())
-                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.ADOPTADO);
+            verify(animalAdopcionService)
+                    .retirarTodosLosDisponibles(eq(ID_PROTECTORA), anyString());
         }
 
         @Test
@@ -309,8 +302,8 @@ class UsuarioServiceTest {
         void elCiudadanoNoTocaElCatalogo() {
             usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
 
-            verify(animalAdopcionRepository, never())
-                    .findByProtectoraIdAndEstado(any(), any());
+            verify(animalAdopcionService, never())
+                    .retirarTodosLosDisponibles(any(), anyString());
         }
 
         @Test
@@ -337,7 +330,7 @@ class UsuarioServiceTest {
             particular.setEsPersonaFisica(true);
             particular.setNombreOrganizacion("María Gómez Ruiz");
             particular.setDireccion("C/ del Olmo 14, 3ºB");
-            prepararProtectora(particular, List.of());
+            prepararProtectora(particular);
 
             usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
 
@@ -352,7 +345,7 @@ class UsuarioServiceTest {
             // explicando de dónde salió cada animal que publicó.
             Protectora asociacion = protectora();
             asociacion.setEsPersonaFisica(false);
-            prepararProtectora(asociacion, List.of());
+            prepararProtectora(asociacion);
 
             usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
 
@@ -365,7 +358,7 @@ class UsuarioServiceTest {
         void laZonaSeConservaSiempre() {
             Protectora particular = protectora();
             particular.setEsPersonaFisica(true);
-            prepararProtectora(particular, List.of());
+            prepararProtectora(particular);
 
             usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
 
@@ -374,15 +367,13 @@ class UsuarioServiceTest {
             assertThat(particular.getZonaGeografica()).isEqualTo("Madrid");
         }
 
-        private void prepararProtectoraCon(List<AnimalAdopcion> disponibles) {
-            prepararProtectora(protectora(), disponibles);
+        private void prepararProtectora() {
+            prepararProtectora(protectora());
         }
 
-        private void prepararProtectora(Protectora protectora, List<AnimalAdopcion> disponibles) {
+        private void prepararProtectora(Protectora protectora) {
             usuario.setRol(Rol.PROTECTORA);
             when(protectoraRepository.findByUsuarioId(ID_USUARIO)).thenReturn(Optional.of(protectora));
-            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
-                    ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(disponibles);
         }
     }
 

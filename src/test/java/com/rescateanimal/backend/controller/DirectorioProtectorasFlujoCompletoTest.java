@@ -279,6 +279,61 @@ class DirectorioProtectorasFlujoCompletoTest {
         assertThat(ficha(idActiva).statusCode()).isEqualTo(404);
     }
 
+    /**
+     * REGRESIÓN DEL HALLAZGO DE LA REVISIÓN DE ESTE BLOQUE. Sacar a una
+     * protectora del directorio no la sacaba del catálogo: rechazarla solo
+     * cambiaba su estado y bloquearla solo ponía activo = false, y el catálogo
+     * nunca ha mirado ninguna de las dos cosas. Sus animales seguían DISPONIBLE
+     * en el escaparate y en el feed, y un ciudadano podía deslizar a favor y
+     * abrir un chat con una cuenta que ya no puede entrar.
+     *
+     * Se comprobó ejecutándolo antes del arreglo: todas las aserciones contrarias
+     * a estas pasaban. Esta prueba es lo que impide que vuelva.
+     */
+    @Test
+    @DisplayName("Rechazar a una protectora le retira además el catálogo, no solo la ficha")
+    void elRechazoLeRetiraElCatalogo() throws Exception {
+        assertThat(idsDelCatalogo()).contains(idAnimal);
+
+        assertThat(enviar("PUT", "/api/admin/protectoras/" + idActiva + "/rechazar",
+                tokenAdmin, """
+                        {"motivo":"Denuncias confirmadas"}
+                        """).statusCode()).isEqualTo(200);
+
+        assertThat(idsDelCatalogo())
+                .as("un animal sin nadie que responda no puede seguir ofreciéndose")
+                .doesNotContain(idAnimal);
+        assertThat(estadoDelAnimal(tokenCiudadano)).isEqualTo("RETIRADO");
+
+        // Y tampoco en el feed de swipe, que es por donde se llegaba al chat.
+        assertThat(JsonPath.<List<Integer>>read(
+                enviar("GET", "/api/adopcion/feed?zona=" + zona, tokenCiudadano, null).body(),
+                "$[*].id")).doesNotContain(idAnimal.intValue());
+    }
+
+    @Test
+    @DisplayName("Bloquear la cuenta de una protectora hace lo mismo")
+    void elBloqueoLeRetiraElCatalogo() throws Exception {
+        assertThat(enviar("PUT", "/api/admin/usuarios/" + idCuentaActiva + "/bloquear",
+                tokenAdmin, """
+                        {"motivo":"Denuncias confirmadas"}
+                        """).statusCode()).isEqualTo(200);
+
+        assertThat(idsDelCatalogo()).doesNotContain(idAnimal);
+        assertThat(estadoDelAnimal(tokenCiudadano)).isEqualTo("RETIRADO");
+    }
+
+    @Test
+    @DisplayName("Bloquear a un ciudadano no toca ningún catálogo")
+    void elBloqueoDeUnCiudadanoNoTocaElCatalogo() throws Exception {
+        assertThat(enviar("PUT", "/api/admin/usuarios/" + idCiudadano + "/bloquear",
+                tokenAdmin, """
+                        {"motivo":"Insultos reiterados"}
+                        """).statusCode()).isEqualTo(200);
+
+        assertThat(estadoDelAnimal(tokenAdmin)).isEqualTo("DISPONIBLE");
+    }
+
     // ---------------------------------------------------------------------
     // Qué contacto se publica
     // ---------------------------------------------------------------------
@@ -526,6 +581,28 @@ class DirectorioProtectorasFlujoCompletoTest {
     private List<Long> idsDelListado(HttpResponse<String> listado) {
         List<Integer> ids = JsonPath.read(listado.body(), "$.content[*].id");
         return ids.stream().map(Integer::longValue).toList();
+    }
+
+    /** Los animales que el escaparate público enseña en esta zona. */
+    private List<Long> idsDelCatalogo() throws Exception {
+        HttpResponse<String> catalogo =
+                enviar("GET", "/api/adopcion?size=100&zona=" + zona, tokenCiudadano, null);
+        assertThat(catalogo.statusCode()).isEqualTo(200);
+
+        List<Integer> ids = JsonPath.read(catalogo.body(), "$.content[*].id");
+        return ids.stream().map(Integer::longValue).toList();
+    }
+
+    /**
+     * Recibe el token porque alguna de estas pruebas bloquea al ciudadano, y una
+     * cuenta bloqueada deja de valer en la siguiente petición: JwtAuthFilter
+     * recarga la fila del usuario en cada una, precisamente para eso (RF-11).
+     */
+    private String estadoDelAnimal(String token) throws Exception {
+        HttpResponse<String> detalle =
+                enviar("GET", "/api/adopcion/" + idAnimal, token, null);
+        assertThat(detalle.statusCode()).isEqualTo(200);
+        return JsonPath.read(detalle.body(), "$.estado");
     }
 
     /** Desliza a favor —el "contacto" que RF-23 exige— y después valora. */

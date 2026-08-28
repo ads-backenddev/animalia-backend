@@ -192,6 +192,64 @@ public class AnimalAdopcionService {
         return aResponse(animal);
     }
 
+    /**
+     * Retira del catálogo todo lo que una protectora dejaba publicado.
+     *
+     * SE LLAMA CUANDO LA PROTECTORA DEJA DE PODER ATENDER, por cualquiera de las
+     * tres vías que hoy existen: se da de baja (RF-19), el administrador la
+     * rechaza retirándole una verificación ya concedida, o le bloquea la cuenta
+     * (RF-11). Las tres acaban igual —hay animales ofreciéndose y nadie detrás
+     * para responder— así que las tres pasan por aquí.
+     *
+     * NO SE PUEDEN QUEDAR OFRECIÉNDOSE. Un animal en adopción es una invitación a
+     * contactar con quien lo publicó, y quien lo publicó ya no está: nadie va a
+     * responder, nadie puede confirmar la adopción y nadie puede corregir la
+     * ficha. Dejarlos DISPONIBLE haría perder el tiempo a cada ciudadano que
+     * deslizara a favor, y ninguna de esas solicitudes tendría respuesta posible.
+     *
+     * PASAN A RETIRADO, que es el estado que el catálogo ya tiene para "esto ya no
+     * se ofrece" y el mismo al que llegan retirándolos a mano. No se inventa un
+     * estado nuevo: la consecuencia es idéntica y una rama más que ninguna
+     * consulta necesita distinguir solo añade trabajo.
+     *
+     * LOS ADOPTADOS NO SE TOCAN. ADOPTADO es un desenlace, no una oferta abierta:
+     * pasarlo a RETIRADO borraría el hecho de que ese animal encontró casa, que es
+     * el dato que da sentido al histórico. Los ya RETIRADO tampoco, porque no hay
+     * nada que cambiar.
+     *
+     * ES IDEMPOTENTE: llamarla dos veces no cambia nada la segunda, porque a la
+     * segunda ya no queda ningún DISPONIBLE que retirar.
+     *
+     * VIVE AQUÍ Y NO EN QUIEN LLAMA, y eso es lo que arregla el agujero que
+     * encontró la revisión de RF-06: el código existía, pero como método privado
+     * de UsuarioService, así que solo la baja voluntaria lo aplicaba y las dos
+     * acciones del administrador dejaban los animales en el escaparate. Una sola
+     * implementación es lo que impide que la próxima vía que deje sin dueño a una
+     * protectora se olvide de esto.
+     *
+     * NO COMPRUEBA PERMISOS, a propósito, y por eso NO es pública: quien llama ya
+     * ha decidido que esa protectora deja de operar. Visible solo en este paquete,
+     * de modo que ningún controller pueda vaciarle el catálogo a una protectora
+     * sin pasar por un service que lo justifique.
+     *
+     * @param protectoraId a quién se le retira
+     * @param motivo       para el log; no viaja a ninguna respuesta
+     * @return cuántos animales se han retirado
+     */
+    @Transactional
+    int retirarTodosLosDisponibles(Long protectoraId, String motivo) {
+        List<AnimalAdopcion> disponibles = animalAdopcionRepository
+                .findByProtectoraIdAndEstado(protectoraId, EstadoAnimal.DISPONIBLE);
+
+        disponibles.forEach(animal -> animal.setEstado(EstadoAnimal.RETIRADO));
+
+        if (!disponibles.isEmpty()) {
+            log.info("Retirados {} animales de la protectora {}: {}",
+                    disponibles.size(), protectoraId, motivo);
+        }
+        return disponibles.size();
+    }
+
     // ---------------------------------------------------------------------
     // Consultas del catálogo (RF-22)
     // ---------------------------------------------------------------------
@@ -364,6 +422,15 @@ public class AnimalAdopcionService {
      * no la enseñaba nunca. La columna se eliminó en la migración V9 y la media
      * la da ValoracionService con AVG sobre las valoraciones reales (RF-23). El
      * coste es una agregación más por detalle, sobre una tabla pequeña.
+     *
+     * LA DIRECCIÓN SE OMITE CUANDO DETRÁS HAY UNA PERSONA FÍSICA, desde el bloque
+     * de RF-06. Es un cambio de contrato pequeño y consciente: antes viajaba
+     * siempre, y para una protectora que es un particular esa "dirección" es su
+     * domicilio. V12 ya había decidido que es un dato personal —la baja de cuenta
+     * lo borra— y el directorio de RF-06 ya no lo publica, así que seguir
+     * enseñándolo aquí convertía esa protección en un gesto: bastaba con abrir la
+     * ficha de cualquiera de sus animales. El campo se omite del JSON, no viaja
+     * como null.
      */
     @Transactional(readOnly = true)
     public AnimalAdopcionDetalleResponse detalle(Long animalId) {
@@ -387,7 +454,7 @@ public class AnimalAdopcionService {
                 .createdAt(animal.getCreatedAt())
                 .protectoraId(protectora.getId())
                 .protectoraNombre(protectora.getNombreOrganizacion())
-                .protectoraDireccion(protectora.getDireccion())
+                .protectoraDireccion(ProtectoraService.direccionPublicaDe(protectora))
                 .protectoraZonaGeografica(protectora.getZonaGeografica())
                 .protectoraValoracionMedia(valoraciones.media())
                 .protectoraValoracionTotal(valoraciones.total())

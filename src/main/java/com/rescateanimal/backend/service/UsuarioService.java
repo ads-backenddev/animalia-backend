@@ -64,7 +64,7 @@ public class UsuarioService {
 
     private final UsuarioRepository usuarioRepository;
     private final ProtectoraRepository protectoraRepository;
-    private final AnimalAdopcionRepository animalAdopcionRepository;
+    private final AnimalAdopcionService animalAdopcionService;
     private final PasswordEncoder passwordEncoder;
     private final AnonimizacionService anonimizacion;
 
@@ -183,24 +183,15 @@ public class UsuarioService {
     }
 
     /**
-     * Retira del catálogo los animales que la protectora dejaba publicados.
+     * Deja la protectora sin catálogo y, si era una persona, sin datos.
      *
-     * NO SE PUEDEN QUEDAR OFRECIÉNDOSE. Un animal en adopción es una invitación a
-     * contactar con quien lo publicó, y quien lo publicó acaba de irse: nadie va a
-     * responder, nadie puede confirmar la adopción y nadie puede corregir la
-     * ficha. Dejarlos DISPONIBLE haría perder el tiempo a cada ciudadano que
-     * deslizara a favor, y ninguna de esas solicitudes tendría respuesta posible.
-     *
-     * PASAN A RETIRADO, que es el estado que el catálogo ya tiene para "esto ya no
-     * se ofrece" y el mismo al que llega retirarlos a mano o hacerlo el
-     * administrador. No se inventa un estado nuevo por la misma razón que no se
-     * inventó para la retirada administrativa: la consecuencia es idéntica y una
-     * rama más que ninguna consulta necesita distinguir solo añade trabajo.
-     *
-     * LOS ADOPTADOS NO SE TOCAN. ADOPTADO es un desenlace, no una oferta abierta:
-     * pasarlo a RETIRADO borraría el hecho de que ese animal encontró casa, que es
-     * el dato que da sentido al histórico que esta baja se esfuerza en conservar.
-     * Los ya RETIRADO tampoco, porque no hay nada que cambiar.
+     * RETIRAR LO PUBLICADO NO SE HACE AQUÍ desde el bloque de RF-06: vive en
+     * AnimalAdopcionService.retirarTodosLosDisponibles, que es quien gobierna los
+     * estados del animal. Era un método privado de esta clase, y por serlo solo lo
+     * aplicaba la baja voluntaria: rechazar o bloquear a una protectora dejaba sus
+     * animales ofreciéndose en el escaparate con nadie detrás para responder. El
+     * razonamiento completo —por qué pasan a RETIRADO y por qué los ADOPTADO no se
+     * tocan— está allí, en el único sitio donde ya está escrito.
      *
      * LA FILA DE PROTECTORA SOLO SE ANONIMIZA SI ERA UNA PERSONA. Ver
      * anonimizarSiEsPersonaFisica.
@@ -214,20 +205,9 @@ public class UsuarioService {
             return;
         }
 
-        retirarAnimalesDisponibles(protectora);
+        animalAdopcionService.retirarTodosLosDisponibles(
+                protectora.getId(), "su cuenta se ha dado de baja");
         anonimizarSiEsPersonaFisica(protectora);
-    }
-
-    private void retirarAnimalesDisponibles(Protectora protectora) {
-        List<AnimalAdopcion> disponibles = animalAdopcionRepository
-                .findByProtectoraIdAndEstado(protectora.getId(), EstadoAnimal.DISPONIBLE);
-
-        disponibles.forEach(animal -> animal.setEstado(EstadoAnimal.RETIRADO));
-
-        if (!disponibles.isEmpty()) {
-            log.info("Retirados {} animales de la protectora {} al darse de baja",
-                    disponibles.size(), protectora.getId());
-        }
     }
 
     /**

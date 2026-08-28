@@ -26,11 +26,8 @@ import java.time.Instant;
  * el requisito lo pide. La diferencia de criterio entre los dos endpoints está
  * razonada en docs/api-rest.md §9.
  *
- * OJO CON protectoraDireccion: se devuelve mire quien mire y sin consultar
- * esPersonaFisica, así que si detrás de la protectora hay un particular esto
- * publica su domicilio. El directorio de RF-06 ya no lo hace —lo omite en ese
- * caso—, y que aquí siga saliendo es una incoherencia conocida, anotada con su
- * arreglo en docs/api-rest.md §20.
+ * protectoraDireccion se omite cuando la protectora es una persona física, con
+ * el mismo criterio y el mismo método que el directorio de RF-06.
  */
 @Data
 @Builder
@@ -50,7 +47,24 @@ public class AnimalAdopcionDetalleResponse {
 
     private Long protectoraId;
     private String protectoraNombre;
+
+    /**
+     * Dónde está la protectora, omitida cuando es una persona física.
+     *
+     * Para una protectora que es un particular, la "dirección" es su domicilio.
+     * V12 ya lo trataba como dato personal —la baja de cuenta lo borra— y el
+     * directorio de RF-06 no lo publica; seguir enseñándolo aquí convertía esa
+     * protección en un gesto, porque bastaba con abrir la ficha de cualquiera de
+     * sus animales. Lo decide ProtectoraService.direccionPublicaDe, el mismo
+     * método que usa el directorio, para que los dos endpoints no puedan
+     * responder distinto.
+     *
+     * Se omite del JSON en vez de viajar como null, igual que en el directorio:
+     * así "es un particular" y "no puso dirección" se ven igual desde fuera.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String protectoraDireccion;
+
     private String protectoraZonaGeografica;
 
     /**

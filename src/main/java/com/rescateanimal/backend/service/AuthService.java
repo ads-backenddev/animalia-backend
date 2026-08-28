@@ -343,13 +343,13 @@ public class AuthService {
     }
 
     /**
-     * SIN valoracionMedia, y no es un campo que se haya olvidado: este DTO solo
-     * se construye al registrar una protectora, y una que acaba de nacer no
-     * tiene ninguna valoración por definición. Antes se copiaba
-     * PROTECTORA.valoracion_media, que era nula siempre porque nadie la
-     * mantenía; la columna se eliminó en la migración V9 y la media se calcula
-     * donde de verdad se lee (ValoracionService). Aquí el valor correcto es la
-     * ausencia, y el campo se omite del JSON.
+     * SIN valoracionMedia, que ya no es ni un campo del DTO. Este método es el
+     * único que construye un ProtectoraResponse, y lo hace al registrar una
+     * protectora: una que acaba de nacer no tiene ninguna valoración por
+     * definición, así que el campo valía siempre null. Se copiaba de
+     * PROTECTORA.valoracion_media, columna que se eliminó en V9; el campo del DTO
+     * se retiró en el bloque de RF-06, cuando quedó claro que el directorio no
+     * iba a usarlo. La media se lee donde de verdad existe (ValoracionService).
      */
     private ProtectoraResponse aProtectoraResponse(Protectora protectora) {
         return ProtectoraResponse.builder()

@@ -327,13 +327,14 @@ public class ProtectoraService {
      * de cuenta los borra (RF-19); sería incoherente tratarlos como tales para
      * borrarlos y no tratarlos como tales para publicarlos.
      *
-     * QUEDA UN AGUJERO FUERA DEL ALCANCE DE ESTE BLOQUE: GET /api/adopcion/{id}
-     * devuelve protectoraDireccion sin mirar esPersonaFisica, así que la
-     * dirección de un particular que tenga aunque sea un animal publicado sigue
-     * siendo legible por ahí. Es contrato de un endpoint anterior; está anotado
-     * en docs/api-rest.md §20 con el arreglo, que es una línea.
+     * NO ES PRIVADO, Y ESA ES LA PARTE QUE IMPORTA. GET /api/adopcion/{id}
+     * publicaba la dirección sin mirar este campo, así que ocultarla solo aquí
+     * era un gesto: bastaba con abrir la ficha de cualquiera de sus animales.
+     * AnimalAdopcionService.detalle llama a este mismo método, de modo que "qué
+     * dirección de una protectora se puede publicar" se responde en un solo
+     * sitio y no puede contestarse distinto en dos endpoints.
      */
-    private static String direccionPublicaDe(Protectora protectora) {
+    static String direccionPublicaDe(Protectora protectora) {
         return esPersonaFisica(protectora) ? null : protectora.getDireccion();
     }
 
