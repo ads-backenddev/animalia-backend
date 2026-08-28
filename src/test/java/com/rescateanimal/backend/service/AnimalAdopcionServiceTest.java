@@ -70,13 +70,21 @@ class AnimalAdopcionServiceTest {
     private AnimalAdopcionRepository animalAdopcionRepository;
     @Mock
     private ProtectoraRepository protectoraRepository;
+    @Mock
+    private ValoracionService valoracionService;
 
     private AnimalAdopcionService animalAdopcionService;
 
     @BeforeEach
     void prepararServicio() {
         animalAdopcionService =
-                new AnimalAdopcionService(animalAdopcionRepository, protectoraRepository, TAMANYO_FEED);
+                new AnimalAdopcionService(animalAdopcionRepository, protectoraRepository,
+                        valoracionService, TAMANYO_FEED);
+
+        // El detalle pide la media de la protectora; sin esto el mock devuelve
+        // null y revienta al leerla. Sin valoraciones, media nula y total cero.
+        when(valoracionService.resumenDe(any()))
+                .thenReturn(new ValoracionService.ResumenValoraciones(null, 0L));
 
         when(protectoraRepository.findByUsuarioId(ID_DUENYA)).thenReturn(Optional.of(protectora()));
         when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))

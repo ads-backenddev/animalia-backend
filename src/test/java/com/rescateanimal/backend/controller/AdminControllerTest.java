@@ -50,7 +50,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * LO QUE ESTE FICHERO EXISTE PARA DEMOSTRAR es que el @PreAuthorize escrito una
  * sola vez en la clase cubre los OCHO endpoints. Está escrito una vez, así que
  * hace falta recorrerlos todos para saber que se aplica a todos y no solo al
- * primero; y son los ocho endpoints más peligrosos de la API. La lista RUTAS es
+ * primero; y son los nueve endpoints más peligrosos de la API. La lista RUTAS es
  * la del controller entera, y cada prueba de permisos la recorre completa.
  *
  * Se prueban los tres roles que existen: CIUDADANO, PROTECTORA y ADMIN. Un
@@ -94,7 +94,7 @@ class AdminControllerTest {
         TestSecurityContextHolder.clearContext();
     }
 
-    /** Los ocho endpoints del panel, con el verbo y el cuerpo que cada uno pide. */
+    /** Los nueve endpoints del panel, con el verbo y el cuerpo que cada uno pide. */
     private static List<RequestBuilder> rutas() {
         return List.of(
                 get("/api/admin/usuarios"),
@@ -108,6 +108,7 @@ class AdminControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"motivo\":\"Documentación insuficiente\"}"),
                 get("/api/admin/reportes"),
+                put("/api/admin/reportes/5/resolver"),
                 delete("/api/admin/publicaciones/33").param("tipo", "ALERTA"));
     }
 
@@ -118,7 +119,7 @@ class AdminControllerTest {
     class Permisos {
 
         @Test
-        @DisplayName("Un CIUDADANO recibe 403 en los ocho endpoints")
+        @DisplayName("Un CIUDADANO recibe 403 en los nueve endpoints")
         void elCiudadanoNoEntraEnNinguno() throws Exception {
             autenticar(ID_OBJETIVO, Rol.CIUDADANO);
 
@@ -131,7 +132,7 @@ class AdminControllerTest {
         }
 
         @Test
-        @DisplayName("Una PROTECTORA recibe 403 en los ocho endpoints")
+        @DisplayName("Una PROTECTORA recibe 403 en los nueve endpoints")
         void laProtectoraNoEntraEnNinguno() throws Exception {
             autenticar(20L, Rol.PROTECTORA);
 
@@ -149,7 +150,7 @@ class AdminControllerTest {
         // AdminFlujoCompletoTest.sinRolAdminNoSeEntra contra el servidor entero.
 
         @Test
-        @DisplayName("Un ADMIN sí entra en los ocho: la regla es el rol, no una lista negra")
+        @DisplayName("Un ADMIN sí entra en los nueve: la regla es el rol, no una lista negra")
         void elAdminEntraEnLosOcho() throws Exception {
             autenticar(ID_ADMIN, Rol.ADMIN);
             when(adminService.listarUsuarios(any(), any(), any())).thenReturn(paginaVacia());

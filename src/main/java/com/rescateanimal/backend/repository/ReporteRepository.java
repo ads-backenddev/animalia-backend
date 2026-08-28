@@ -11,10 +11,6 @@ import java.util.List;
 
 /**
  * Capa de datos de Reporte. Sin lógica de negocio.
- *
- * Todo lo de aquí es de lectura, y hoy siempre devuelve vacío: la tabla existe
- * desde la migración V1, pero nada puede insertar en ella hasta que el bloque 9
- * traiga ReporteService y el endpoint de reportar contenido (RF-26).
  */
 @Repository
 public interface ReporteRepository extends JpaRepository<Reporte, Long> {

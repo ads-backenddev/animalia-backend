@@ -84,8 +84,9 @@ public class ProtectoraPanelController {
     /**
      * GET /api/protectoras/panel/valoraciones -> 200, 401, 403
      *
-     * Valoraciones recibidas y su media. Devuelve lista vacía y media ausente
-     * hasta que el bloque 9 permita crear valoraciones (RF-23).
+     * Valoraciones recibidas y su media, calculada sobre ellas y no sobre
+     * ninguna columna guardada (RF-23). Las alimenta
+     * PUT /api/protectoras/{id}/valoracion.
      */
     @GetMapping("/valoraciones")
     public ResponseEntity<ValoracionesPanelResponse> valoraciones(

@@ -51,15 +51,18 @@ public class AnimalAdopcionService {
 
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final ProtectoraRepository protectoraRepository;
+    private final ValoracionService valoracionService;
 
     /** Tamaño de la tanda que devuelve el feed de swipe (RF-09). */
     private final int tamanyoFeed;
 
     public AnimalAdopcionService(AnimalAdopcionRepository animalAdopcionRepository,
                                  ProtectoraRepository protectoraRepository,
+                                 ValoracionService valoracionService,
                                  @Value("${app.adopcion.tamanyo-feed}") int tamanyoFeed) {
         this.animalAdopcionRepository = animalAdopcionRepository;
         this.protectoraRepository = protectoraRepository;
+        this.valoracionService = valoracionService;
         this.tamanyoFeed = tamanyoFeed;
     }
 
@@ -311,6 +314,13 @@ public class AnimalAdopcionService {
      * llega aquí lo hace desde un enlace o desde un chat abierto antes, y
      * merece ver qué pasó con el animal en lugar de un 404. El estado va en la
      * respuesta para que el cliente lo pinte como corresponda.
+     *
+     * LA VALORACIÓN DE LA PROTECTORA SE CALCULA AQUÍ, no se lee de una columna.
+     * Antes salía de PROTECTORA.valoracion_media, que nadie mantenía y por tanto
+     * era nula siempre: este endpoint prometía la reputación de quien publica y
+     * no la enseñaba nunca. La columna se eliminó en la migración V9 y la media
+     * la da ValoracionService con AVG sobre las valoraciones reales (RF-23). El
+     * coste es una agregación más por detalle, sobre una tabla pequeña.
      */
     @Transactional(readOnly = true)
     public AnimalAdopcionDetalleResponse detalle(Long animalId) {
@@ -319,6 +329,8 @@ public class AnimalAdopcionService {
                         "El animal " + animalId + " no existe"));
 
         Protectora protectora = animal.getProtectora();
+        ValoracionService.ResumenValoraciones valoraciones =
+                valoracionService.resumenDe(protectora.getId());
 
         return AnimalAdopcionDetalleResponse.builder()
                 .id(animal.getId())
@@ -334,7 +346,8 @@ public class AnimalAdopcionService {
                 .protectoraNombre(protectora.getNombreOrganizacion())
                 .protectoraDireccion(protectora.getDireccion())
                 .protectoraZonaGeografica(protectora.getZonaGeografica())
-                .protectoraValoracionMedia(protectora.getValoracionMedia())
+                .protectoraValoracionMedia(valoraciones.media())
+                .protectoraValoracionTotal(valoraciones.total())
                 .build();
     }
 

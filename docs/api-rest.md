@@ -553,14 +553,39 @@ RF-06, RF-10, RF-23.
 | `GET` | `/api/protectoras/{id}/animales` | Animales en adopción de esa protectora | Autenticado | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `404` |
 | `POST` | `/api/protectoras/{id}/contactar` | Abre un contacto con una protectora concreta al encontrar un animal perdido (RF-06) | Autenticado | `ContactarProtectoraRequest`: `mensaje`, `alertaId?`, `avistamientoId?` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
 | `POST` | `/api/protectoras/local/contactar` | Contacta con la protectora de la localidad del usuario, resolviéndola a partir de su `areaGeografica` sin que tenga que buscarla. Es la «opción específica» que pide RF-06 | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | `201`, `400`, `401`, `404` |
-| `POST` | `/api/protectoras/{id}/valoracion` | Valora la protectora de 1 a 5 estrellas tras una adopción o contacto (RF-23). Recalcula `valoracionMedia` | Autenticado | `CrearValoracionRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `201`, `400`, `401`, `403`, `404`, `409` |
+| `PUT` | `/api/protectoras/{id}/valoracion` | Crea o actualiza la valoración de 1 a 5 estrellas de quien ha tratado con la protectora (RF-23) | Autenticado | `ValorarProtectoraRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `200`, `400`, `401`, `403`, `404` |
 | `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/solicitudes` | Ciudadanos que han querido ponerse en contacto por alguno de sus animales (RF-10) | `PROTECTORA` `ACTIVA` | — | Lista de `SolicitudAdopcionResponse` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/valoraciones` | Valoraciones recibidas, con la media calculada (RF-10, RF-23) | `PROTECTORA` `ACTIVA` | — | `ValoracionesPanelResponse`: `valoraciones[]`, `media?`, `total` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/resumen` | Contadores agregados para la pantalla principal del panel (RF-10) | `PROTECTORA` `ACTIVA` | — | `ResumenPanelResponse` | `200`, `401`, `403` |
 
-**`403` en valoración:** el usuario no ha tenido adopción ni contacto previo con esa protectora.
-**`409`:** ya la había valorado.
+> **Cambio de contrato.** Valorar era `POST` con `201` y un `409` si ya se había valorado. Ahora es
+> **`PUT` idempotente con `200`**, y el `409` desaparece. El motivo es que un usuario tiene como mucho
+> **una** valoración sobre una protectora: RF-23 habla de "la valoración" en singular, y volver a
+> enviarla es cambiar de opinión, no emitir un segundo voto. Con `POST`/`409`, corregir una nota
+> exigía un endpoint de modificación que nunca se diseñó, o borrar y volver a crear. El recurso "mi
+> valoración de esta protectora" tiene una única URL que no cambia, así que no hay `Location` nuevo
+> que anunciar y `201` no aportaba nada. La unicidad la respalda `UNIQUE (usuario_id, protectora_id)`
+> desde la migración `V9`.
+
+**`403 SIN_INTERACCION_PREVIA` en valoración:** RF-23 pide una valoración *"tras una adopción o
+contacto"*, no una valoración libre. El criterio implementado es tener al menos un **deslizamiento a
+favor sobre un animal en adopción de esa protectora**, que es lo que abre el chat con ella (RF-12) y
+por tanto lo que constituye el "contacto". Se eligió eso y no la adopción consumada porque el
+requisito dice "adopción **o** contacto", y exigir la adopción dejaría sin voz justo a quien contactó
+y no adoptó, que es la experiencia que más interesa conocer. Sin esa condición, cualquiera podría
+puntuar a cualquier protectora sin haber tratado con ella, y un puñado de cuentas nuevas bastaría para
+hundir una reputación.
+
+**La media no se guarda en ninguna parte.** `PROTECTORA.valoracion_media` era una columna derivada que
+ningún código mantenía —nula para todas, indefinidamente— y se eliminó en `V9`. La media se calcula
+con `AVG(puntuacion)` y `COUNT(*)` donde se lee: en el panel y en el detalle de un animal en adopción.
+Así es correcta por construcción y no puede desincronizarse.
+
+> **RF-06 sigue sin implementar.** Las cuatro primeras filas de esta tabla —el listado, el detalle y
+> el contacto— son contrato de diseño, no código: `ProtectoraController` es un esqueleto vacío. Hoy la
+> valoración de una protectora se expone en `GET /api/adopcion/{id}`
+> (`protectoraValoracionMedia` y `protectoraValoracionTotal`) y en el panel.
 
 ### Panel de la protectora (RF-10)
 
@@ -606,14 +631,14 @@ su teléfono**. No es una omisión temporal: el modelo no tiene ningún campo co
 declare que quiere compartir su contacto, así que no hay forma de saber si lo ha consentido y
 RNF-10 no permite suponerlo. El canal por el que el ciudadano los comparte si quiere es el chat.
 
-**`/panel/valoraciones` depende del bloque 9 y hoy devuelve vacío.** La lectura es real y funciona
-contra `VALORACION`, pero nada puede escribir en esa tabla todavía: no existen `ValoracionService`
-ni `POST /api/protectoras/{id}/valoracion`. Hasta entonces la respuesta es `valoraciones: []`,
-`total: 0` y `media` ausente. En cuanto ese bloque exista, el endpoint devuelve datos sin tocarlo.
+**`/panel/valoraciones` ya devuelve datos reales**: `PUT /api/protectoras/{id}/valoracion` existe
+desde el bloque 9 y alimenta la tabla. El endpoint no hizo falta tocarlo — su consulta ya era real y
+su media ya se calculaba sobre las valoraciones—, solo faltaba que alguien pudiera escribir.
 
-La media se calcula sobre las valoraciones reales y **no** sale de `PROTECTORA.valoracion_media`, que
-está documentada como derivada y sin mantener (§16). Se omite del JSON cuando no hay ninguna, en vez
-de viajar como `0`: un cero se leería como la peor nota posible.
+La media se calcula sobre las valoraciones reales y **no** salía ya de `PROTECTORA.valoracion_media`,
+columna que además se eliminó en `V9` (§18). Se omite del JSON cuando no hay ninguna, en vez de
+viajar como `0`: un cero se leería como la peor nota posible. Es el mismo criterio, y el mismo número,
+que expone `GET /api/adopcion/{id}`.
 
 **`/panel/resumen`** devuelve `animalesDisponibles`, `animalesAdoptados`, `animalesRetirados`,
 `animalesTotales`, `solicitudesPendientes`, `solicitudesTotales`, `valoracionMedia?` y
@@ -650,10 +675,33 @@ RF-26.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/reportes` | Reporta una publicación o un usuario indicando el motivo. Queda en estado `PENDIENTE` para su revisión | Autenticado | `CrearReporteRequest`: `tipoObjetivo` (`PUBLICACION` \| `USUARIO`), `objetivoId`, `tipoContenido?`, `motivo` | `ReporteResponse` | `201`, `400`, `401`, `404`, `409` |
+| `POST` | `/api/reportes` | Reporta una publicación o un usuario indicando el motivo. Queda en estado `PENDIENTE` para su revisión | Autenticado | `CrearReporteRequest`: `tipoObjetivo` (`PUBLICACION` \| `USUARIO`), `objetivoId`, `tipoContenido?`, `motivo` | `ReporteResponse` | `201`, `400`, `401`, `404` |
 
 Valores de `motivo`: `CONTENIDO_INAPROPIADO`, `SPAM`, `INFORMACION_FALSA`, `ACOSO`,
-`ANIMAL_EN_PELIGRO`, `OTRO`. **`409`** si el usuario ya había reportado ese mismo objetivo.
+`ANIMAL_EN_PELIGRO`, `OTRO`.
+
+**Sin cabecera `Location`**, a diferencia del resto de `201` de esta API: `Location` anuncia dónde
+leer lo recién creado, y un reporte no tiene ninguna URL donde su autor pueda leerlo — solo se
+consulta desde `/api/admin/reportes`, que exige rol `ADMIN`. Dar esa dirección a quien acaba de
+reportar sería darle una que le devuelve `403`.
+
+**Reportar está abierto a cualquier autenticado, sin más requisitos**, y es lo contrario del criterio
+de RF-23. La diferencia está en qué pasa si uno se equivoca: una valoración falsa altera una
+reputación pública en el acto, mientras que un reporte no publica ni retira nada, solo pone el caso
+delante de un administrador. Poner barreras a avisar de un animal en peligro sería el error caro.
+
+**Nada se retira automáticamente por acumular reportes.** Un umbral automático convertiría el botón de
+reportar en un arma: bastaría organizar unas cuantas cuentas para tumbar la publicación de un
+competidor. La retirada la decide una persona con `DELETE /api/admin/publicaciones/{id}` (§11).
+
+> **Cambio de contrato.** Desaparece el `409` por reportar dos veces el mismo objetivo. Exigirlo
+> obligaría a una restricción de unicidad sobre `(usuario_id, tipo_objetivo, objetivo_id)` y a decidir
+> qué hacer con un segundo reporte por un motivo distinto —ver primero un `SPAM` y después un
+> `ANIMAL_EN_PELIGRO` sobre lo mismo es información, no ruido—. Queda anotado como pendiente al final
+> de esta sección; hoy los duplicados se admiten.
+
+**`400`** cuando `tipoContenido` no encaja con `tipoObjetivo`, y cuando alguien intenta reportarse a
+sí mismo (código `AUTORREPORTE`).
 
 **`tipoContenido` es obligatorio cuando `tipoObjetivo` es `PUBLICACION`** y debe omitirse cuando es
 `USUARIO`. Valores: `ALERTA`, `AVISTAMIENTO`, `ADOPCION`. Sin él, `objetivoId` sería ambiguo: hay tres
@@ -674,6 +722,7 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 | `PUT` | `/api/admin/protectoras/{id}/aprobar` | Verifica la protectora: pasa a `ACTIVA` y ya puede iniciar sesión, publicar y abrir su panel | `ADMIN` | — | `ProtectoraAdminResponse` | `200`, `401`, `403`, `404` |
 | `PUT` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud, o retira una verificación ya concedida: pasa a `RECHAZADA` | `ADMIN` | `RechazarProtectoraRequest`: `motivo` (obligatorio, ≤500) | `ProtectoraAdminResponse` | `200`, `400`, `401`, `403`, `404` |
 | `GET` | `/api/admin/reportes` | Reportes `PENDIENTE`, más antiguos primero | `ADMIN` | — | Lista de `ReporteResponse` | `200`, `401`, `403` |
+| `PUT` | `/api/admin/reportes/{id}/resolver` | Marca el reporte como `REVISADO` y avisa a quien lo emitió | `ADMIN` | — | `ReporteResponse` | `200`, `401`, `403`, `404` |
 | `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Retira una publicación que incumple las normas (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
 
 > **Cambio de contrato.** Este bloque sustituye el borrador de arriba en cinco puntos. Las cuatro
@@ -682,7 +731,8 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 > `204`, para que el cliente pinte la fila sin una segunda petición. Los dos `motivo` son obligatorios,
 > no opcionales. El filtro `email` de `GET /api/admin/usuarios` se descarta: buscar por email es
 > superficie de enumeración de RNF-10, y `rol` + `activo` cubren el trabajo real. Y
-> `PATCH /api/admin/reportes/{id}/revisado` no se implementa aquí (ver más abajo).
+> `PATCH /api/admin/reportes/{id}/revisado` llegó en el bloque 9 como
+> `PUT /api/admin/reportes/{id}/resolver` (ver más abajo).
 
 ### El rol es toda la comprobación, y va en la clase
 
@@ -778,18 +828,34 @@ quién lo retiró queda en el log. Un estado más solo añadiría una rama que n
 distinguir.
 
 **Retirar una publicación no notifica a nadie.** `REPORTE_RESUELTO` va dirigido a quien reportó, no al
-autor de lo retirado, y pertenece al bloque 9; aquí no hay reporte del que colgarlo.
+autor de lo retirado, y se emite al resolverlo, no al retirar: aquí no hay reporte del que colgarlo.
 
-### Dependencia pendiente: `GET /api/admin/reportes` hoy devuelve vacío
+### La cola de reportes, y qué significa resolver uno
 
-No está a medias: la consulta es real y funciona contra `REPORTE`, pero **nada puede crear reportes
-todavía**. `POST /api/reportes` y `ReporteService` son del bloque 9 (RF-26, §10). Hasta entonces la
-respuesta es `[]`, y en cuanto ese bloque exista el endpoint devuelve datos sin tocarlo. Es la misma
-situación que `/panel/valoraciones` en §9.
+`GET /api/admin/reportes` ya devuelve datos reales: `POST /api/reportes` existe desde el bloque 9 y la
+alimenta. Se sirve **más antiguos primero** porque es una cola de trabajo, y lo que lleva más tiempo
+esperando es lo que toca — el mismo criterio que la cola de protectoras pendientes.
 
-Por lo mismo, `PATCH /api/admin/reportes/{id}/revisado` —la transición a `REVISADO` que enumeraba
-§15— **no se implementa en este bloque**: cerrar un reporte que no puede existir no es verificable, y
-la transición va con el servicio que también los crea.
+**`REVISADO` significa "atendido", no "tenía razón".** Resolver un reporte es sacarlo de la cola y esa
+es toda su semántica: el administrador ya lo ha mirado. Si además hay que retirar la publicación, eso
+es `DELETE /api/admin/publicaciones/{id}`, una decisión aparte y deliberadamente separada, para que
+revisar no arrastre consecuencias que nadie ha pedido. Por eso `EstadoReporte` tiene dos valores y no
+tres: no hace falta distinguir "aceptado" de "desestimado" para vaciar la cola, y fingir esa
+distinción obligaría a mantenerla coherente con lo que se haya hecho por el otro lado.
+
+Es **`PUT` y no `PATCH`** —como enumeraba §15— porque fija por completo el estado del reporte, igual
+que el resto de transiciones de esta API, y es idempotente: resolver dos veces deja lo mismo y **no
+vuelve a notificar**.
+
+**Se avisa a quien reportó, no a quien fue reportado**, con `REPORTE_RESUELTO`. Al reportado no se le
+dice nada: un reporte revisado y desestimado no es un hecho que le concierna, y comunicárselo
+convertiría cada denuncia infundada en un aviso de que alguien la presentó.
+
+**La cola no enseña a quién se reporta**, solo el par `(tipoObjetivo, objetivoId)` más `tipoContenido`
+cuando es una publicación. Con eso el administrador puede encadenar `DELETE /api/admin/publicaciones`,
+que recibe exactamente ese par. Un reporte es una acusación sin revisar, y devolver los datos del
+acusado a quien liste la cola —o a quien lo denuncia, en la respuesta del `POST`— convertiría el
+endpoint en una forma cómoda de sacarle el contacto a alguien con quien se ha discutido.
 
 ---
 
@@ -912,10 +978,10 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-20 | `PUT /api/adopcion/{id}/adoptado` |
 | RF-21 | `POST /api/avistamientos` (campo `fotoUrl`) |
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
-| RF-23 | `POST /api/protectoras/{id}/valoracion` |
+| RF-23 | `PUT /api/protectoras/{id}/valoracion`; media en `GET /api/adopcion/{id}` y en `/panel/valoraciones` |
 | RF-24 | `GET /api/matches/limite`, respuesta `429` de `POST /api/matches` |
 | RF-25 | Respuesta `409` de `POST /api/alertas` |
-| RF-26 | `POST /api/reportes` |
+| RF-26 | `POST /api/reportes`, `GET /api/admin/reportes`, `PUT /api/admin/reportes/{id}/resolver` |
 
 ---
 
@@ -931,7 +997,7 @@ modelo que hicieron falta para sostenerlos:
 | `GET /api/adopcion/feed` | RF-09 + RF-15: el swipe de adopción necesita su propio feed, igual que el de avistamientos |
 | `POST /api/protectoras/local/contactar` | RF-06 pide una «opción específica» para la protectora de la localidad, que no puede resolverse con un `{id}` en la ruta porque el usuario aún no lo conoce |
 | `GET /api/admin/usuarios` | RF-11 dice «gestionar a todos los usuarios», lo que exige poder listarlos |
-| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición. **Aplazado al bloque 9**, junto con la creación de reportes (§11) |
+| `PATCH /api/admin/reportes/{id}/revisado` | El enum `EstadoReporte` tiene el valor `REVISADO`, que necesita una transición. **Implementado en el bloque 9 como `PUT /api/admin/reportes/{id}/resolver`** (§11, §18): fija por completo el estado, como el resto de transiciones de esta API, en vez de modificar un campo suelto |
 | `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
 | `POST /api/chats/{id}/mensajes`, `PUT /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |
@@ -1004,7 +1070,7 @@ retomen por inercia ni se lean como descuidos:
 dos alternativas —un arco exclusivo con dos columnas nulables y un `CHECK`, o un supertipo
 `PUBLICACION` del que hereden ambas— resolverían la integridad, y la segunda es lo que se elegiría
 empezando de cero. Ninguna se ha aplicado porque **ningún requisito la exige** y el riesgo no está
-compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 476 pruebas
+compensado: obliga a reescribir las dos entidades, sus repositorios y las consultas, con 512 pruebas
 apoyadas en la forma actual. La debilidad está contenida: la referencia va siempre emparejada con el
 tipo en los cuatro sitios donde se lee (`ChatRepository`, `CatalogoAdopcionSpec`,
 `MatchService.resolverAutor` y las consultas del panel en `MatchRegistroRepository`), y el tercero es
@@ -1141,3 +1207,94 @@ leerla, pero **solo** tras configurar la lista de proxies de confianza.
 | Rehash al entrar: las contraseñas guardadas siguen con el coste 10 con el que se crearon. Subirlas al 12 exige recodificarlas en el login, cuando la contraseña en claro está disponible y ya se ha comprobado | Sin bloque asignado |
 | Purga periódica de `TOKEN_REVOCADO`: hoy se limpia al revocar, así que una instalación sin logouts acumularía filas caducadas indefinidamente. Una tarea `@Scheduled` lo resolvería | Sin bloque asignado |
 | Cierre activo de sesiones WebSocket al bloquear una cuenta (ver arriba) | Sin bloque asignado |
+
+---
+
+## 18. Bloque de valoraciones y reportes (RF-23, RF-26)
+
+Cierra los dos requisitos que quedaban del núcleo social: puntuar a una protectora con la que se ha
+tratado, y avisar de contenido que incumple las normas.
+
+### Lo que cambió en el contrato
+
+| Cambio | Dónde |
+|---|---|
+| Valorar pasa de `POST`/`201`/`409` a **`PUT` idempotente** con `200` | §9 |
+| Nuevo `403 SIN_INTERACCION_PREVIA`: no se valora sin contacto previo | §9 |
+| `PROTECTORA.valoracion_media` **desaparece**; la media se calcula al leer (`V9`) | §9, §16 |
+| Nuevo índice `idx_valoracion_protectora` para esa lectura (`V10`) | §18 |
+| `GET /api/adopcion/{id}` gana `protectoraValoracionTotal` y omite la media cuando no la hay | §8 |
+| `POST /api/reportes` implementado; se retira el `409` por duplicado | §10 |
+| Nuevo `PUT /api/admin/reportes/{id}/resolver`, noveno endpoint del panel | §11 |
+
+### Sobre `V9`
+
+Dos cambios que son la misma decisión: la valoración de un usuario sobre una protectora es un dato
+único, y la media es una consulta, no un dato.
+
+`UNIQUE (usuario_id, protectora_id)` no sustituye a la comprobación del service, la respalda: sin
+ella, dos peticiones simultáneas del mismo usuario leerían las dos "no existe" antes de que ninguna
+insertara, y la media quedaría inflada por alguien que ha votado dos veces. Ninguna prueba de un solo
+hilo lo detectaría. Es el criterio del resto del esquema: lo que no puede pasar, que no lo permita la
+tabla. `validate` **no** comprueba unicidad, así que la restricción tenía que crearse en la migración
+además de declararse en la entidad.
+
+El `DELETE` previo de duplicados es una red, no una necesidad: la tabla estaba necesariamente vacía
+porque hasta este bloque no había forma de escribir en ella. Pero una migración que falla al aplicarse
+es una manera pésima de descubrir lo contrario.
+
+### La resolución polimórfica no se ha duplicado
+
+Reportar una publicación exige saber si existe, y "publicación" son tres tablas —`ALERTA`,
+`AVISTAMIENTO`, `ANIMAL_ADOPCION`— con ids que solo son únicos dentro de cada una. Ese reparto ya lo
+hacía `AdminService.retirarPublicacion`, así que la pregunta era dónde ponerlo sin escribirlo dos
+veces.
+
+La respuesta es `PublicacionService`, con un `existe(TipoContenido, id)` cuyo **switch es una
+expresión sin rama por defecto**: el día que aparezca un cuarto tipo de publicación, deja de compilar
+y señala el sitio. No absorbe la retirada del administrador, y no por descuido: aquella decide además
+qué estado terminal aplicar a cada tabla y qué notificar. Son dos preguntas distintas sobre el mismo
+reparto —aquí "¿existe?", allí "retírala"—; lo que se comparte es la forma, no la lógica.
+
+Es la lección que dejó el bloque 8, donde un `switch` que parecía exhaustivo no lo era por ser una
+sentencia en lugar de una expresión.
+
+### Qué se enseña de un reporte, y qué no
+
+Del autor, solo `AutorResponse`: id, nombre y foto, sin email ni teléfono (RNF-10). Del objetivo, solo
+el par `(tipoObjetivo, objetivoId)`. **Nunca los datos de la persona reportada**, ni en la respuesta
+del `POST` ni en la cola del administrador.
+
+No es una omisión conservadora sino el punto del diseño: un reporte es una acusación sin revisar, y un
+endpoint que devolviera el contacto del acusado sería una forma cómoda de sacarle el teléfono a
+alguien con quien se ha discutido. Por eso tampoco existe un `GET /api/reportes/mios`: leer reportes
+es trabajo de moderación, y quien denuncia no gana por ello ningún acceso a la otra parte.
+
+### Limitaciones aceptadas
+
+**`POST /api/reportes` es un oráculo de existencia de usuarios.** Responde `404` si el id no existe y
+`201` si el reporte se crea, así que un autenticado puede averiguar qué ids de usuario existen
+probándolos uno a uno. Se asume por tres motivos: lo que se aprende es solo *"el id N existe"*, sin
+nombre, email ni teléfono; cada sondeo positivo **deja un reporte en la cola del administrador**, de
+modo que es un canal ruidoso y rastreable, no discreto; y la alternativa —aceptar en silencio reportes
+contra objetivos inexistentes— empeora justo el problema que la comprobación resuelve. Para calibrarlo:
+`POST /api/auth/registro` ya revela con un `409` si un **email** está registrado, que es un oráculo
+bastante más útil para quien quiera enumerar cuentas.
+
+**El índice de `V9` no sirve para leer por protectora, y por eso hay un `V10`.** `UNIQUE (usuario_id,
+protectora_id)` es un B-tree compuesto que solo se recorre por un prefijo de sus columnas: vale para
+"las valoraciones de este usuario", no para "las de esta protectora", que es lo que consultan la media
+y el recuento. Al mover la media de una columna guardada a una agregación en lectura, cada
+`GET /api/adopcion/{id}` habría provocado un recorrido secuencial de `VALORACION`. Ninguna prueba lo
+detecta: la suite corre con un puñado de filas, donde el recorrido secuencial es más rápido.
+
+### Fuera de alcance, pendientes
+
+| Pendiente | Bloque |
+|---|---|
+| RF-06 sigue sin implementar: `ProtectoraController` y `ProtectoraService` son esqueletos. El listado, el detalle y el contacto con la protectora local están diseñados en §9 pero no construidos | Sin bloque asignado |
+| Reportes duplicados: hoy un usuario puede reportar el mismo objetivo tantas veces como quiera. Impedirlo exige `UNIQUE (usuario_id, tipo_objetivo, objetivo_id)` y decidir qué hacer con un segundo reporte por un motivo distinto, que puede ser información legítima y no ruido | Sin bloque asignado |
+| Índice sobre `REPORTE (estado, created_at)`: la cola del administrador filtra y ordena por ahí. Con los volúmenes del proyecto no se nota | Cuando la cola tenga volumen que lo justifique |
+| `GET /api/admin/reportes` no pagina. Sigue el patrón de la cola de protectoras pendientes —una bandeja que se consume entera—, pero esta puede crecer sin límite, y a diferencia del listado de usuarios no tiene tope de página | Cuando la cola tenga volumen que lo justifique |
+| `mediaDeProtectora` y `countByProtectoraId` son dos consultas donde cabría una: `SELECT AVG(...), COUNT(...)` ahorraría un viaje a la base de datos por cada detalle de animal | Optimización menor, sin bloque asignado |
+| Una protectora puede ser valorada por quien contactó con ella y nunca llegó a hablar: el criterio es el deslizamiento a favor, no el mensaje enviado. Afinarlo exigiría mirar `MENSAJE`, y dejaría fuera al que contactó y no recibió respuesta, que es justo la queja más común | Decisión tomada, se reabre si aparece abuso |

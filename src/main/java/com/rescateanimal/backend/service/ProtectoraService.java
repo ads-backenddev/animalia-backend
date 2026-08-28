@@ -1,7 +1,6 @@
 package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.repository.ProtectoraRepository;
-import com.rescateanimal.backend.repository.ValoracionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -9,8 +8,13 @@ import org.springframework.stereotype.Service;
  * Lógica de protectoras: directorio, contacto con la protectora local y
  * valoraciones de 1 a 5 estrellas (RF-06, RF-23).
  *
- * Esqueleto: sin métodos implementados todavía. Crear valoraciones es del
- * bloque 9; hasta entonces VALORACION no tiene quien escriba en ella.
+ * Esqueleto: RF-06 —el directorio, el detalle y el contacto con la protectora
+ * local— sigue sin implementar.
+ *
+ * LAS VALORACIONES YA NO PASAN POR AQUÍ, y conviene decirlo porque el nombre de
+ * esta clase lo sugiere: emitirlas y leer la media es ValoracionService, con sus
+ * propias reglas (RF-23). Cuando RF-06 se construya, el detalle de una protectora
+ * tomará la media de allí, no la calculará por su cuenta.
  *
  * El panel de gestión de RF-10 vive en ProtectoraPanelService, no aquí.
  */
@@ -19,5 +23,4 @@ import org.springframework.stereotype.Service;
 public class ProtectoraService {
 
     private final ProtectoraRepository protectoraRepository;
-    private final ValoracionRepository valoracionRepository;
 }

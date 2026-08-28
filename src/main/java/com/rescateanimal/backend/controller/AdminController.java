@@ -33,11 +33,15 @@ import java.util.List;
  * protectoras, revisión de reportes y retirada de publicaciones.
  *
  * EL @PreAuthorize VA EN LA CLASE, no método a método, igual que en
- * ProtectoraPanelController. Aquí importa todavía más: son ocho endpoints que
- * exigen exactamente el mismo rol, y son los ocho más peligrosos de la API. Con
- * la anotación repetida ocho veces, un noveno endpoint que naciera sin ella
+ * ProtectoraPanelController. Aquí importa todavía más: son nueve endpoints que
+ * exigen exactamente el mismo rol, y son los nueve más peligrosos de la API. Con
+ * la anotación repetida nueve veces, un décimo endpoint que naciera sin ella
  * quedaría abierto a cualquier autenticado y nada lo delataría. En la clase,
  * todo lo que se añada al panel nace protegido.
+ *
+ * El noveno —resolver un reporte— llegó con el bloque 9 y no hizo falta tocar
+ * nada de seguridad para que naciera cubierto: es exactamente lo que este diseño
+ * promete, y la lista de rutas de AdminControllerTest lo comprueba.
  *
  * ADMIN ES EL PERMISO COMPLETO. A diferencia del panel de protectora, no hay una
  * segunda comprobación en el service: el administrador no tiene un subconjunto
@@ -155,12 +159,37 @@ public class AdminController {
     /**
      * GET /api/admin/reportes -> 200, 401, 403
      *
-     * Reportes PENDIENTE, más antiguos primero. Devuelve lista vacía hasta que el
-     * bloque 9 permita crear reportes (RF-26).
+     * Reportes PENDIENTE, más antiguos primero: es una cola de trabajo, y lo que
+     * lleva más tiempo esperando es lo que toca. Los alimenta POST /api/reportes
+     * (RF-26).
+     *
+     * NO ENSEÑA A QUIÉN SE REPORTA, solo el par (tipoObjetivo, objetivoId) y el
+     * tipoContenido cuando es una publicación. Con eso el administrador puede
+     * encadenar DELETE /api/admin/publicaciones/{id}, que recibe exactamente ese
+     * par. Resolver a quién pertenece el contenido es un paso que se da al
+     * abrirlo, no al listar la cola.
      */
     @GetMapping("/reportes")
     public ResponseEntity<List<ReporteResponse>> listarReportesPendientes() {
         return ResponseEntity.ok(adminService.listarReportesPendientes());
+    }
+
+    /**
+     * PUT /api/admin/reportes/{id}/resolver -> 200, 401, 403, 404
+     *
+     * Saca el reporte de la cola marcándolo REVISADO, y avisa a quien lo emitió.
+     *
+     * REVISADO ES "ATENDIDO", NO "TENÍA RAZÓN": si además hay que retirar la
+     * publicación, eso es DELETE /api/admin/publicaciones/{id}, una decisión
+     * aparte. Es PUT y no PATCH porque fija por completo el estado del reporte, y
+     * es idempotente: resolver dos veces deja lo mismo y no vuelve a notificar.
+     */
+    @PutMapping("/reportes/{id}/resolver")
+    public ResponseEntity<ReporteResponse> resolverReporte(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UsuarioPrincipal administrador) {
+
+        return ResponseEntity.ok(adminService.resolverReporte(id, administrador.getId()));
     }
 
     // ---------------------------------------------------------------------

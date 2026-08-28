@@ -1,17 +1,177 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.request.CrearReporteRequest;
+import com.rescateanimal.backend.dto.response.AutorResponse;
+import com.rescateanimal.backend.dto.response.ReporteResponse;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
+import com.rescateanimal.backend.exception.ParametrosInvalidosException;
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
+import com.rescateanimal.backend.model.Reporte;
+import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoReporte;
+import com.rescateanimal.backend.model.enums.TipoObjetivo;
 import com.rescateanimal.backend.repository.ReporteRepository;
+import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Lógica de reporte de publicaciones y usuarios inapropiados (RF-26).
+ * Reporte de publicaciones y usuarios que incumplen las normas (RF-26).
  *
- * Esqueleto: sin métodos implementados todavía.
+ * QUIÉN PUEDE REPORTAR: cualquier usuario autenticado, sin más requisitos. Es
+ * deliberado y es lo contrario del criterio de las valoraciones (RF-23), donde sí
+ * se exige haber tratado con la protectora. La diferencia está en qué pasa si uno
+ * se equivoca: una valoración falsa altera una reputación pública en el acto,
+ * mientras que un reporte no publica nada ni retira nada — solo pone el caso
+ * delante de un administrador, que decide. Poner barreras a avisar de un animal
+ * en peligro sería el error caro.
+ *
+ * NADA SE RETIRA AUTOMÁTICAMENTE por acumular reportes, y conviene decirlo porque
+ * es la tentación evidente: un umbral automático convierte el botón de reportar en
+ * un arma, porque basta con organizar unas cuantas cuentas para tumbar la
+ * publicación de un competidor. La retirada la decide una persona con
+ * DELETE /api/admin/publicaciones/{id} (RF-11).
+ *
+ * EL OBJETIVO SE COMPRUEBA, no se cree. Un reporte contra algo que no existe no
+ * es inofensivo: llena la cola del administrador de trabajo imposible de juzgar,
+ * y quien la atiende no puede ni saber si el caso fue real.
+ *
+ * ESO TIENE UNA CONTRAPARTIDA QUE CONVIENE DECIR: al responder 404 para lo
+ * inexistente y 201 para lo que sí está, este endpoint permite a un autenticado
+ * averiguar qué ids de usuario existen, probándolos uno a uno. Se asume, por tres
+ * cosas. Lo que se aprende es solo "el id N existe", sin nombre, email ni
+ * teléfono. Cada sondeo positivo deja un reporte en la cola, así que es un canal
+ * ruidoso y rastreable, no discreto. Y la alternativa —aceptar en silencio
+ * reportes contra objetivos inexistentes— empeora el problema que este endpoint
+ * existe para resolver. Queda anotado en docs/api-rest.md §18.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ReporteService {
 
     private final ReporteRepository reporteRepository;
+    private final UsuarioRepository usuarioRepository;
+    private final PublicacionService publicacionService;
+
+    /**
+     * Registra un reporte en estado PENDIENTE (RF-26).
+     *
+     * El estado inicial no viaja en el cuerpo ni podría: quien reporta no decide
+     * si su reporte está revisado. Lo fija aquí el service, y solo el
+     * administrador puede moverlo a REVISADO (RF-11).
+     */
+    @Transactional
+    public ReporteResponse reportar(CrearReporteRequest peticion, Long usuarioId) {
+        Usuario autor = usuarioRepository.findById(usuarioId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El usuario " + usuarioId + " no existe"));
+
+        String objetivo = exigirObjetivoValido(peticion, usuarioId);
+
+        Reporte reporte = new Reporte();
+        reporte.setUsuario(autor);
+        reporte.setTipoObjetivo(peticion.getTipoObjetivo());
+        reporte.setObjetivoId(peticion.getObjetivoId());
+        reporte.setTipoContenido(peticion.getTipoContenido());
+        reporte.setMotivo(peticion.getMotivo());
+        reporte.setEstado(EstadoReporte.PENDIENTE);
+
+        Reporte guardado = reporteRepository.save(reporte);
+
+        // No se registra a quién se reporta: el log lo lee cualquiera con acceso
+        // al servidor, y una acusación sin revisar no es un dato que deba quedar
+        // ahí (RNF-10). El caso completo está en la tabla, para el administrador.
+        log.info("Reporte {} registrado por el usuario {} sobre {}",
+                guardado.getId(), usuarioId, objetivo);
+
+        return aResponse(guardado);
+    }
+
+    /**
+     * Comprueba que lo reportado existe y que los campos son coherentes entre sí.
+     *
+     * EL SWITCH ES UNA EXPRESIÓN, no una sentencia, y la diferencia es la razón de
+     * ser de este método: solo un switch que PRODUCE un valor obliga al compilador
+     * a exigir que estén todos los casos del enum. Con una sentencia —que es como
+     * estaba escrito primero— el día que se admita reportar algo más (un mensaje
+     * de chat, por ejemplo) esto compilaría igual, no entraría por ninguna rama, y
+     * se guardaría un reporte con un objetivoId que nadie ha contrastado contra
+     * nada. Es exactamente el fallo que ya se coló en AdminService.retirarPublicacion
+     * y que allí se cerró de esta misma forma; el comentario de aquel decía
+     * "exhaustivo" y no lo era.
+     *
+     * El valor que produce no es un pretexto para forzar la expresión: es la
+     * descripción del objetivo que va al log, y describir "publicación de tipo
+     * ALERTA" o "usuario" es justo lo que cambia entre las dos ramas.
+     *
+     * @return descripción del objetivo, para el registro
+     */
+    private String exigirObjetivoValido(CrearReporteRequest peticion, Long usuarioId) {
+        return switch (peticion.getTipoObjetivo()) {
+            case PUBLICACION -> {
+                if (peticion.getTipoContenido() == null) {
+                    throw new ParametrosInvalidosException(
+                            "Al reportar una publicación hay que indicar tipoContenido");
+                }
+                publicacionService.exigirQueExista(
+                        peticion.getTipoContenido(), peticion.getObjetivoId());
+                yield "una publicación de tipo " + peticion.getTipoContenido();
+            }
+            case USUARIO -> {
+                if (peticion.getTipoContenido() != null) {
+                    throw new ParametrosInvalidosException(
+                            "tipoContenido solo aplica al reportar una publicación");
+                }
+                if (peticion.getObjetivoId().equals(usuarioId)) {
+                    // Se comprueba antes de mirar si existe: sabemos que existe,
+                    // es quien está haciendo la petición, y un 404 ahí sería
+                    // desconcertante. Es un 400 y no un 403 porque no falta
+                    // ningún permiso: reportarse a uno mismo no es una operación
+                    // que este dominio admita, igual que deslizar la publicación
+                    // propia.
+                    throw new OperacionNoPermitidaException("AUTORREPORTE",
+                            "No puedes reportarte a ti mismo");
+                }
+                if (!usuarioRepository.existsById(peticion.getObjetivoId())) {
+                    throw new ResourceNotFoundException(
+                            "El usuario " + peticion.getObjetivoId() + " no existe");
+                }
+                yield "otro usuario";
+            }
+        };
+    }
+
+    // ---------------------------------------------------------------------
+
+    /**
+     * QUÉ SE DEVUELVE DE UN REPORTE, y sobre todo qué no.
+     *
+     * Del autor, solo AutorResponse: id, nombre y foto, sin email ni teléfono
+     * (RNF-10). Del objetivo, solo el par (tipo, id) —más tipoContenido cuando es
+     * una publicación—, nunca los datos de la persona reportada. Es importante que
+     * siga siendo así: un reporte es una acusación sin revisar, y devolver el
+     * contacto del acusado a quien lo denuncia, o a cualquiera que liste reportes,
+     * convertiría el endpoint en una forma cómoda de sacar el teléfono de alguien
+     * con quien se ha discutido.
+     */
+    static ReporteResponse aResponse(Reporte reporte) {
+        Usuario autor = reporte.getUsuario();
+        return ReporteResponse.builder()
+                .id(reporte.getId())
+                .autor(AutorResponse.builder()
+                        .id(autor.getId())
+                        .nombre(autor.getNombre())
+                        .fotoUrl(autor.getFotoUrl())
+                        .build())
+                .tipoObjetivo(reporte.getTipoObjetivo())
+                .objetivoId(reporte.getObjetivoId())
+                .tipoContenido(reporte.getTipoContenido())
+                .motivo(reporte.getMotivo())
+                .estado(reporte.getEstado())
+                .createdAt(reporte.getCreatedAt())
+                .build();
+    }
 }

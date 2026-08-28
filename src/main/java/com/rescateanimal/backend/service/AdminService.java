@@ -256,18 +256,57 @@ public class AdminService {
     // ---------------------------------------------------------------------
 
     /**
-     * Reportes pendientes de revisar (RF-11).
+     * Reportes pendientes de revisar, más antiguos primero (RF-11, RF-26).
      *
-     * DEVUELVE SIEMPRE VACÍO HOY, y no porque esté a medias: la consulta es real
-     * y funciona, pero nada puede crear reportes todavía. El endpoint de reportar
-     * contenido y ReporteService son del bloque 9 (RF-26). En cuanto existan,
-     * esto empieza a devolver datos sin tocarlo. Ver ReporteResponse.
+     * Ya devuelve datos reales: POST /api/reportes existe desde el bloque 9 y
+     * alimenta esta cola.
      */
     @Transactional(readOnly = true)
     public List<ReporteResponse> listarReportesPendientes() {
         return reporteRepository.buscarPorEstadoConAutor(EstadoReporte.PENDIENTE).stream()
-                .map(AdminService::aReporteResponse)
+                .map(ReporteService::aResponse)
                 .toList();
+    }
+
+    /**
+     * Marca un reporte como revisado (RF-11, RF-26).
+     *
+     * REVISADO SIGNIFICA "ATENDIDO", NO "TENÍA RAZÓN". Resolver un reporte es
+     * sacarlo de la cola, y esa es toda su semántica: el administrador ya lo ha
+     * mirado. Si además había que retirar la publicación, eso es otra decisión y
+     * otro endpoint —DELETE /api/admin/publicaciones/{id}—, precisamente para que
+     * revisar no arrastre consecuencias que nadie ha pedido. Por eso EstadoReporte
+     * tiene dos valores y no tres: no hace falta distinguir "aceptado" de
+     * "desestimado" para vaciar la cola, y fingir esa distinción obligaría a
+     * mantenerla coherente con lo que se haya hecho por el otro lado.
+     *
+     * ES IDEMPOTENTE: resolver dos veces deja el mismo estado y no vuelve a
+     * notificar. Sin esa comprobación, un doble clic mandaría dos avisos por el
+     * mismo caso.
+     *
+     * SE AVISA A QUIEN REPORTÓ, no a quien fue reportado. El tipo
+     * REPORTE_RESUELTO existe en el enum desde el primer esquema esperando esto.
+     * Al reportado no se le dice nada porque un reporte revisado y desestimado no
+     * es un hecho que le concierna, y decírselo convertiría cada denuncia
+     * infundada en un aviso de que alguien la presentó.
+     */
+    @Transactional
+    public ReporteResponse resolverReporte(Long reporteId, Long adminId) {
+        Reporte reporte = reporteRepository.findById(reporteId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El reporte " + reporteId + " no existe"));
+
+        if (reporte.getEstado() == EstadoReporte.REVISADO) {
+            log.debug("El reporte {} ya estaba revisado; la operación no cambia nada", reporteId);
+            return ReporteService.aResponse(reporte);
+        }
+
+        reporte.setEstado(EstadoReporte.REVISADO);
+        log.info("El administrador {} ha marcado como revisado el reporte {}", adminId, reporteId);
+
+        notificar(reporte.getUsuario(), TipoNotificacion.REPORTE_RESUELTO, reporte.getId());
+
+        return ReporteService.aResponse(reporte);
     }
 
     // ---------------------------------------------------------------------
@@ -431,22 +470,10 @@ public class AdminService {
                 .build();
     }
 
-    private static ReporteResponse aReporteResponse(Reporte reporte) {
-        Usuario autor = reporte.getUsuario();
-
-        return ReporteResponse.builder()
-                .id(reporte.getId())
-                .autor(AutorResponse.builder()
-                        .id(autor.getId())
-                        .nombre(autor.getNombre())
-                        .fotoUrl(autor.getFotoUrl())
-                        .build())
-                .tipoObjetivo(reporte.getTipoObjetivo())
-                .objetivoId(reporte.getObjetivoId())
-                .tipoContenido(reporte.getTipoContenido())
-                .motivo(reporte.getMotivo())
-                .estado(reporte.getEstado())
-                .createdAt(reporte.getCreatedAt())
-                .build();
-    }
+    // EL MAPEADOR DE REPORTES VIVE EN ReporteService, no aquí. Existió una copia
+    // en esta clase mientras la de allí no existía; ahora sería una segunda
+    // versión de la misma decisión —qué se enseña de un reporte y qué no— y esa
+    // decisión tiene consecuencias de privacidad: el objetivo se devuelve como un
+    // par (tipo, id), nunca con los datos de la persona reportada. Dos copias es
+    // como una acaba enseñando de más.
 }
