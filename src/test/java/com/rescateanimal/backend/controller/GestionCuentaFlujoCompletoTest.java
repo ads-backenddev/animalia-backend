@@ -325,6 +325,24 @@ class GestionCuentaFlujoCompletoTest {
                 .isEqualTo("Ya existe una cuenta con ese email");
     }
 
+    @Test
+    @DisplayName("Nadie puede registrarse en el dominio reservado de las cuentas eliminadas")
+    void elDominioReservadoNoEsRegistrable() throws Exception {
+        // SIN ESTO SE PODIA DEJAR UNA MINA. Los emails anonimizados son
+        // deterministas, asi que quien conociera el email de otra persona podia
+        // calcular su hash, registrarse con esa direccion, y el dia que la victima
+        // quisiera darse de baja el UPDATE de su email chocaria contra el indice
+        // unico: se le impedia ejercer RF-19 indefinidamente, con un 409 que no
+        // explicaba nada.
+        String hashDeOtro = "a".repeat(64) + "@cuenta-eliminada.invalid";
+
+        HttpResponse<String> registro = enviar("POST", "/api/auth/registro/ciudadano", null, """
+                {"nombre":"Impostor","email":"%s","password":"%s"}
+                """.formatted(hashDeOtro, CLAVE));
+
+        assertThat(registro.statusCode()).isEqualTo(409);
+    }
+
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------

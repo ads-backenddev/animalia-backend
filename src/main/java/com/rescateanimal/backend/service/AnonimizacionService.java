@@ -93,6 +93,22 @@ public class AnonimizacionService {
         return emailAnonimizado(emailCandidato).equals(emailGuardado);
     }
 
+    /**
+     * Si la dirección cae en el dominio que este servicio se reserva.
+     *
+     * NADIE PUEDE REGISTRARSE AHÍ, y hace falta prohibirlo explícitamente. Los
+     * emails anonimizados son deterministas, así que quien conociera el email de
+     * otra persona podría calcular su hash y registrarse con esa dirección antes
+     * de que la víctima se diera de baja. El día que quisiera hacerlo, el UPDATE
+     * de su email chocaría contra el índice único y la baja fallaría: se le habría
+     * impedido ejercer RF-19 de forma indefinida, dejando una mina que ni siquiera
+     * explica por qué. Es un dominio que el RFC 2606 reserva para que no exista,
+     * así que ninguna dirección legítima puede estar ahí.
+     */
+    public boolean esDominioReservado(String email) {
+        return normalizar(email).endsWith(DOMINIO_INEXISTENTE);
+    }
+
     // ---------------------------------------------------------------------
 
     private static String normalizar(String email) {

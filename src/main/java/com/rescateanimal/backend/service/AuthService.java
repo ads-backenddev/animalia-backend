@@ -257,6 +257,19 @@ public class AuthService {
     private void verificarEmailLibre(String email) {
         String normalizado = normalizarEmail(email);
 
+        // NADIE SE REGISTRA EN EL DOMINIO RESERVADO DE LAS CUENTAS BORRADAS, y
+        // esto no es celo de más: ese dominio es donde acaban los emails
+        // anonimizados, y son deterministas. Sin esta comprobación, quien conociera
+        // el email de otra persona podía calcular su hash, registrarse con esa
+        // dirección y dejar una mina: el día que la víctima quisiera darse de baja,
+        // el UPDATE de su email chocaría contra el índice único y la baja fallaría
+        // con un 409 incomprensible. Es decir, se le podía impedir ejercer RF-19 de
+        // forma indefinida, y sin que el mensaje de error dijera por qué.
+        if (anonimizacionService.esDominioReservado(normalizado)) {
+            log.warn("Intento de registro en el dominio reservado de cuentas eliminadas");
+            throw new EmailYaRegistradoException("Ya existe una cuenta con ese email");
+        }
+
         // El || corta: si el email ya está en uso no hace falta calcular el hash
         // ni volver a consultar. La segunda comprobación solo interesa cuando la
         // dirección parece libre, que es justo el caso en el que puede no estarlo.

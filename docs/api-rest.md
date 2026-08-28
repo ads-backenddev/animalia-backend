@@ -1183,12 +1183,20 @@ contraseña invalida de golpe todo lo emitido antes, y un bloqueo se nota en la 
 Se reabre si aparece un requisito de sesión por dispositivo o de cierre remoto.
 
 **Una conexión WebSocket ya abierta no se cierra al bloquear ni al cerrar sesión.** La revalidación
-impide suscripciones **nuevas**, pero no cancela las que ya estuvieran hechas: un usuario bloqueado
-mientras tenía un chat abierto sigue recibiendo lo que se publique en él hasta que su cliente se
+impide suscribirse y **escribir**, pero no cancela las suscripciones ya hechas: un usuario bloqueado
+mientras tenía un chat abierto sigue **recibiendo** lo que se publique en él hasta que su cliente se
 desconecte. Cerrarlas exige un registro de sesiones WebSocket vivas por usuario —escuchar
 `SessionConnectedEvent` y `SessionDisconnectEvent`, guardar el `sessionId` y cerrarlo desde
-`AdminService`—, que es una pieza nueva con su propio estado que mantener. Lo que sí queda cerrado es
-la puerta a abrir nada nuevo, que es por donde se entra a un chat ajeno.
+`AdminService`—, que es una pieza nueva con su propio estado que mantener. Lo que queda abierto es
+recibir, que es pasivo.
+
+> **Corrección.** Este párrafo decía antes que lo único cerrado eran las suscripciones nuevas, y era
+> verdad: `ChatSuscripcionInterceptor` solo miraba los `SUBSCRIBE`, así que una cuenta bloqueada o
+> dada de baja podía **seguir escribiendo mensajes nuevos** por una conexión abierta. El envío va a
+> `/app/chat/{chatId}/enviar`, que no pasa por `JwtAuthFilter` —no es HTTP—, y `MensajeService` solo
+> comprueba la pertenencia al chat, no si la cuenta sigue activa. Se cerró en el bloque 10
+> revalidando también los `SEND`. Escribir es peor que leer: deja datos nuevos en nombre de quien ya
+> no debería poder actuar.
 
 **`POST /api/auth/restablecer-password` no lleva límite de intentos.** Su credencial no es una
 contraseña que se pueda adivinar a mano, sino un JWT firmado: lo que habría que acertar es una firma
@@ -1424,6 +1432,13 @@ liberaría en silencio todos los emails borrados —un fallo peor, porque no se 
 contenido que escribió: si alguien firmó un mensaje con su nombre, ahí sigue. Rastrearlo exigiría
 analizar texto libre, con los falsos positivos que eso trae, y borraría contenido de una conversación
 que pertenece también a la otra parte.
+
+**Nadie puede registrarse en `@cuenta-eliminada.invalid`**, y la prohibición no es celo de más. Los
+emails anonimizados son deterministas, así que sin ella quien conociera el email de otra persona podía
+calcular su hash, registrarse con esa dirección y dejar una mina: el día que la víctima quisiera darse
+de baja, el `UPDATE` de su email chocaría contra el índice único y la baja fallaría con un `409` que
+no explica nada. Se le habría impedido ejercer RF-19 de forma indefinida. Es un dominio que el
+RFC 2606 reserva para que no exista, así que ninguna dirección legítima puede estar ahí.
 
 ### Fuera de alcance, pendientes
 
