@@ -458,7 +458,7 @@ RF-07, RF-09, RF-20, RF-22.
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `GET` | `/api/adopcion` | Catálogo paginado de animales `DISPONIBLE`. Filtros de RF-22: `especie`, `tamanyo` (`PEQUENO` \| `MEDIANO` \| `GRANDE`), `zona` | Autenticado | — | Página de `AnimalAdopcionResponse` | `200`, `400`, `401` |
-| `GET` | `/api/adopcion/{id}` | Detalle de un animal con los datos de su protectora | Autenticado | — | `AnimalAdopcionDetalleResponse` | `200`, `401`, `404` |
+| `GET` | `/api/adopcion/{id}` | Detalle de un animal con los datos de su protectora. `protectoraDireccion` se omite si la protectora es una persona física (§9) | Autenticado | — | `AnimalAdopcionDetalleResponse` | `200`, `401`, `404` |
 | `GET` | `/api/adopcion/feed` | Feed para el swipe de adopciones, excluyendo los propios y los ya deslizados (RF-09, RF-15). Admite los mismos filtros que el catálogo | Autenticado | — | Lista de `AnimalAdopcionResponse` | `200`, `400`, `401` |
 | `POST` | `/api/adopcion` | Publica un animal en adopción | `PROTECTORA` | `CrearAnimalRequest`: `nombre`, `especie`, `tamanyo`, `descripcion`, `fotoUrl`, `zonaGeografica` | `AnimalAdopcionResponse` | `201`, `400`, `401`, `403` |
 | `PUT` | `/api/adopcion/{id}` | Modifica un animal de la propia protectora | `PROTECTORA` + Propietario | `ActualizarAnimalRequest`: mismos campos que la creación | `AnimalAdopcionResponse` | `200`, `400`, `401`, `403`, `404` |
@@ -821,11 +821,11 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `GET` | `/api/admin/usuarios` | Listado paginado de usuarios, más recientes primero. Filtros opcionales y combinables: `rol`, `activo` | `ADMIN` | — | Página de `UsuarioAdminResponse` | `200`, `400`, `401`, `403` |
-| `PUT` | `/api/admin/usuarios/{id}/bloquear` | Bloquea la cuenta (`activo = false`): deja de poder iniciar sesión | `ADMIN` | `BloquearUsuarioRequest`: `motivo` (obligatorio, ≤500) | `UsuarioAdminResponse` | `200`, `400`, `401`, `403`, `404` |
+| `PUT` | `/api/admin/usuarios/{id}/bloquear` | Bloquea la cuenta (`activo = false`): deja de poder iniciar sesión. Si es una protectora, **retira además sus animales `DISPONIBLE`** (§20) | `ADMIN` | `BloquearUsuarioRequest`: `motivo` (obligatorio, ≤500) | `UsuarioAdminResponse` | `200`, `400`, `401`, `403`, `404` |
 | `PUT` | `/api/admin/usuarios/{id}/desbloquear` | Reactiva la cuenta | `ADMIN` | — | `UsuarioAdminResponse` | `200`, `401`, `403`, `404` |
 | `GET` | `/api/admin/protectoras/pendientes` | Cola de verificación: protectoras `PENDIENTE`, más antiguas primero | `ADMIN` | — | Lista de `ProtectoraAdminResponse` | `200`, `401`, `403` |
 | `PUT` | `/api/admin/protectoras/{id}/aprobar` | Verifica la protectora: pasa a `ACTIVA` y ya puede iniciar sesión, publicar y abrir su panel | `ADMIN` | — | `ProtectoraAdminResponse` | `200`, `401`, `403`, `404` |
-| `PUT` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud, o retira una verificación ya concedida: pasa a `RECHAZADA` | `ADMIN` | `RechazarProtectoraRequest`: `motivo` (obligatorio, ≤500) | `ProtectoraAdminResponse` | `200`, `400`, `401`, `403`, `404` |
+| `PUT` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud, o retira una verificación ya concedida: pasa a `RECHAZADA`. Si estaba `ACTIVA`, **retira además sus animales `DISPONIBLE`** (§20) | `ADMIN` | `RechazarProtectoraRequest`: `motivo` (obligatorio, ≤500) | `ProtectoraAdminResponse` | `200`, `400`, `401`, `403`, `404` |
 | `GET` | `/api/admin/reportes` | Reportes `PENDIENTE`, más antiguos primero | `ADMIN` | — | Lista de `ReporteResponse` | `200`, `401`, `403` |
 | `PUT` | `/api/admin/reportes/{id}/resolver` | Marca el reporte como `REVISADO` y avisa a quien lo emitió | `ADMIN` | — | `ReporteResponse` | `200`, `401`, `403`, `404` |
 | `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Retira una publicación que incumple las normas (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
@@ -1656,21 +1656,19 @@ el proceso de verificación del administrador (RF-11) y meterle un valor con otr
 dos cosas que hoy están separadas. La condición sobre la cuenta es más barata y dice exactamente lo
 que pasa.
 
-**Y tirando de ese hilo apareció un agujero anterior, que este bloque no cierra.** Sacar a una
-protectora del directorio no la saca del **catálogo de adopción**. `PUT /api/admin/protectoras/{id}/rechazar`
-solo cambia `estado`, y `PUT /api/admin/usuarios/{id}/bloquear` solo pone `activo = false`: ninguno de
-los dos retira los animales, y `GET /api/adopcion`, `GET /api/adopcion/{id}` y el feed de swipe no
-miran ni el estado de la protectora ni si su cuenta sigue viva. Comprobado ejecutándolo contra el
-servidor real: tras rechazar a una protectora que estaba `ACTIVA`, su animal sigue `DISPONIBLE` en el
-escaparate, y un ciudadano puede deslizar a favor y abrir un chat con una cuenta que ya no puede
-entrar.
+**Y tirando de ese hilo apareció un agujero anterior, que se ha cerrado aquí.** Sacar a una protectora
+del directorio no la sacaba del **catálogo de adopción**: `PUT /api/admin/protectoras/{id}/rechazar`
+solo cambiaba `estado` y `PUT /api/admin/usuarios/{id}/bloquear` solo ponía `activo = false`, y
+`GET /api/adopcion`, `GET /api/adopcion/{id}` y el feed de swipe no miran ni el estado de la protectora
+ni si su cuenta sigue viva. Comprobado ejecutándolo contra el servidor real antes de arreglarlo: tras
+rechazar a una protectora que estaba `ACTIVA`, su animal seguía `DISPONIBLE` en el escaparate, y un
+ciudadano podía deslizar a favor y abrir un chat con una cuenta que ya no puede entrar.
 
-Es exactamente el argumento que `UsuarioService.retirarAnimalesDisponibles` ya escribió para la baja
-voluntaria —*«un animal en adopción es una invitación a contactar con quien lo publicó, y quien lo
-publicó acaba de irse»*—, aplicado en RF-19 y no en RF-11. El arreglo es reutilizar ese mismo método
-desde `AdminService.rechazarProtectora` y desde `bloquear` cuando la cuenta sea de una protectora.
-**No se ha hecho aquí** porque cambia lo que hacen dos endpoints de RF-11 —rechazar pasaría a retirar
-animales, que es un efecto visible y nuevo— y eso se aprueba aparte. Queda abajo.
+Era el argumento que la baja voluntaria ya escribió —*«un animal en adopción es una invitación a
+contactar con quien lo publicó, y quien lo publicó acaba de irse»*— aplicado en RF-19 y no en RF-11.
+La causa de raíz es que ese código vivía como **método privado de `UsuarioService`**, así que solo
+podía usarlo la vía que lo tenía a mano. Ver **«Dos acciones administrativas amplían su efecto»**, más
+abajo.
 
 **El filtro de zona no podía escribirse como en el resto de la API.** El patrón habitual
 `:zona IS NULL OR lower(...)` es justamente el que ya reventó una vez contra PostgreSQL: un parámetro
@@ -1679,6 +1677,53 @@ exist»*. Aquí el servicio convierte el filtro en un patrón `LIKE` que **nunca
 se filtra— y la consulta es una sola, sin ramas. El `coalesce` sobre `zona_geografica` es para que una
 protectora sin zona declarada no se caiga del listado sin filtro, porque `NULL LIKE '%'` es `NULL` y
 no cierto.
+
+### Dos acciones administrativas amplían su efecto (cambio de comportamiento)
+
+Esto **no es una corrección interna**: dos endpoints de RF-11 hacen ahora algo que antes no hacían, y
+un cliente lo nota.
+
+| Endpoint | Antes | Ahora |
+|---|---|---|
+| `PUT /api/admin/protectoras/{id}/rechazar` | Solo cambiaba `estado` a `RECHAZADA` | Además, **si estaba `ACTIVA`**, retira a `RETIRADO` todos sus animales `DISPONIBLE` |
+| `PUT /api/admin/usuarios/{id}/bloquear` | Solo ponía `activo = false` | Además, **si la cuenta tiene rol `PROTECTORA`**, retira a `RETIRADO` todos sus animales `DISPONIBLE` |
+
+Ni el código de respuesta ni el cuerpo cambian; lo que cambia es el estado que dejan detrás. Un panel
+que liste el catálogo después de rechazar verá menos animales que antes, y eso es lo que se busca.
+
+**Rechazar a una `PENDIENTE` no retira nada**, y por eso las dos ramas del `switch` están separadas:
+una protectora que nunca llegó a verificarse no ha podido publicar —hacerlo exige un token y una
+`PENDIENTE` no puede ni entrar—, así que la consulta sobraría.
+
+**Bloquear a un ciudadano tampoco toca ningún catálogo.** Sus alertas y avistamientos no son ofertas
+que alguien tenga que atender, y retirarlas sería otra decisión, que RF-11 no pide.
+
+**No se deshace al desbloquear ni al volver a aprobar**, y es deliberado: `RETIRADO` es terminal en
+todo el proyecto —tampoco se vuelve de él a mano, ni tras una adopción fallida— y devolver los animales
+al escaparate automáticamente reabriría fichas cuyos matches son de otro ciclo. La protectora
+rehabilitada vuelve a publicar lo que siga ofreciendo, que es una decisión suya y no del sistema.
+
+El código se ha movido a `AnimalAdopcionService.retirarTodosLosDisponibles`, de paquete, que es quien
+gobierna los estados del animal; la baja de RF-19 pasa ahora por ahí también. Una sola implementación
+es lo que impide que la próxima vía que deje sin dueño a una protectora se olvide de esto.
+
+### La dirección de un particular deja de publicarse también en el catálogo
+
+`GET /api/adopcion/{id}` devolvía `protectoraDireccion` sin mirar `esPersonaFisica`. Mientras eso
+siguiera así, que el directorio la ocultara era un gesto: bastaba con abrir la ficha de cualquiera de
+sus animales. Ahora los dos endpoints preguntan al **mismo** método,
+`ProtectoraService.direccionPublicaDe`, así que no pueden responder distinto. El campo se omite del
+JSON, no viaja como `null`.
+
+Es un cambio de contrato pequeño y consciente: un cliente que esperara `protectoraDireccion` siempre
+presente ahora tiene que tolerar su ausencia, igual que ya la tolera en `valoracionMedia`.
+
+### `ProtectoraResponse.valoracionMedia` se ha retirado
+
+Nadie lo rellenaba. Existió como copia de `PROTECTORA.valoracion_media` —columna eliminada en `V9`— y
+después se conservó a la espera de este directorio, que acabó usando DTOs propios. **El JSON no
+cambia**: era `@JsonInclude(NON_NULL)` y valía siempre `null`, así que no llegaba a serializarse nunca.
+Un campo que siempre vale `null` es una promesa que el DTO no cumple.
 
 ### Sobre `V13`
 
@@ -1700,8 +1745,7 @@ comprueba índices.
 
 | Limitación | Por qué se acepta |
 |---|---|
-| **Las protectoras anteriores a `V12` quedaron en `esPersonaFisica = false`**, así que si alguna era un particular, su teléfono se publica en el directorio. Es la limitación conocida de `V12` con un alcance nuevo: antes solo afectaba a lo que la baja borraba, ahora también a lo que se enseña | No hay forma retroactiva de saberlo, y nadie puede declararlo todavía: ni `PUT /api/usuarios/me` ni el panel tocan ese campo. Se arregla dejando que la protectora lo edite, abajo |
-| `GET /api/adopcion/{id}` sigue devolviendo `protectoraDireccion` sin mirar `esPersonaFisica` | Es contrato de un endpoint anterior y cambiarlo se sale de RF-06. El arreglo es una línea en `AnimalAdopcionService.detalle`, abajo |
+| **Las protectoras anteriores a `V12` quedaron en `esPersonaFisica = false`**, así que si alguna era un particular, su teléfono y su dirección se publican. Es la limitación conocida de `V12` con un alcance nuevo: antes solo afectaba a lo que la baja borraba, ahora también a lo que se enseña | No hay forma retroactiva de saberlo, y nadie puede declararlo todavía: ni `PUT /api/usuarios/me` ni el panel tocan ese campo. Se arregla dejando que la protectora lo edite, abajo |
 | El listado no ordena por valoración ni por número de animales | RF-06 no lo pide y ordenar por nota exigiría meter la agregación en la consulta principal. El orden alfabético es el de un directorio |
 | El filtro `zona` no escapa los comodines de `LIKE` (`%`, `_`) | `GET /api/adopcion` tiene el mismo parámetro, con el mismo nombre, y tampoco los escapa: escaparlos aquí haría que dos filtros que el cliente ve iguales se comportaran distinto. No abre nada, porque un `%` devuelve lo que ya devuelve omitir el filtro |
 | La ficha enseña diez valoraciones y no admite paginarlas | El número real viaja en `totalValoraciones`. Quien quiere el histórico entero es la propia protectora, y lo tiene en `/panel/valoraciones` |
@@ -1716,25 +1760,68 @@ Con RF-06 cerrado quedan **dos huecos**, y conviene enumerarlos sin rodeos:
 | **RF-05 — notificaciones.** `NotificacionController` es un esqueleto vacío: no existe `GET /api/notificaciones` ni el `PATCH` de marcado, y nadie emite por `/user/queue/notificaciones`. La mitad de escritura sí está: `NotificacionService` persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy las notificaciones se guardan y **nadie puede leerlas** | Requisito entero sin construir |
 | **RF-06 — contacto con la protectora local.** `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar`, diseñados en §9 desde el principio. Este bloque construyó el directorio y la ficha, que es lo que se pidió, pero no ellos | Parte de RF-06 sin construir |
 
-Lo segundo no se resuelve escribiendo dos métodos, y por eso no cabía aquí: **un chat exige hoy un
-`MATCH_REGISTRO`**, que a su vez exige una publicación deslizada (`publicacion_id` +
-`tipo_publicacion`, ambos `NOT NULL`), y «contactar con una protectora» no cuelga de ninguna
-publicación. Hacen falta una decisión de modelo y su migración, y las dos salidas tienen coste:
-
-- **`CHAT.match_id` nulable**, más una forma de resolver los dos participantes cuando no hay match.
-  Rompe la invariante que `Chat` documenta como su razón de no tener tabla de participantes.
-- **Un `TipoPublicacion` nuevo** o una publicación implícita, que obliga a revisar los cuatro sitios
-  donde se lee `publicacion_id` emparejado con el tipo.
+Ninguno de los dos se resuelve escribiendo un endpoint: el primero necesita un servicio de push
+externo y una tabla de dispositivos, y el segundo una decisión de modelo sobre de qué cuelga un chat
+sin publicación. Los dos están descritos en «Trabajo futuro», al final de esta sección.
 
 ### Fuera de alcance, pendientes
 
+Lo que queda del SRS son **dos trabajos**, y los dos son más grandes que un endpoint. Están descritos
+uno a uno abajo, en «Trabajo futuro».
+
 | Pendiente | Bloque |
 |---|---|
-| **RF-05 entero**: `GET /api/notificaciones`, `PATCH /api/notificaciones/{id}/leida` y la emisión por `/user/queue/notificaciones` | Es lo único que queda del SRS |
-| **`POST /api/protectoras/{id}/contactar` y `/local/contactar`**, con la decisión de modelo que arrastran | Sin bloque asignado |
-| **Rechazar o bloquear a una protectora no retira sus animales**, así que siguen en `GET /api/adopcion`, en `GET /api/adopcion/{id}` y en el feed, y se puede abrir un chat con una cuenta que ya no puede entrar. Comprobado contra el servidor real. El arreglo es llamar a `retirarAnimalesDisponibles` desde `AdminService.rechazarProtectora` y `bloquear`, que ya existe para RF-19 | Cambia el efecto de dos endpoints de RF-11, pendiente de aprobar |
-| `GET /api/adopcion/{id}` debería omitir `protectoraDireccion` cuando `esPersonaFisica` es cierto, igual que hace ahora la ficha del directorio | Una línea en `AnimalAdopcionService.detalle`, pendiente de aprobar por ser cambio de contrato |
+| **RF-05 entero, con notificación push real** | Ver «Trabajo futuro» |
+| **El contacto directo con la protectora (RF-06)**, con la decisión de modelo que arrastra | Ver «Trabajo futuro» |
 | Dejar que una protectora declare `esPersonaFisica` después de registrarse, para que las anteriores a `V12` puedan corregirlo | Sin bloque asignado |
-| Quitar `ProtectoraResponse.valoracionMedia`, que ya no lo rellena nadie ni tiene uso previsto. El JSON no cambiaría: es `NON_NULL` y vale siempre `null` | Pendiente de aprobar por ser cambio de un DTO del contrato de RF-01 |
 | Ordenación del directorio por valoración o por número de animales disponibles | RF-06 no lo pide |
 | El `countQuery` del listado está escrito aparte del `JOIN FETCH`, así que la condición vive en dos sitios que hay que mantener iguales | Limitación de JPQL con `JOIN FETCH`; cubierto por una prueba que compara el total con las filas devueltas |
+| Volver a publicar automáticamente los animales de una protectora rehabilitada tras un bloqueo | Decisión tomada en contra: `RETIRADO` es terminal en todo el proyecto |
+
+### Trabajo futuro
+
+#### RF-05 — notificaciones, y la push de verdad
+
+`NotificacionController` es un esqueleto vacío. La mitad de escritura ya está: `NotificacionService`
+persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy **las notificaciones se guardan y nadie
+puede leerlas**. Falta:
+
+1. `GET /api/notificaciones` paginado, con filtro `leida`, y `PATCH /api/notificaciones/{id}/leida`.
+   Es la parte pequeña: la tabla, el índice `idx_notificacion_usuario_leida` y el contrato de §12 ya
+   existen.
+2. **La entrega en vivo por `/user/queue/notificaciones`**, que hoy no la envía nadie: no hay ni una
+   llamada a ese destino en todo el código. El canal está documentado en §13 y el
+   `SimpMessagingTemplate` ya se usa para el mapa y para el chat, así que es reutilizar la misma
+   maquinaria.
+3. **La push real, que es lo que de verdad falta.** Los dos puntos anteriores solo sirven mientras la
+   aplicación está abierta: un WebSocket no llega a un móvil con la pantalla apagada, y RF-05 existe
+   precisamente para avisar de una alerta cercana a alguien que no está mirando. Eso necesita un
+   servicio externo —FCM para Android, APNs para iOS—, y con él tres cosas que el modelo no tiene: una
+   tabla de **tokens de dispositivo** por usuario (varios por cuenta, con su alta y su baja cuando el
+   proveedor los declara caducados), una **credencial de servidor** en configuración, y una decisión
+   sobre **qué tipos se envían por push y cuáles no** —avisar de cada mensaje de chat es la forma más
+   rápida de que alguien desactive las notificaciones—. Nada de eso cabe en un endpoint, y por eso se
+   enuncia aquí en vez de dejarlo como una fila de una tabla.
+
+#### RF-06 — el contacto directo con la protectora
+
+`POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar`, diseñados en §9 desde
+el principio. El directorio y la ficha ya permiten **encontrar** a una protectora y ver su email; lo
+que falta es abrir la conversación desde dentro de la aplicación, sin salir a un cliente de correo.
+
+No se resuelve escribiendo dos métodos. **Un chat exige hoy un `MATCH_REGISTRO`**, que a su vez exige
+una publicación deslizada (`publicacion_id` + `tipo_publicacion`, ambos `NOT NULL`), y «contactar con
+una protectora» no cuelga de ninguna publicación. Hacen falta una decisión de modelo y su migración, y
+las dos salidas tienen coste:
+
+- **`CHAT.match_id` nulable**, más una forma de resolver los dos participantes cuando no hay match.
+  Rompe la invariante que `Chat` documenta como su razón de no tener tabla de participantes: hoy los
+  dos extremos se deducen del match, y sin él habría que guardarlos.
+- **Un `TipoPublicacion` nuevo** o una publicación implícita, que obliga a revisar los cuatro sitios
+  donde `publicacion_id` se lee emparejado con el tipo.
+
+La segunda ruta, `/local/contactar`, añade lo suyo: resolver «la protectora de mi localidad» a partir
+del `areaGeografica` del usuario es una comparación de textos libres —«Madrid» contra «Madrid,
+Carabanchel»— y hay que decidir qué pasa cuando salen varias o ninguna. `400` si el usuario no tiene
+área fijada y `404` si no hay ninguna `ACTIVA` en esa zona es lo que §9 enuncia, pero el criterio de
+desempate está sin decidir.
