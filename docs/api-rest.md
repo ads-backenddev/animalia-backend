@@ -1656,6 +1656,22 @@ el proceso de verificación del administrador (RF-11) y meterle un valor con otr
 dos cosas que hoy están separadas. La condición sobre la cuenta es más barata y dice exactamente lo
 que pasa.
 
+**Y tirando de ese hilo apareció un agujero anterior, que este bloque no cierra.** Sacar a una
+protectora del directorio no la saca del **catálogo de adopción**. `PUT /api/admin/protectoras/{id}/rechazar`
+solo cambia `estado`, y `PUT /api/admin/usuarios/{id}/bloquear` solo pone `activo = false`: ninguno de
+los dos retira los animales, y `GET /api/adopcion`, `GET /api/adopcion/{id}` y el feed de swipe no
+miran ni el estado de la protectora ni si su cuenta sigue viva. Comprobado ejecutándolo contra el
+servidor real: tras rechazar a una protectora que estaba `ACTIVA`, su animal sigue `DISPONIBLE` en el
+escaparate, y un ciudadano puede deslizar a favor y abrir un chat con una cuenta que ya no puede
+entrar.
+
+Es exactamente el argumento que `UsuarioService.retirarAnimalesDisponibles` ya escribió para la baja
+voluntaria —*«un animal en adopción es una invitación a contactar con quien lo publicó, y quien lo
+publicó acaba de irse»*—, aplicado en RF-19 y no en RF-11. El arreglo es reutilizar ese mismo método
+desde `AdminService.rechazarProtectora` y desde `bloquear` cuando la cuenta sea de una protectora.
+**No se ha hecho aquí** porque cambia lo que hacen dos endpoints de RF-11 —rechazar pasaría a retirar
+animales, que es un efecto visible y nuevo— y eso se aprueba aparte. Queda abajo.
+
 **El filtro de zona no podía escribirse como en el resto de la API.** El patrón habitual
 `:zona IS NULL OR lower(...)` es justamente el que ya reventó una vez contra PostgreSQL: un parámetro
 nulo no tiene tipo, se toma por `bytea` y `lower()` falla con *«function lower(bytea) does not
@@ -1716,6 +1732,7 @@ publicación. Hacen falta una decisión de modelo y su migración, y las dos sal
 |---|---|
 | **RF-05 entero**: `GET /api/notificaciones`, `PATCH /api/notificaciones/{id}/leida` y la emisión por `/user/queue/notificaciones` | Es lo único que queda del SRS |
 | **`POST /api/protectoras/{id}/contactar` y `/local/contactar`**, con la decisión de modelo que arrastran | Sin bloque asignado |
+| **Rechazar o bloquear a una protectora no retira sus animales**, así que siguen en `GET /api/adopcion`, en `GET /api/adopcion/{id}` y en el feed, y se puede abrir un chat con una cuenta que ya no puede entrar. Comprobado contra el servidor real. El arreglo es llamar a `retirarAnimalesDisponibles` desde `AdminService.rechazarProtectora` y `bloquear`, que ya existe para RF-19 | Cambia el efecto de dos endpoints de RF-11, pendiente de aprobar |
 | `GET /api/adopcion/{id}` debería omitir `protectoraDireccion` cuando `esPersonaFisica` es cierto, igual que hace ahora la ficha del directorio | Una línea en `AnimalAdopcionService.detalle`, pendiente de aprobar por ser cambio de contrato |
 | Dejar que una protectora declare `esPersonaFisica` después de registrarse, para que las anteriores a `V12` puedan corregirlo | Sin bloque asignado |
 | Quitar `ProtectoraResponse.valoracionMedia`, que ya no lo rellena nadie ni tiene uso previsto. El JSON no cambiaría: es `NON_NULL` y vale siempre `null` | Pendiente de aprobar por ser cambio de un DTO del contrato de RF-01 |
