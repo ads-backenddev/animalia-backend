@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -60,6 +61,15 @@ class AuthServiceTest {
     private TokenRevocadoService tokenRevocadoService;
     @Mock
     private EmailService emailService;
+
+    /**
+     * Va de verdad, no simulado, y por eso es @Spy y no @Mock: lo que importa de
+     * él es el email concreto que produce —determinista e irreversible—, y un
+     * mock devolviendo null solo diría que se le llama. @InjectMocks inyecta un
+     * spy igual que un mock.
+     */
+    @Spy
+    private AnonimizacionService anonimizacionService = new AnonimizacionService();
 
     @InjectMocks
     private AuthService authService;
