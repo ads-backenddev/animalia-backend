@@ -150,15 +150,21 @@ max-age=31536000, immutable` —un archivo no cambia nunca; una foto nueva lleva
 perfil de una cuenta anonimizada) deja de servirse en el mismo momento, aunque su archivo tarde en
 desaparecer del disco.
 
-`fotoUrl` debe ser **`https://` absoluta, con host y sin credenciales** (`https://usuario@host/...`
-se rechaza); cualquier otra cosa —`http://`, `javascript:`, `data:`, una ruta relativa— devuelve
-`400` `VALIDACION` con `errores.fotoUrl`. Los campos opcionales siguen admitiendo `null`, y en
-`PUT /api/usuarios/me` una cadena vacía quita la foto.
+**`fotoUrl` solo admite una URL devuelta por `POST /api/fotos` a quien la envía.** Cualquier otra
+cosa devuelve `400` `VALIDACION` con `errores.fotoUrl`: una URL externa —aunque sea `https`—,
+`javascript:`, `data:`, una ruta relativa, o la foto de **otro** usuario copiada de una respuesta
+pública. Los motivos: una foto externa no se puede borrar en la baja de su dueño (RF-19) y deja al
+servidor ajeno ver la IP de quien la carga; y una foto ajena haría que la baja de su dueño borrase
+la imagen de quien la copió. Como la base pública es `https` en producción (el arranque falla si no),
+toda `fotoUrl` aceptada allí es `https`.
 
-> **En construcción** (rama `feature/subida-fotos`): todavía falta exigir que `fotoUrl` apunte a una
-> foto subida por el propio usuario a
-> `/api/fotos` —hoy vale cualquier URL `https`—, y borrar el archivo de la foto de perfil al
-> cambiarla o al anonimizar la cuenta (RF-19): hoy la baja solo vacía la columna.
+Reenviar sin cambios la foto que ya tiene un perfil o un animal **no** se vuelve a comprobar: el
+cliente manda el recurso entero al editarlo, y una foto anterior a `/api/fotos` no debe impedir
+editar lo demás. Los campos opcionales siguen admitiendo `null`, y una cadena en blanco equivale a no
+mandar foto (en `PUT /api/usuarios/me`, la quita).
+
+> **En construcción** (rama `feature/subida-fotos`): todavía falta borrar el archivo de la foto de
+> perfil al cambiarla o al anonimizar la cuenta (RF-19): hoy la baja solo vacía la columna.
 
 ---
 

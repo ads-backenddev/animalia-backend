@@ -67,6 +67,7 @@ public class UsuarioService {
     private final AnimalAdopcionService animalAdopcionService;
     private final PasswordEncoder passwordEncoder;
     private final AnonimizacionService anonimizacion;
+    private final FotoService fotoService;
 
     // ---------------------------------------------------------------------
     // Perfil (RF-02, RF-18)
@@ -94,10 +95,19 @@ public class UsuarioService {
     public UsuarioResponse actualizarPerfil(Long usuarioId, ActualizarPerfilRequest peticion) {
         Usuario usuario = exigirUsuario(usuarioId);
 
+        // Solo se comprueba una foto nueva: reenviar la que ya tiene el perfil
+        // —el cliente manda el perfil entero— no debe fallar aunque sea de antes
+        // de /api/fotos. Va antes de tocar ningún campo, para que un 400 no deje
+        // la entidad a medio modificar.
+        String fotoUrl = limpiar(peticion.getFotoUrl());
+        if (fotoUrl != null && !fotoUrl.equals(usuario.getFotoUrl())) {
+            fotoService.exigirPropia(fotoUrl, usuarioId);
+        }
+
         usuario.setNombre(peticion.getNombre().trim());
         usuario.setTelefono(limpiar(peticion.getTelefono()));
         usuario.setAreaGeografica(limpiar(peticion.getAreaGeografica()));
-        usuario.setFotoUrl(limpiar(peticion.getFotoUrl()));
+        usuario.setFotoUrl(fotoUrl);
 
         log.debug("Perfil actualizado del usuario {}", usuarioId);
         return aResponse(usuario);

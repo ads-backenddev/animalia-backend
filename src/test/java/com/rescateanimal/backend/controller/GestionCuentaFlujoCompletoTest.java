@@ -1,18 +1,21 @@
 package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
+import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.MensajeRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
+import com.rescateanimal.backend.service.AlmacenFotosService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -69,6 +72,11 @@ class GestionCuentaFlujoCompletoTest {
 
     @LocalServerPort
     private int puerto;
+
+    @Autowired
+    private FotoRepository fotoRepository;
+    @Autowired
+    private AlmacenFotosService almacenFotos;
 
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -152,6 +160,7 @@ class GestionCuentaFlujoCompletoTest {
             alertaRepository.deleteById(idAlerta);
         }
         protectoraRepository.deleteAllById(protectorasCreadas);
+        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, almacenFotos);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 
@@ -168,8 +177,8 @@ class GestionCuentaFlujoCompletoTest {
 
         HttpResponse<String> despues = enviar("PUT", "/api/usuarios/me", tokenDuenyo, """
                 {"nombre":"Marta Ruiz","telefono":"600111222","areaGeografica":"Getafe",
-                 "fotoUrl":"https://example.test/marta.jpg"}
-                """);
+                 "fotoUrl":"%s"}
+                """.formatted(FotosDePrueba.subir(http, puerto, tokenDuenyo)));
         assertThat(despues.statusCode()).isEqualTo(200);
         assertThat(JsonPath.<String>read(despues.body(), "$.nombre")).isEqualTo("Marta Ruiz");
         assertThat(JsonPath.<String>read(despues.body(), "$.areaGeografica")).isEqualTo("Getafe");
@@ -462,9 +471,9 @@ class GestionCuentaFlujoCompletoTest {
 
         HttpResponse<String> avistamiento = enviar("POST", "/api/avistamientos", tokenTestigo, """
                 {"alertaId":%d,"descripcion":"La he visto cerca del parque",
-                 "fotoUrl":"https://example.test/vista.jpg",
+                 "fotoUrl":"%s",
                  "ubicacion":{"latitud":40.4170,"longitud":-3.7040}}
-                """.formatted(idAlerta));
+                """.formatted(idAlerta, FotosDePrueba.subir(http, puerto, tokenTestigo)));
         assertThat(avistamiento.statusCode()).isEqualTo(201);
         idAvistamiento = numero(avistamiento.body(), "$.id");
 

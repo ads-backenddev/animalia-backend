@@ -117,6 +117,18 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.BAD_REQUEST, "FOTO_NO_VALIDA", ex.getMessage(), request);
     }
 
+    /**
+     * 400 — el fotoUrl no es una foto subida por quien la envía. Mismo cuerpo
+     * que un @Valid fallido sobre ese campo: para el cliente es lo mismo.
+     */
+    @ExceptionHandler(FotoUrlNoValidaException.class)
+    public ResponseEntity<ErrorResponse> fotoUrlNoValida(FotoUrlNoValidaException ex, WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.BAD_REQUEST, "VALIDACION",
+                "Los datos enviados no son válidos", ruta(request));
+        cuerpo.setErrores(Map.of("fotoUrl", ex.getMessage()));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(cuerpo);
+    }
+
     /** 400 — la operación no encaja en el dominio (deslizar lo propio, tipo no soportado). */
     @ExceptionHandler(OperacionNoPermitidaException.class)
     public ResponseEntity<ErrorResponse> operacionNoPermitida(OperacionNoPermitidaException ex,

@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -61,6 +62,8 @@ class AlertaServiceTest {
     private static final double LNG = -3.7038;
 
     @Mock
+    private FotoService fotoService;
+    @Mock
     private AlertaRepository alertaRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
@@ -74,7 +77,7 @@ class AlertaServiceTest {
     @BeforeEach
     void prepararServicio() {
         alertaService = new AlertaService(alertaRepository, usuarioRepository,
-                notificacionService, mensajeria, RADIO_METROS, VENTANA_HORAS, RADIO_MAPA_MAXIMO);
+                notificacionService, fotoService, mensajeria, RADIO_METROS, VENTANA_HORAS, RADIO_MAPA_MAXIMO);
     }
 
     // ---------------------------------------------------------------------
@@ -329,6 +332,56 @@ class AlertaServiceTest {
 
             assertThatThrownBy(() -> alertaService.cerrar(123L, 1L))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("La foto tiene que ser del autor")
+    class FotoDelAutor {
+
+        private static final String URL = "https://fotos.test/fotos/3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+
+        @Test
+        @DisplayName("Con una foto ajena no se publica ni se busca duplicado")
+        void fotoAjena() {
+            CrearAlertaRequest conFoto = peticion();
+            conFoto.setFotoUrl(URL);
+            doThrow(new FotoUrlNoValidaException("ajena")).when(fotoService).exigirPropia(URL, 1L);
+
+            assertThatThrownBy(() -> alertaService.publicar(conFoto, 1L))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            verify(alertaRepository, never()).buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any());
+            verify(alertaRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Con una foto propia se comprueba recortada y se guarda")
+        void fotoPropia() {
+            prepararPublicacion();
+            CrearAlertaRequest conFoto = peticion();
+            conFoto.setFotoUrl("  " + URL + " ");
+
+            assertThat(alertaService.publicar(conFoto, 1L).getFotoUrl()).isEqualTo(URL);
+            verify(fotoService).exigirPropia(URL, 1L);
+        }
+
+        @Test
+        @DisplayName("Una foto en blanco es no mandar foto: ni se comprueba ni se guarda la cadena")
+        void fotoEnBlanco() {
+            prepararPublicacion();
+            CrearAlertaRequest sinFoto = peticion();
+            sinFoto.setFotoUrl("   ");
+
+            assertThat(alertaService.publicar(sinFoto, 1L).getFotoUrl()).isNull();
+            verify(fotoService, never()).exigirPropia(any(), any());
+        }
+
+        private void prepararPublicacion() {
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+                    .thenReturn(Optional.empty());
+            when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
+            when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
         }
     }
 

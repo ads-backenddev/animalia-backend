@@ -29,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -52,6 +53,7 @@ public class AlertaService {
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
+    private final FotoService fotoService;
     private final SimpMessagingTemplate mensajeria;
 
     private final double radioDuplicadosMetros;
@@ -67,6 +69,7 @@ public class AlertaService {
     public AlertaService(AlertaRepository alertaRepository,
                          UsuarioRepository usuarioRepository,
                          NotificacionService notificacionService,
+                         FotoService fotoService,
                          SimpMessagingTemplate mensajeria,
                          @Value("${app.alertas.radio-duplicados-metros}") double radioDuplicadosMetros,
                          @Value("${app.alertas.ventana-duplicados-horas}") int ventanaDuplicadosHoras,
@@ -74,6 +77,7 @@ public class AlertaService {
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
+        this.fotoService = fotoService;
         this.mensajeria = mensajeria;
         this.radioDuplicadosMetros = radioDuplicadosMetros;
         this.ventanaDuplicadosHoras = ventanaDuplicadosHoras;
@@ -92,6 +96,12 @@ public class AlertaService {
      */
     @Transactional
     public AlertaResponse publicar(CrearAlertaRequest peticion, Long autorId) {
+        // La foto es opcional, y una cadena en blanco equivale a no mandarla.
+        String fotoUrl = StringUtils.hasText(peticion.getFotoUrl()) ? peticion.getFotoUrl().strip() : null;
+        if (fotoUrl != null) {
+            fotoService.exigirPropia(fotoUrl, autorId);
+        }
+
         comprobarQueNoEsDuplicada(peticion);
 
         Usuario autor = usuarioRepository.findById(autorId)
@@ -100,7 +110,7 @@ public class AlertaService {
         Alerta alerta = new Alerta();
         alerta.setUsuario(autor);
         alerta.setDescripcion(peticion.getDescripcion());
-        alerta.setFotoUrl(peticion.getFotoUrl());
+        alerta.setFotoUrl(fotoUrl);
         alerta.setEspecie(peticion.getEspecie());
         alerta.setFechaAvistamiento(peticion.getFechaAvistamiento());
         alerta.setUltimaUbicacion(aPunto(peticion.getUbicacion()));

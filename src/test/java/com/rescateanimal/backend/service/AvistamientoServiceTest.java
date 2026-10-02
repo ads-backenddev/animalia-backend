@@ -4,6 +4,7 @@ import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -39,6 +40,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +59,8 @@ class AvistamientoServiceTest {
     private static final double LNG = -3.7038;
 
     @Mock
+    private FotoService fotoService;
+    @Mock
     private AvistamientoRepository avistamientoRepository;
     @Mock
     private AlertaRepository alertaRepository;
@@ -68,7 +72,7 @@ class AvistamientoServiceTest {
     @BeforeEach
     void prepararServicio() {
         avistamientoService = new AvistamientoService(
-                avistamientoRepository, alertaRepository, usuarioRepository, TAMANYO_FEED);
+                avistamientoRepository, alertaRepository, usuarioRepository, fotoService, TAMANYO_FEED);
 
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario(ID_USUARIO)));
         when(avistamientoRepository.save(any(Avistamiento.class))).thenAnswer(i -> {
@@ -123,6 +127,18 @@ class AvistamientoServiceTest {
             assertThat(punto.getX()).isEqualTo(LNG);
             assertThat(punto.getY()).isEqualTo(LAT);
             assertThat(punto.getSRID()).isEqualTo(4326);
+        }
+
+        @Test
+        @DisplayName("Con una foto que no subió el autor no se registra nada")
+        void fotoAjenaSeRechaza() {
+            doThrow(new FotoUrlNoValidaException("ajena"))
+                    .when(fotoService).exigirPropia("https://fotos/avistamiento.jpg", ID_USUARIO);
+
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            verify(avistamientoRepository, never()).save(any());
         }
 
         @Test

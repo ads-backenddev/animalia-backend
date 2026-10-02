@@ -2,6 +2,7 @@ package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.repository.FotoRepository;
@@ -97,6 +98,30 @@ public class FotoService {
 
         log.debug("Foto {} subida por el usuario {} ({} bytes)", nombre, usuarioId, limpia.length);
         return FotoResponse.builder().url(almacen.urlDe(nombre)).build();
+    }
+
+    /**
+     * Exige que la URL sea la de una foto que este usuario subió a POST
+     * /api/fotos. Es la comprobación de cada fotoUrl que llega a la API.
+     *
+     * Dos motivos, y por eso no basta con que la URL sea "de las nuestras":
+     * - Una URL externa no se puede borrar —ni en la baja (RF-19) ni en la
+     *   limpieza— y además deja a ese servidor ajeno ver la IP de cada persona
+     *   que cargue la imagen.
+     * - Una foto de otro usuario se puede copiar de cualquier respuesta pública.
+     *   Usarla en tu perfil haría que su dueño, al darse de baja, borrase la foto
+     *   de tu perfil, y al revés: que la tuya publicase la suya.
+     *
+     * Lo que haga cada service con un valor ausente o que no ha cambiado es
+     * cosa suya: aquí solo llega lo que hay que comprobar.
+     */
+    @Transactional(readOnly = true)
+    public void exigirPropia(String url, Long usuarioId) {
+        String nombre = almacen.nombreDe(url).orElseThrow(() ->
+                new FotoUrlNoValidaException("la foto debe ser una URL devuelta por POST /api/fotos"));
+        if (!fotoRepository.existsByNombreAndUsuarioId(nombre, usuarioId)) {
+            throw new FotoUrlNoValidaException("la foto no existe o la ha subido otro usuario");
+        }
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.ImagenesDePrueba;
 import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
@@ -59,31 +60,69 @@ class FotoSubidaFlujoCompletoTest {
     private final HttpClient http = HttpClient.newHttpClient();
     private final List<String> fotosSubidas = new ArrayList<>();
 
-    private String email;
+    private final List<Long> usuarios = new ArrayList<>();
     private Long idUsuario;
     private String token;
 
     @BeforeEach
     void registrarYEntrar() throws Exception {
-        email = "fotos-" + UUID.randomUUID().toString().substring(0, 8) + "@test.es";
-        HttpResponse<String> registro = json("/api/auth/registro/ciudadano", """
-                {"nombre":"Ana","email":"%s","password":"%s","telefono":"600000000",
-                 "areaGeografica":"Madrid"}
-                """.formatted(email, CLAVE));
-        assertThat(registro.statusCode()).isEqualTo(201);
-        idUsuario = ((Number) JsonPath.read(registro.body(), "$.id")).longValue();
-
-        HttpResponse<String> login = json("/api/auth/login", """
-                {"email":"%s","password":"%s"}
-                """.formatted(email, CLAVE));
-        token = JsonPath.read(login.body(), "$.token");
+        token = nuevoUsuario();
+        idUsuario = usuarios.get(0);
     }
 
     @AfterEach
     void limpiar() {
         fotosSubidas.forEach(almacen::borrar);
         fotoRepository.deleteAllById(fotosSubidas);
-        usuarioRepository.deleteById(idUsuario);
+        FotosDePrueba.borrarLasDe(usuarios, fotoRepository, almacen);
+        usuarioRepository.deleteAllById(usuarios);
+    }
+
+    @Test
+    @DisplayName("fotoUrl solo admite fotos subidas por el propio usuario: ni externas ni ajenas")
+    void soloFotosPropias() throws Exception {
+        String ajena = FotosDePrueba.subir(http, puerto, nuevoUsuario());
+        String propia = FotosDePrueba.subir(http, puerto, token);
+
+        for (String rechazada : List.of("https://cdn.test/luna.jpg", ajena)) {
+            HttpResponse<String> respuesta = perfil(rechazada);
+            assertThat(respuesta.statusCode()).as(rechazada).isEqualTo(400);
+            assertThat((String) JsonPath.read(respuesta.body(), "$.codigo")).isEqualTo("VALIDACION");
+            assertThat((String) JsonPath.read(respuesta.body(), "$.errores.fotoUrl")).isNotBlank();
+        }
+
+        HttpResponse<String> aceptada = perfil(propia);
+        assertThat(aceptada.statusCode()).isEqualTo(200);
+        assertThat((String) JsonPath.read(aceptada.body(), "$.fotoUrl")).isEqualTo(propia);
+    }
+
+    private HttpResponse<String> perfil(String fotoUrl) throws Exception {
+        return http.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + puerto + "/api/usuarios/me"))
+                        .timeout(ESPERA)
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + token)
+                        .PUT(HttpRequest.BodyPublishers.ofString("""
+                                {"nombre":"Ana","fotoUrl":"%s"}
+                                """.formatted(fotoUrl), StandardCharsets.UTF_8))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
+    /** Registra un ciudadano nuevo, lo apunta para la limpieza y devuelve su token. */
+    private String nuevoUsuario() throws Exception {
+        String email = "fotos-" + UUID.randomUUID().toString().substring(0, 8) + "@test.es";
+        HttpResponse<String> registro = json("/api/auth/registro/ciudadano", """
+                {"nombre":"Ana","email":"%s","password":"%s","telefono":"600000000",
+                 "areaGeografica":"Madrid"}
+                """.formatted(email, CLAVE));
+        assertThat(registro.statusCode()).isEqualTo(201);
+        usuarios.add(((Number) JsonPath.read(registro.body(), "$.id")).longValue());
+
+        HttpResponse<String> login = json("/api/auth/login", """
+                {"email":"%s","password":"%s"}
+                """.formatted(email, CLAVE));
+        return JsonPath.read(login.body(), "$.token");
     }
 
     @Test

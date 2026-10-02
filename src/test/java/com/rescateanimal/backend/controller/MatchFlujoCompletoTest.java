@@ -1,15 +1,18 @@
 package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.model.Notificacion;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
+import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
+import com.rescateanimal.backend.service.AlmacenFotosService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -70,6 +73,11 @@ class MatchFlujoCompletoTest {
     private int puerto;
 
     @Autowired
+    private FotoRepository fotoRepository;
+    @Autowired
+    private AlmacenFotosService almacenFotos;
+
+    @Autowired
     private UsuarioRepository usuarioRepository;
     @Autowired
     private AlertaRepository alertaRepository;
@@ -122,9 +130,9 @@ class MatchFlujoCompletoTest {
         for (int i = 0; i < 3; i++) {
             HttpResponse<String> avistamiento = enviar("POST", "/api/avistamientos", tokenTestigo, """
                     {"alertaId":%d,"descripcion":"Lo he visto en el parque %d",
-                     "fotoUrl":"https://fotos/%s-%d.jpg",
+                     "fotoUrl":"%s",
                      "ubicacion":{"latitud":40.4170,"longitud":-3.7040}}
-                    """.formatted(alertaId, i, sufijo, i));
+                    """.formatted(alertaId, i, FotosDePrueba.subir(http, puerto, tokenTestigo)));
             assertThat(avistamiento.statusCode()).isEqualTo(201);
             avistamientos.add(numero(avistamiento.body(), "$.id"));
         }
@@ -149,6 +157,7 @@ class MatchFlujoCompletoTest {
                 .toList());
         avistamientoRepository.deleteAllById(avistamientos);
         alertaRepository.deleteById(alertaId);
+        FotosDePrueba.borrarLasDe(List.of(idDuenyo, idTestigo, idCurioso), fotoRepository, almacenFotos);
         usuarioRepository.deleteAllById(List.of(idDuenyo, idTestigo, idCurioso));
     }
 
@@ -234,11 +243,13 @@ class MatchFlujoCompletoTest {
         assertThat(propio.statusCode()).isEqualTo(403);
         assertThat(JsonPath.<String>read(propio.body(), "$.codigo")).isEqualTo("PUBLICACION_PROPIA");
 
-        // Alerta inexistente al registrar un avistamiento.
+        // Alerta inexistente al registrar un avistamiento. La foto es válida y
+        // del testigo, para que lo que falle sea la alerta y no la foto.
+        String foto = FotosDePrueba.subir(http, puerto, tokenTestigo);
         HttpResponse<String> sinAlerta = enviar("POST", "/api/avistamientos", tokenTestigo, """
-                {"alertaId":999999,"descripcion":"x","fotoUrl":"https://f/x.jpg",
+                {"alertaId":999999,"descripcion":"x","fotoUrl":"%s",
                  "ubicacion":{"latitud":40.4,"longitud":-3.7}}
-                """);
+                """.formatted(foto));
         assertThat(sinAlerta.statusCode()).isEqualTo(404);
 
         // Y una vez cerrada la alerta, deja de admitirlos.
@@ -246,9 +257,9 @@ class MatchFlujoCompletoTest {
                 .statusCode()).isEqualTo(200);
 
         HttpResponse<String> cerrada = enviar("POST", "/api/avistamientos", tokenTestigo, """
-                {"alertaId":%d,"descripcion":"tarde","fotoUrl":"https://f/x.jpg",
+                {"alertaId":%d,"descripcion":"tarde","fotoUrl":"%s",
                  "ubicacion":{"latitud":40.4,"longitud":-3.7}}
-                """.formatted(alertaId));
+                """.formatted(alertaId, foto));
         assertThat(cerrada.statusCode()).isEqualTo(400);
         assertThat(JsonPath.<String>read(cerrada.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
 

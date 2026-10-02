@@ -3,6 +3,7 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.ImagenesDePrueba;
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
@@ -24,6 +25,7 @@ import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -201,6 +203,47 @@ class FotoServiceTest {
             for (TransactionSynchronization s : TransactionSynchronizationManager.getSynchronizations()) {
                 s.afterCompletion(estado);
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("Exigir que el fotoUrl sea una foto propia")
+    class ExigirPropia {
+
+        private static final String NOMBRE = "3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+
+        @Test
+        @DisplayName("Una foto subida por el mismo usuario pasa")
+        void propia() {
+            when(fotoRepository.existsByNombreAndUsuarioId(NOMBRE, ID_USUARIO)).thenReturn(true);
+
+            servicio.exigirPropia(BASE + "/" + NOMBRE, ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("La de otro usuario, aunque sea de este almacén, no")
+        void ajena() {
+            when(fotoRepository.existsByNombreAndUsuarioId(NOMBRE, ID_USUARIO)).thenReturn(false);
+
+            assertThatThrownBy(() -> servicio.exigirPropia(BASE + "/" + NOMBRE, ID_USUARIO))
+                    .isInstanceOf(FotoUrlNoValidaException.class)
+                    .hasMessageContaining("otro usuario");
+        }
+
+        @Test
+        @DisplayName("Una URL https externa no llega ni a consultar la tabla")
+        void externa() {
+            for (String url : List.of(
+                    "https://cdn.test/luna.jpg",
+                    "https://fotos.test.evil.com/fotos/" + NOMBRE,
+                    BASE + "/../" + NOMBRE,
+                    "javascript:alert(1)")) {
+                assertThatThrownBy(() -> servicio.exigirPropia(url, ID_USUARIO))
+                        .as(url)
+                        .isInstanceOf(FotoUrlNoValidaException.class)
+                        .hasMessageContaining("/api/fotos");
+            }
+            verify(fotoRepository, never()).existsByNombreAndUsuarioId(any(), any());
         }
     }
 

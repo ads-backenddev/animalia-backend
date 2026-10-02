@@ -7,6 +7,7 @@ import com.rescateanimal.backend.dto.response.AnimalAdopcionResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.AnimalAjenoException;
 import com.rescateanimal.backend.exception.CuentaNoAutorizadaException;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.AnimalAdopcion;
@@ -42,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -67,6 +69,8 @@ class AnimalAdopcionServiceTest {
     private static final Long ID_OTRA_PROTECTORA = 21L;
 
     @Mock
+    private FotoService fotoService;
+    @Mock
     private AnimalAdopcionRepository animalAdopcionRepository;
     @Mock
     private ProtectoraRepository protectoraRepository;
@@ -79,7 +83,7 @@ class AnimalAdopcionServiceTest {
     void prepararServicio() {
         animalAdopcionService =
                 new AnimalAdopcionService(animalAdopcionRepository, protectoraRepository,
-                        valoracionService, TAMANYO_FEED);
+                        valoracionService, fotoService, TAMANYO_FEED);
 
         // El detalle pide la media de la protectora; sin esto el mock devuelve
         // null y revienta al leerla. Sin valoraciones, media nula y total cero.
@@ -213,6 +217,49 @@ class AnimalAdopcionServiceTest {
             }).doesNotThrowAnyException();
 
             assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
+        }
+    }
+
+    @Nested
+    @DisplayName("La foto tiene que ser de la protectora")
+    class FotoDeLaProtectora {
+
+        @Test
+        @DisplayName("Publicar con una foto que no subió la protectora no guarda nada")
+        void publicarConFotoAjena() {
+            doThrow(new FotoUrlNoValidaException("ajena"))
+                    .when(fotoService).exigirPropia("https://cdn.test/luna.jpg", ID_DUENYA);
+
+            assertThatThrownBy(() -> animalAdopcionService.publicar(peticionDeAlta(), ID_DUENYA))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            verify(animalAdopcionRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Editar sin cambiar la foto no la vuelve a comprobar")
+        void editarConLaMismaFoto() {
+            ActualizarAnimalRequest mismaFoto = peticionDeEdicion();
+            mismaFoto.setFotoUrl(" https://cdn.test/luna.jpg ");
+
+            animalAdopcionService.actualizar(ID_ANIMAL, mismaFoto, ID_DUENYA);
+
+            verify(fotoService, never()).exigirPropia(any(), any());
+        }
+
+        @Test
+        @DisplayName("Editar con una foto nueva ajena -> 400 y el animal no cambia")
+        void editarConFotoNuevaAjena() {
+            AnimalAdopcion animal = animal(EstadoAnimal.DISPONIBLE);
+            when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL)).thenReturn(Optional.of(animal));
+            doThrow(new FotoUrlNoValidaException("ajena"))
+                    .when(fotoService).exigirPropia("https://cdn.test/nube.jpg", ID_DUENYA);
+
+            assertThatThrownBy(() -> animalAdopcionService.actualizar(ID_ANIMAL, peticionDeEdicion(), ID_DUENYA))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            assertThat(animal.getNombre()).isEqualTo("Luna");
+            assertThat(animal.getFotoUrl()).isEqualTo("https://cdn.test/luna.jpg");
         }
     }
 
