@@ -125,6 +125,51 @@ public class FotoService {
     }
 
     /**
+     * Quita una foto que ha dejado de ser la de un perfil: porque se cambió, se
+     * quitó, o porque la cuenta se anonimiza (RF-19). Solo la de perfil: las de
+     * alertas, avistamientos y animales son fotos de animales y forman parte del
+     * histórico que la baja conserva.
+     *
+     * DOS PASOS, CADA UNO EN SU MOMENTO:
+     * - La fila se borra AHORA, dentro de la transacción de quien llama. Si esa
+     *   transacción se deshace, la fila vuelve, y con ella la foto. Y como
+     *   GET /fotos solo sirve lo que tiene fila, la foto deja de publicarse en el
+     *   instante del commit.
+     * - El archivo se borra DESPUÉS DEL COMMIT (afterCommit). Antes no se puede:
+     *   un rollback dejaría la fila apuntando a un archivo que ya no existe. Si
+     *   este segundo paso falla, el archivo queda sin fila —ya no se sirve— y lo
+     *   recoge la limpieza diaria.
+     *
+     * NO SE BORRA, Y NO ES UN ERROR, cuando:
+     * - la URL no es de este almacén: una foto anterior a /api/fotos, que el
+     *   backend no aloja (limitación aceptada, docs/api-rest.md §20);
+     * - la foto no es de este usuario, cosa que exigirPropia ya impide y aquí se
+     *   comprueba de nuevo porque borrar es irreversible;
+     * - alguna publicación la usa: el usuario puede poner su propia foto en una
+     *   alerta, y entonces es la foto de un animal y se queda.
+     */
+    @Transactional
+    public void retirar(String url, Long usuarioId) {
+        Optional<String> encontrada = almacen.nombreDe(url);
+        if (encontrada.isEmpty()) {
+            log.debug("Foto de perfil externa del usuario {}: no se aloja aquí, no se borra", usuarioId);
+            return;
+        }
+        String nombre = encontrada.get();
+        if (!fotoRepository.existsByNombreAndUsuarioId(nombre, usuarioId)) {
+            log.warn("El perfil del usuario {} apuntaba a la foto {}, que no es suya", usuarioId, nombre);
+            return;
+        }
+        if (fotoRepository.usadaEnPublicaciones(url)) {
+            log.debug("La foto {} sigue en una publicación del usuario {}: se conserva", nombre, usuarioId);
+            return;
+        }
+
+        fotoRepository.deleteById(nombre);
+        borrarArchivoTrasConfirmar(nombre);
+    }
+
+    /**
      * El archivo de GET /fotos/{nombre}, o 404.
      *
      * SOLO SE SIRVE LO QUE TIENE FILA, aunque el archivo esté en disco. Al
@@ -154,6 +199,21 @@ public class FotoService {
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
+
+    private void borrarArchivoTrasConfirmar(String nombre) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            almacen.borrar(nombre);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                // borrar() no lanza: si falla lo registra, y el archivo, ya sin
+                // fila, lo recoge la limpieza diaria.
+                almacen.borrar(nombre);
+            }
+        });
+    }
 
     private void borrarSiNoSeConfirma(String nombre) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {

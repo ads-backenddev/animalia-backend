@@ -3,6 +3,7 @@ package com.rescateanimal.backend.controller;
 import com.jayway.jsonpath.JsonPath;
 import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.ImagenesDePrueba;
+import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.service.AlmacenFotosService;
@@ -23,6 +24,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -51,6 +53,8 @@ class FotoSubidaFlujoCompletoTest {
     private int puerto;
 
     @Autowired
+    private AlertaRepository alertaRepository;
+    @Autowired
     private FotoRepository fotoRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -74,6 +78,10 @@ class FotoSubidaFlujoCompletoTest {
     void limpiar() {
         fotosSubidas.forEach(almacen::borrar);
         fotoRepository.deleteAllById(fotosSubidas);
+        // getUsuario().getId() no inicializa el proxy: es seguro desconectado.
+        alertaRepository.deleteAll(alertaRepository.findAll().stream()
+                .filter(a -> usuarios.contains(a.getUsuario().getId()))
+                .toList());
         FotosDePrueba.borrarLasDe(usuarios, fotoRepository, almacen);
         usuarioRepository.deleteAllById(usuarios);
     }
@@ -96,6 +104,95 @@ class FotoSubidaFlujoCompletoTest {
         assertThat((String) JsonPath.read(aceptada.body(), "$.fotoUrl")).isEqualTo(propia);
     }
 
+    @Test
+    @DisplayName("Cambiar la foto de perfil borra la anterior: fila, archivo y URL")
+    void cambiarLaFotoDePerfil() throws Exception {
+        String primera = FotosDePrueba.subir(http, puerto, token);
+        String segunda = FotosDePrueba.subir(http, puerto, token);
+        assertThat(perfil(primera).statusCode()).isEqualTo(200);
+
+        assertThat(perfil(segunda).statusCode()).isEqualTo(200);
+
+        assertBorrada(primera);
+        assertThat(descargar(rutaDe(segunda)).statusCode()).isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("La baja borra la foto de perfil y conserva las fotos de sus alertas, aunque sea la misma")
+    void laBajaBorraSoloLaFotoDePerfil() throws Exception {
+        String deAlerta = FotosDePrueba.subir(http, puerto, token);
+        String dePerfil = FotosDePrueba.subir(http, puerto, token);
+        publicarAlerta(deAlerta);
+        assertThat(perfil(dePerfil).statusCode()).isEqualTo(200);
+
+        assertThat(darseDeBaja().statusCode()).isEqualTo(204);
+
+        assertBorrada(dePerfil);
+        assertThat(descargar(rutaDe(deAlerta)).statusCode())
+                .as("la foto de su alerta es la de un animal: se conserva")
+                .isEqualTo(200);
+    }
+
+    @Test
+    @DisplayName("Si la foto de perfil también está en una alerta, la baja no la borra")
+    void laFotoCompartidaSobreviveALaBaja() throws Exception {
+        String compartida = FotosDePrueba.subir(http, puerto, token);
+        publicarAlerta(compartida);
+        assertThat(perfil(compartida).statusCode()).isEqualTo(200);
+
+        assertThat(darseDeBaja().statusCode()).isEqualTo(204);
+
+        assertThat(descargar(rutaDe(compartida)).statusCode()).isEqualTo(200);
+        assertThat(fotoRepository.existsById(almacen.nombreDe(compartida).orElseThrow())).isTrue();
+    }
+
+    private void assertBorrada(String url) throws Exception {
+        String nombre = almacen.nombreDe(url).orElseThrow();
+        assertThat(fotoRepository.existsById(nombre)).as("fila").isFalse();
+        assertThat(almacen.abrir(nombre)).as("archivo, borrado tras el commit").isEmpty();
+        assertThat(descargar(rutaDe(url)).statusCode()).isEqualTo(404);
+    }
+
+    private static String rutaDe(String url) {
+        return "/fotos/" + url.substring(url.lastIndexOf('/') + 1);
+    }
+
+    /**
+     * Una alerta con especie y punto propios de esta prueba, para que la
+     * detección de duplicados (RF-25) no choque con las de otras pruebas.
+     */
+    private void publicarAlerta(String fotoUrl) throws Exception {
+        double desplazamiento = Math.random() / 10;
+        HttpResponse<String> alerta = http.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + puerto + "/api/alertas"))
+                        .timeout(ESPERA)
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + token)
+                        .POST(HttpRequest.BodyPublishers.ofString("""
+                                {"descripcion":"Hurón con collar azul","especie":"%s","fotoUrl":"%s",
+                                 "fechaAvistamiento":"%s",
+                                 "ubicacion":{"latitud":%s,"longitud":%s}}
+                                """.formatted("huron-" + UUID.randomUUID().toString().substring(0, 8), fotoUrl,
+                                Instant.now().minusSeconds(3600), 40.3 + desplazamiento, -3.6 - desplazamiento),
+                                StandardCharsets.UTF_8))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        assertThat(alerta.statusCode()).as(alerta.body()).isEqualTo(201);
+    }
+
+    private HttpResponse<String> darseDeBaja() throws Exception {
+        return http.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + puerto + "/api/usuarios/me"))
+                        .timeout(ESPERA)
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer " + token)
+                        .method("DELETE", HttpRequest.BodyPublishers.ofString("""
+                                {"password":"%s"}
+                                """.formatted(CLAVE), StandardCharsets.UTF_8))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+    }
+
     private HttpResponse<String> perfil(String fotoUrl) throws Exception {
         return http.send(HttpRequest.newBuilder()
                         .uri(URI.create("http://localhost:" + puerto + "/api/usuarios/me"))
@@ -114,8 +211,8 @@ class FotoSubidaFlujoCompletoTest {
         String email = "fotos-" + UUID.randomUUID().toString().substring(0, 8) + "@test.es";
         HttpResponse<String> registro = json("/api/auth/registro/ciudadano", """
                 {"nombre":"Ana","email":"%s","password":"%s","telefono":"600000000",
-                 "areaGeografica":"Madrid"}
-                """.formatted(email, CLAVE));
+                 "areaGeografica":"%s"}
+                """.formatted(email, CLAVE, "Fotos " + email));
         assertThat(registro.statusCode()).isEqualTo(201);
         usuarios.add(((Number) JsonPath.read(registro.body(), "$.id")).longValue());
 

@@ -248,6 +248,69 @@ class FotoServiceTest {
     }
 
     @Nested
+    @DisplayName("Retirar la foto de un perfil")
+    class Retirar {
+
+        @Test
+        @DisplayName("La fila se borra ya y el archivo solo tras el commit")
+        void filaYaArchivoTrasCommit() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            String url = almacen.urlDe(nombre);
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            TransactionSynchronizationManager.initSynchronization();
+
+            servicio.retirar(url, ID_USUARIO);
+
+            verify(fotoRepository).deleteById(nombre);
+            assertThat(almacen.abrir(nombre)).as("antes del commit sigue en disco").isPresent();
+
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+            assertThat(almacen.abrir(nombre)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Si la transacción se deshace, el archivo sigue ahí para su fila restaurada")
+        void rollbackConservaElArchivo() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            TransactionSynchronizationManager.initSynchronization();
+
+            servicio.retirar(almacen.urlDe(nombre), ID_USUARIO);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+
+        @Test
+        @DisplayName("Si una publicación la usa, se conserva: ya es la foto de un animal")
+        void usadaEnPublicacion() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            String url = almacen.urlDe(nombre);
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            when(fotoRepository.usadaEnPublicaciones(url)).thenReturn(true);
+
+            servicio.retirar(url, ID_USUARIO);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+
+        @Test
+        @DisplayName("Una foto externa o ajena no se borra, y no es un error")
+        void externaOAjena() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(false);
+
+            servicio.retirar("https://example.test/ana.jpg", ID_USUARIO);
+            servicio.retirar(almacen.urlDe(nombre), ID_USUARIO);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+    }
+
+    @Nested
     @DisplayName("Servir una foto")
     class Servir {
 

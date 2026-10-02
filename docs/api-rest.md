@@ -163,8 +163,13 @@ cliente manda el recurso entero al editarlo, y una foto anterior a `/api/fotos` 
 editar lo demás. Los campos opcionales siguen admitiendo `null`, y una cadena en blanco equivale a no
 mandar foto (en `PUT /api/usuarios/me`, la quita).
 
-> **En construcción** (rama `feature/subida-fotos`): todavía falta borrar el archivo de la foto de
-> perfil al cambiarla o al anonimizar la cuenta (RF-19): hoy la baja solo vacía la columna.
+**Una foto de perfil que se cambia o se quita deja de existir**, igual que al dar de baja la cuenta
+(RF-19, ver §19): deja de servirse en el momento y su archivo se borra. Salvo que alguna publicación
+del mismo usuario la use: entonces es la foto de un animal y se queda.
+
+> **En construcción** (rama `feature/subida-fotos`): la limpieza diaria que recoge los archivos sin
+> fila —subidas que nunca se usaron, o un borrado que falló— todavía no existe. Hasta que llegue, esos
+> archivos no se sirven, pero siguen ocupando disco.
 
 ---
 
@@ -1491,6 +1496,15 @@ las conversaciones de los demás. Así que las filas se quedan y lo que desapare
 | `telefono`, `foto_url` | `null` |
 | `activo` | `false` |
 | `rol`, `created_at`, `id` | **Intactos**: no son datos personales y explican el histórico |
+
+**La foto de perfil, además, se borra de verdad** (desde el bloque de subida de fotos, §1). Vaciar
+`foto_url` no bastaba: la imagen seguía publicada en su URL. Ahora su fila de `FOTO` se borra en la
+misma transacción que la anonimización —y en ese instante `GET /fotos/{nombre}` deja de servirla— y
+su archivo justo después del commit. Si borrar el archivo fallara, queda en disco sin fila y sin
+servirse hasta que lo recoge la limpieza diaria. **Las fotos de sus alertas y avistamientos no se
+tocan**: son fotos de animales y forman parte del histórico que la otra parte necesita ver; por lo
+mismo, si la foto de perfil se usaba también en una publicación, se conserva. Las fotos con URL
+externa anteriores a `/api/fotos` quedan fuera de este borrado (limitación aceptada, §20).
 
 El nombre genérico es el mismo para todos a propósito. Uno con el id dentro —«Usuario 482»— seguiría
 distinguiendo a una persona de otra a lo largo de la aplicación, que es justo lo que se deshace.

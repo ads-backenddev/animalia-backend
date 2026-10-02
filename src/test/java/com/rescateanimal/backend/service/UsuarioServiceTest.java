@@ -124,12 +124,33 @@ class UsuarioServiceTest {
         }
 
         @Test
-        @DisplayName("Reenviar la foto que ya tiene el perfil no la vuelve a comprobar")
+        @DisplayName("Reenviar la foto que ya tiene el perfil no la comprueba ni la retira")
         void laMismaFotoNoSeComprueba() {
             usuarioService.actualizarPerfil(ID_USUARIO,
                     new ActualizarPerfilRequest("Ana", null, null, "https://example.test/ana.jpg"));
 
             verify(fotoService, never()).exigirPropia(any(), any());
+            verify(fotoService, never()).retirar(any(), any());
+        }
+
+        @Test
+        @DisplayName("Cambiar la foto retira la anterior")
+        void cambiarLaFotoRetiraLaAnterior() {
+            String nueva = "https://fotos.test/fotos/3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+
+            usuarioService.actualizarPerfil(ID_USUARIO, new ActualizarPerfilRequest("Ana", null, null, nueva));
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+            assertThat(usuario.getFotoUrl()).isEqualTo(nueva);
+        }
+
+        @Test
+        @DisplayName("Quitar la foto también la retira")
+        void quitarLaFotoLaRetira() {
+            usuarioService.actualizarPerfil(ID_USUARIO, new ActualizarPerfilRequest("Ana", null, null, " "));
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+            assertThat(usuario.getFotoUrl()).isNull();
         }
 
         @Test
@@ -225,6 +246,25 @@ class UsuarioServiceTest {
                     .as("el email original no puede quedar en ninguna parte")
                     .doesNotContain("ana")
                     .doesNotContain("test.es");
+        }
+
+        @Test
+        @DisplayName("La foto de perfil se retira, no solo se desenlaza")
+        void laBajaRetiraLaFotoDePerfil() {
+            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("Sin la contraseña correcta la foto tampoco se toca")
+        void sinLaClaveNoSeRetiraLaFoto() {
+            when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+
+            assertThatThrownBy(() -> usuarioService.eliminarCuenta(ID_USUARIO, "otra-clave"))
+                    .isInstanceOf(CredencialesInvalidasException.class);
+
+            verify(fotoService, never()).retirar(any(), any());
         }
 
         @Test
