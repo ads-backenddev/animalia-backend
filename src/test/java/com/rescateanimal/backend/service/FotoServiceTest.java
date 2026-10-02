@@ -3,6 +3,7 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.ImagenesDePrueba;
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.repository.FotoRepository;
@@ -200,6 +201,46 @@ class FotoServiceTest {
             for (TransactionSynchronization s : TransactionSynchronizationManager.getSynchronizations()) {
                 s.afterCompletion(estado);
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("Servir una foto")
+    class Servir {
+
+        @Test
+        @DisplayName("Con fila y archivo, devuelve el archivo")
+        void sirve() throws Exception {
+            String nombre = almacen.guardar(new byte[]{9, 8, 7}, "jpg");
+            when(fotoRepository.existsById(nombre)).thenReturn(true);
+
+            assertThat(servicio.abrir(nombre).getContentAsByteArray()).containsExactly(9, 8, 7);
+        }
+
+        @Test
+        @DisplayName("Un archivo sin fila no se sirve: la baja ya la borró aunque el disco no")
+        void sinFila() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsById(nombre)).thenReturn(false);
+
+            assertThatThrownBy(() -> servicio.abrir(nombre)).isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("Una fila sin archivo es 404, no 500")
+        void sinArchivo() {
+            String nombre = "3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+            when(fotoRepository.existsById(nombre)).thenReturn(true);
+
+            assertThatThrownBy(() -> servicio.abrir(nombre)).isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("Un nombre fuera del patrón es 404 sin consultar la base de datos")
+        void nombreInvalido() {
+            assertThatThrownBy(() -> servicio.abrir("../application.properties"))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            verify(fotoRepository, never()).existsById(any());
         }
     }
 

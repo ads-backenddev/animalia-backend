@@ -124,6 +124,70 @@ class FotoSubidaFlujoCompletoTest {
         assertThat(subir(ImagenesDePrueba.jpeg(8, 8), null).statusCode()).isEqualTo(401);
     }
 
+    @Test
+    @DisplayName("GET /fotos/{nombre} sin token sirve la imagen con caché inmutable y nosniff")
+    void servirSinToken() throws Exception {
+        String url = JsonPath.read(subir(ImagenesDePrueba.jpeg(32, 24), token).body(), "$.url");
+        String nombre = almacen.nombreDe(url).orElseThrow();
+        fotosSubidas.add(nombre);
+
+        HttpResponse<byte[]> respuesta = descargar("/fotos/" + nombre);
+
+        assertThat(respuesta.statusCode()).isEqualTo(200);
+        assertThat(respuesta.headers().firstValue("Content-Type")).contains("image/jpeg");
+        assertThat(respuesta.headers().firstValue("X-Content-Type-Options")).contains("nosniff");
+        assertThat(respuesta.headers().firstValue("Cache-Control")).hasValueSatisfying(cache ->
+                assertThat(cache).contains("max-age=31536000", "public", "immutable").doesNotContain("no-store"));
+        assertThat(respuesta.body()).isEqualTo(Files.readAllBytes(almacen.abrir(nombre).orElseThrow()));
+        assertThat(ImagenesDePrueba.leer(respuesta.body()).getWidth()).isEqualTo(32);
+    }
+
+    @Test
+    @DisplayName("Un archivo en disco sin su fila no se sirve")
+    void archivoSinFila() throws Exception {
+        String suelto = almacen.guardar(ImagenesDePrueba.jpeg(4, 4), "jpg");
+        fotosSubidas.add(suelto);
+
+        assertThat(descargar("/fotos/" + suelto).statusCode()).isEqualTo(404);
+    }
+
+    @Test
+    @DisplayName("Ninguna ruta construida fuera del patrón sale de la carpeta de fotos")
+    void recorrerRutas() throws Exception {
+        for (String ruta : List.of(
+                "/fotos/3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg",
+                "/fotos/..%2F..%2Fpom.xml",
+                "/fotos/..%5C..%5Cpom.xml",
+                "/fotos/%2e%2e/%2e%2e/pom.xml",
+                "/fotos/application.properties")) {
+            HttpResponse<byte[]> respuesta = descargar(ruta);
+            assertThat(respuesta.statusCode()).as(ruta).isIn(400, 404);
+            assertThat(new String(respuesta.body(), StandardCharsets.UTF_8)).as(ruta).doesNotContain("<project");
+        }
+    }
+
+    @Test
+    @DisplayName("Sin token solo se puede leer: subir por /fotos no existe")
+    void soloLectura() throws Exception {
+        HttpResponse<String> respuesta = http.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + puerto + "/fotos/x.jpg"))
+                        .timeout(ESPERA)
+                        .POST(HttpRequest.BodyPublishers.noBody())
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertThat(respuesta.statusCode()).isEqualTo(401);
+    }
+
+    private HttpResponse<byte[]> descargar(String ruta) throws Exception {
+        return http.send(HttpRequest.newBuilder()
+                        .uri(URI.create("http://localhost:" + puerto + ruta))
+                        .timeout(ESPERA)
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofByteArray());
+    }
+
     private HttpResponse<String> subir(byte[] contenido, String token) throws Exception {
         String frontera = "----frontera" + UUID.randomUUID();
         ByteArrayOutputStream cuerpo = new ByteArrayOutputStream();

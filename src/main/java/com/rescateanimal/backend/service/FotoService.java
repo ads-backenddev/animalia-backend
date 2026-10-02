@@ -2,11 +2,14 @@ package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -94,6 +97,33 @@ public class FotoService {
 
         log.debug("Foto {} subida por el usuario {} ({} bytes)", nombre, usuarioId, limpia.length);
         return FotoResponse.builder().url(almacen.urlDe(nombre)).build();
+    }
+
+    /**
+     * El archivo de GET /fotos/{nombre}, o 404.
+     *
+     * SOLO SE SIRVE LO QUE TIENE FILA, aunque el archivo esté en disco. Al
+     * anonimizar una cuenta (RF-19) la fila de su foto de perfil se borra dentro
+     * de la transacción y el archivo después del commit; si ese segundo paso
+     * fallara, el archivo seguiría ahí hasta la limpieza diaria. Mirando la fila,
+     * la foto deja de publicarse en el mismo instante en que se confirma la baja,
+     * y lo mismo vale para el archivo de una subida cuyo INSERT no llegó a
+     * confirmarse. Cuesta una búsqueda por clave primaria por imagen, y cada
+     * imagen se pide una vez: la respuesta se cachea como inmutable.
+     *
+     * Un nombre fuera del patrón ni siquiera llega a la base de datos.
+     */
+    @Transactional(readOnly = true)
+    public Resource abrir(String nombre) {
+        if (!almacen.esNombreValido(nombre) || !fotoRepository.existsById(nombre)) {
+            throw new ResourceNotFoundException("La foto no existe");
+        }
+        return almacen.abrir(nombre)
+                .map(FileSystemResource::new)
+                .orElseThrow(() -> {
+                    log.warn("La foto {} tiene fila pero no archivo", nombre);
+                    return new ResourceNotFoundException("La foto no existe");
+                });
     }
 
     // ---------------------------------------------------------------------

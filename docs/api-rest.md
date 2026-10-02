@@ -142,13 +142,21 @@ Lo que se acepta en la subida:
   coordenadas GPS de donde se hizo la foto— y con el lado mayor reducido a 2048 px si lo supera.
   Como la orientación también es un dato EXIF, **el cliente debe enviar la imagen ya girada**.
 
+Las fotos se sirven en **`GET /fotos/{nombre}`**, la URL que devolvió la subida. Es **público, sin
+token**, porque una etiqueta `<img>` no puede mandar la cabecera `Authorization`; lo que impide
+recorrerlas es que el nombre es un UUID aleatorio. Responde con `Cache-Control: public,
+max-age=31536000, immutable` —un archivo no cambia nunca; una foto nueva lleva un nombre nuevo— y
+`404` para cualquier nombre que no sea el de una foto existente. Una foto borrada (por ejemplo, la de
+perfil de una cuenta anonimizada) deja de servirse en el mismo momento, aunque su archivo tarde en
+desaparecer del disco.
+
 `fotoUrl` debe ser **`https://` absoluta, con host y sin credenciales** (`https://usuario@host/...`
 se rechaza); cualquier otra cosa —`http://`, `javascript:`, `data:`, una ruta relativa— devuelve
 `400` `VALIDACION` con `errores.fotoUrl`. Los campos opcionales siguen admitiendo `null`, y en
 `PUT /api/usuarios/me` una cadena vacía quita la foto.
 
-> **En construcción** (rama `feature/subida-fotos`): todavía falta servir los archivos subidos
-> (`GET /fotos/{nombre}`), exigir que `fotoUrl` apunte a una foto subida por el propio usuario a
+> **En construcción** (rama `feature/subida-fotos`): todavía falta exigir que `fotoUrl` apunte a una
+> foto subida por el propio usuario a
 > `/api/fotos` —hoy vale cualquier URL `https`—, y borrar el archivo de la foto de perfil al
 > cambiarla o al anonimizar la cuenta (RF-19): hoy la baja solo vacía la columna.
 
