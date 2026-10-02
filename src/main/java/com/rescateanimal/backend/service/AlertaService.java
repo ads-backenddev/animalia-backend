@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
@@ -348,6 +349,74 @@ public class AlertaService {
                 .stream()
                 .map(this::aAlertaResponse)
                 .toList();
+    }
+
+    // ---------------------------------------------------------------------
+    // Edición
+    // ---------------------------------------------------------------------
+
+    /**
+     * Edita una alerta propia (PUT /api/alertas/{id}). Las comprobaciones van en
+     * este orden: existe (404), es suya (403), sigue ACTIVA (400), la foto nueva
+     * es suya (400) y no duplica a otra (409).
+     *
+     * SOLO MIENTRAS ESTÉ ACTIVA. Una alerta cerrada, retirada o moderada ya no
+     * busca a nadie; editarla cambiaría lo que vieron quienes la siguieron, y en
+     * una ELIMINADA serviría para colar contenido nuevo tras la moderación.
+     *
+     * RF-25 SE VUELVE A PASAR SI CAMBIAN LA ESPECIE O LA UBICACIÓN, y solo
+     * entonces. Sin ello, la detección se esquivaría en dos pasos: publicar lejos
+     * y mover después la alerta encima de otra, o publicar con otra especie y
+     * cambiarla luego. No hace falta ningún umbral de "cambio significativo": la
+     * propia detección ya tiene su tolerancia. Los demás campos —la fecha
+     * incluida— no deciden si esta alerta duplica a otra, porque la ventana mira
+     * las fechas de la existente, no las de esta (ver buscarSimilar). Al volver a
+     * pasarla, la alerta no se cuenta a sí misma.
+     *
+     * La foto solo se comprueba si cambia, como en el perfil y en los animales:
+     * reenviar la que ya tenía no debe fallar. La anterior, ya sin uso, la recoge
+     * la limpieza diaria de fotos.
+     *
+     * Avisa al mapa con ACTUALIZACION, que mueve el marcador si cambió la
+     * ubicación. No vuelve a avisar a la zona (RF-05): el aviso corresponde a la
+     * publicación, y repetirlo en cada corrección sería ruido.
+     */
+    @Transactional
+    public AlertaResponse actualizar(Long alertaId, ActualizarAlertaRequest peticion, Long usuarioId) {
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede editarla");
+
+        boolean editable = switch (alerta.getEstado()) {
+            case ACTIVA -> true;
+            case ENCONTRADA, RETIRADA, ELIMINADA -> false;
+        };
+        if (!editable) {
+            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta ya no está activa: no se puede editar");
+        }
+
+        String fotoUrl = StringUtils.hasText(peticion.getFotoUrl()) ? peticion.getFotoUrl().strip() : null;
+        if (fotoUrl != null && !fotoUrl.equals(alerta.getFotoUrl())) {
+            fotoService.exigirPropia(fotoUrl, usuarioId);
+        }
+
+        Point ubicacion = aPunto(peticion.getUbicacion());
+        boolean cambiaEspecie = !peticion.getEspecie().equalsIgnoreCase(alerta.getEspecie());
+        boolean cambiaUbicacion = alerta.getUltimaUbicacion() == null
+                || !ubicacion.equalsExact(alerta.getUltimaUbicacion());
+        if (cambiaEspecie || cambiaUbicacion) {
+            comprobarQueNoEsDuplicada(peticion.getEspecie(), peticion.getUbicacion(), alerta.getId());
+        }
+
+        alerta.setDescripcion(peticion.getDescripcion());
+        alerta.setFotoUrl(fotoUrl);
+        alerta.setEspecie(peticion.getEspecie());
+        alerta.setFechaAvistamiento(peticion.getFechaAvistamiento());
+        alerta.setUltimaUbicacion(ubicacion);
+        alerta.setRadioBusqueda(peticion.getRadioBusqueda());
+
+        publicarEnMapa(EventoMapaResponse.Accion.ACTUALIZACION, alerta);
+        log.info("Alerta {} editada por su autor", alertaId);
+        return aAlertaResponse(alerta);
     }
 
     // ---------------------------------------------------------------------

@@ -350,6 +350,39 @@ class AlertaControllerTest {
         }
 
         @Test
+        @DisplayName("PUT /{id} válido -> 200, editada a nombre del usuario autenticado")
+        void editar() throws Exception {
+            when(alertaService.actualizar(eq(42L), any(), eq(ID_USUARIO))).thenReturn(alertaResponse());
+
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON).content(cuerpoValido()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(42));
+
+            verify(alertaService).actualizar(eq(42L), any(), eq(ID_USUARIO));
+        }
+
+        @Test
+        @DisplayName("PUT /{id} sin especie -> 400 con las mismas reglas que la publicación")
+        void editarSinEspecie() throws Exception {
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpo(null, Instant.now().minus(1, ChronoUnit.HOURS), "40.4", "-3.7")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errores.especie").exists());
+        }
+
+        @Test
+        @DisplayName("PUT /{id} que la deja duplicada de otra -> 409 con la alerta existente")
+        void editarADuplicada() throws Exception {
+            when(alertaService.actualizar(eq(42L), any(), eq(ID_USUARIO)))
+                    .thenThrow(new AlertaDuplicadaException("Ya existe una alerta similar",
+                            AlertaDuplicadaResponse.builder().id(7L).especie("perro").distanciaMetros(120L).build()));
+
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON).content(cuerpoValido()))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.alertaExistente.id").value(7));
+        }
+
+        @Test
         @DisplayName("GET /mis-alertas -> 200 y consulta solo las del usuario autenticado")
         void misAlertasDevuelve200DelUsuarioAutenticado() throws Exception {
             when(alertaService.listarMisAlertas(ID_USUARIO)).thenReturn(List.of(alertaResponse()));

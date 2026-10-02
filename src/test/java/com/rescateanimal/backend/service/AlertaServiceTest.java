@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
@@ -370,6 +371,122 @@ class AlertaServiceTest {
 
             verify(alertaRepository, never()).save(any());
             verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("Edición")
+    class Edicion {
+
+        @Test
+        @DisplayName("Cambiar solo la descripción no repite RF-25, y avisa al mapa con ACTUALIZACION")
+        void soloDescripcion() {
+            Alerta alerta = alertaExistente(5L);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            AlertaResponse respuesta = alertaService.actualizar(5L, edicion("perro", LAT, LNG), 1L);
+
+            assertThat(respuesta.getDescripcion()).isEqualTo("Descripción corregida");
+            assertThat(alerta.getDescripcion()).isEqualTo("Descripción corregida");
+            verify(alertaRepository, never()).buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong());
+            ArgumentCaptor<EventoMapaResponse> evento = ArgumentCaptor.forClass(EventoMapaResponse.class);
+            verify(mensajeria).convertAndSend(eq(AlertaService.CANAL_MAPA), evento.capture());
+            assertThat(evento.getValue().getAccion()).isEqualTo(EventoMapaResponse.Accion.ACTUALIZACION);
+        }
+
+        @Test
+        @DisplayName("Mover la ubicación repite RF-25 sobre el punto nuevo, sin contarse a sí misma")
+        void moverRepiteRf25() {
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
+                    .thenReturn(Optional.empty());
+
+            alertaService.actualizar(5L, edicion("perro", LAT + 0.05, LNG), 1L);
+
+            verify(alertaRepository).buscarSimilar(eq("perro"), eq(LAT + 0.05), eq(LNG), eq(500.0), any(), eq(5L));
+        }
+
+        @Test
+        @DisplayName("Cambiar la especie a la de una alerta vecina es 409, y la alerta no cambia")
+        void cambiarEspecieADuplicada() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setDescripcion("Original");
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
+                    .thenReturn(Optional.of(alertaExistente(42L)));
+
+            assertThatThrownBy(() -> alertaService.actualizar(5L, edicion("gato", LAT, LNG), 1L))
+                    .isInstanceOf(AlertaDuplicadaException.class);
+
+            assertThat(alerta.getEspecie()).isEqualTo("perro");
+            assertThat(alerta.getDescripcion()).isEqualTo("Original");
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Cambiar solo mayúsculas de la especie no es cambiar de especie")
+        void especieEnMayusculas() {
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+
+            alertaService.actualizar(5L, edicion("PERRO", LAT, LNG), 1L);
+
+            verify(alertaRepository, never()).buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong());
+        }
+
+        @Test
+        @DisplayName("Una foto nueva tiene que ser del autor; la que ya tenía no se vuelve a comprobar")
+        void foto() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setFotoUrl("https://fotos.test/fotos/vieja.jpg");
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            ActualizarAlertaRequest misma = edicion("perro", LAT, LNG);
+            misma.setFotoUrl("https://fotos.test/fotos/vieja.jpg");
+            alertaService.actualizar(5L, misma, 1L);
+            verify(fotoService, never()).exigirPropia(any(), any());
+
+            ActualizarAlertaRequest nueva = edicion("perro", LAT, LNG);
+            nueva.setFotoUrl("https://fotos.test/fotos/nueva.jpg");
+            alertaService.actualizar(5L, nueva, 1L);
+            verify(fotoService).exigirPropia("https://fotos.test/fotos/nueva.jpg", 1L);
+        }
+
+        @Test
+        @DisplayName("Otro usuario no puede editarla")
+        void ajena() {
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+
+            assertThatThrownBy(() -> alertaService.actualizar(5L, edicion("perro", LAT, LNG), 999L))
+                    .isInstanceOf(AccessDeniedException.class);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Una alerta que ya no está ACTIVA no se edita")
+        @EnumSource(value = EstadoAlerta.class, names = {"ENCONTRADA", "RETIRADA", "ELIMINADA"})
+        void noActiva(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setDescripcion("Original");
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThatThrownBy(() -> alertaService.actualizar(5L, edicion("perro", LAT, LNG), 1L))
+                    .isInstanceOfSatisfying(OperacionNoPermitidaException.class,
+                            e -> assertThat(e.getCodigo()).isEqualTo("ALERTA_NO_ACTIVA"));
+            assertThat(alerta.getDescripcion()).isEqualTo("Original");
+        }
+
+        @Test
+        @DisplayName("Una alerta inexistente da 404")
+        void inexistente() {
+            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> alertaService.actualizar(123L, edicion("perro", LAT, LNG), 1L))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        private ActualizarAlertaRequest edicion(String especie, double latitud, double longitud) {
+            return new ActualizarAlertaRequest("Descripción corregida", null, especie,
+                    Instant.now().minus(1, ChronoUnit.HOURS), new UbicacionRequest(latitud, longitud), 1000);
         }
     }
 

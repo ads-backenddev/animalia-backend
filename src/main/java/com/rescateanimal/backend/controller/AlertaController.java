@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.controller;
 
+import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
@@ -103,6 +104,21 @@ public class AlertaController {
     @GetMapping("/{id}")
     public ResponseEntity<AlertaDetalleResponse> detalle(@PathVariable Long id) {
         return ResponseEntity.ok(alertaService.detalle(id));
+    }
+
+    /**
+     * PUT /api/alertas/{id} -> 200, 400, 401, 403, 404, 409
+     *
+     * Solo su autor y solo mientras siga ACTIVA. El 409 es RF-25: si la especie
+     * o la ubicación nuevas la hacen duplicada de otra alerta.
+     */
+    @PutMapping("/{id}")
+    public ResponseEntity<AlertaResponse> actualizar(
+            @PathVariable Long id,
+            @Valid @RequestBody ActualizarAlertaRequest peticion,
+            @AuthenticationPrincipal UsuarioPrincipal usuario) {
+
+        return ResponseEntity.ok(alertaService.actualizar(id, peticion, usuario.getId()));
     }
 
     /** GET /api/alertas/mis-alertas -> 200. Alertas del usuario autenticado. */
