@@ -9,6 +9,7 @@ import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -252,23 +253,44 @@ public class AlertaService {
     /**
      * Marca la alerta como ENCONTRADA y la retira del mapa (RF-14).
      * Solo puede cerrarla quien la publicó.
+     *
+     * SOLO DESDE ACTIVA. Antes no se miraba el estado, y el dueño de una alerta
+     * retirada por el administrador podía marcarla como ENCONTRADA y deshacer la
+     * moderación: volvía a verse entera en el detalle y en el listado de
+     * resueltas. Cerrar una ya ENCONTRADA no cambia nada y responde igual, como
+     * cualquier repetición de la misma orden; una RETIRADA o ELIMINADA no se
+     * puede cerrar, porque el animal ya no se está buscando a través de ella.
      */
     @Transactional
     public AlertaResponse cerrar(Long alertaId, Long usuarioId) {
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede cerrarla");
+
+        boolean seCierraAhora = switch (alerta.getEstado()) {
+            case ACTIVA -> true;
+            case ENCONTRADA -> false;
+            case RETIRADA, ELIMINADA -> throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta ya no está activa: no se puede marcar como encontrada");
+        };
+
+        if (seCierraAhora) {
+            alerta.setEstado(EstadoAlerta.ENCONTRADA);
+            alerta = alertaRepository.save(alerta);
+            // El cliente necesita saber que debe retirar el marcador del mapa.
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+        }
+
+        return aAlertaResponse(alerta);
+    }
+
+    /** La alerta, si existe (404) y si es de este usuario (403). */
+    private Alerta exigirAlertaPropia(Long alertaId, Long usuarioId, String mensajeSiAjena) {
         Alerta alerta = alertaRepository.findById(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
 
         if (!alerta.getUsuario().getId().equals(usuarioId)) {
-            throw new AccessDeniedException("Solo quien publicó la alerta puede cerrarla");
+            throw new AccessDeniedException(mensajeSiAjena);
         }
-
-        alerta.setEstado(EstadoAlerta.ENCONTRADA);
-        Alerta cerrada = alertaRepository.save(alerta);
-
-        // El cliente necesita saber que debe retirar el marcador del mapa.
-        publicarEnMapa(EventoMapaResponse.Accion.CIERRE, cerrada);
-
-        return aAlertaResponse(cerrada);
+        return alerta;
     }
 
     // ---------------------------------------------------------------------

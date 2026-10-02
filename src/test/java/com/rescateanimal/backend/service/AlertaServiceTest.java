@@ -6,6 +6,7 @@ import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -332,6 +335,36 @@ class AlertaServiceTest {
 
             assertThatThrownBy(() -> alertaService.cerrar(123L, 1L))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Una alerta retirada o moderada no se puede cerrar: el dueño no deshace la moderación")
+        @EnumSource(value = EstadoAlerta.class, names = {"RETIRADA", "ELIMINADA"})
+        void noSeCierraLoRetirado(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThatThrownBy(() -> alertaService.cerrar(5L, 1L))
+                    .isInstanceOfSatisfying(OperacionNoPermitidaException.class,
+                            e -> assertThat(e.getCodigo()).isEqualTo("ALERTA_NO_ACTIVA"));
+
+            assertThat(alerta.getEstado()).isEqualTo(estado);
+            verify(alertaRepository, never()).save(any());
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Cerrar otra vez una ENCONTRADA no cambia nada ni vuelve a avisar al mapa")
+        void cerrarDosVecesEsIdempotente() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(EstadoAlerta.ENCONTRADA);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThat(alertaService.cerrar(5L, 1L).getEstado()).isEqualTo(EstadoAlerta.ENCONTRADA);
+
+            verify(alertaRepository, never()).save(any());
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
         }
     }
 
