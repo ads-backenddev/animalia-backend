@@ -138,6 +138,9 @@ Lo que se acepta en la subida:
   declare el cliente. Cualquier otra cosa, o una imagen que no se pueda decodificar, es `400`
   `FOTO_NO_VALIDA`.
 - **5 MB como máximo.** Por encima, `413` `FOTO_DEMASIADO_GRANDE`.
+- **25 subidas al día por usuario**, contadas por día natural de Madrid como el cupo de matches
+  (RF-24). Pasado el cupo, `429` `LIMITE_FOTOS_ALCANZADO` con `limiteDiario` y `reiniciaEn`, el mismo
+  cuerpo que el de matches (§6). Una subida rechazada con `400` no gasta cupo.
 - **Se guarda recodificada, no tal como llega**: sin EXIF ni ningún otro metadato —tampoco las
   coordenadas GPS de donde se hizo la foto— y con el lado mayor reducido a 2048 px si lo supera.
   Como la orientación también es un dato EXIF, **el cliente debe enviar la imagen ya girada**.
@@ -1976,6 +1979,8 @@ está en §1, *Fotos*; aquí, lo que hubo que decidir para construirlo.
 | Cambiar o quitar la foto de perfil | La anterior seguía publicada para siempre | La anterior se borra |
 | Fotos sin usar | — | Una limpieza diaria borra las de más de un día |
 | `V14` | — | Tabla `FOTO`: quién subió cada archivo |
+| Cupo de subidas | — | 25 al día por usuario; pasado, `429 LIMITE_FOTOS_ALCANZADO` |
+| `V15` | — | Tabla `LIMITE_FOTO_DIARIO`: el contador de ese cupo |
 
 ### Por qué en el backend y no en Firebase Storage
 
@@ -2025,6 +2030,26 @@ Es la primera tarea programada del proyecto (`@EnableScheduling`). La purga de t
 evitó a propósito haciéndose en cada logout; aquí no se puede, porque encontrar archivos sin fila
 obliga a recorrer la carpeta entera.
 
+### El cupo diario de subidas
+
+Sin cupo, un usuario autenticado podía llenar el volumen —que se paga por espacio— subiendo fotos que
+nunca usa: la limpieza solo las borra pasado un día, y la factura puede llegar antes de que nadie lo
+note. Ahora son 25 subidas al día por usuario (`FOTOS_LIMITE_DIARIO`), de sobra para varias alertas,
+avistamientos y cambios de perfil.
+
+Es **el mismo mecanismo que el cupo de matches** (RF-24): un contador por usuario y día natural de
+Madrid, creado con `ON CONFLICT DO NOTHING` e incrementado con un `UPDATE` que solo suma si queda
+cupo, así que dos subidas simultáneas no pueden pasarse entre las dos. Va en su propia tabla,
+`LIMITE_FOTO_DIARIO` (`V15`), y no en `LIMITE_MATCH_DIARIO` con una columna de tipo: habría que
+renombrar aquella tabla y su entidad, o guardar fotos en una tabla «de matches», y en los dos casos
+tocar el código de RF-24. Tampoco se cuentan las filas de `FOTO` de hoy, que ya existen: ese recuento
+baja cuando se borra una foto, y contar antes de insertar deja pasar del límite a dos subidas a la
+vez.
+
+El cupo se consume **lo primero**, antes de mirar el archivo, para que quien lo ha agotado no cueste
+ni una decodificación. Y como va dentro de la transacción de la subida, una que termina en `400`
+deshace su consumo: un archivo rechazado no gasta cupo.
+
 ### Sobre `V14`
 
 `FOTO (nombre, usuario_id, tamanyo, created_at)`. La clave primaria es el nombre del archivo, el
@@ -2040,6 +2065,7 @@ por `created_at` para la limpieza y ninguno por `usuario_id`, porque nada busca 
 | `FOTOS_DIR` | **Obligatoria**: el punto de montaje del volumen | `./uploads` |
 | `APP_FOTOS_URL_PUBLICA` | **Obligatoria y `https`**, o la aplicación no arranca | `http://localhost:8080/fotos` |
 | `FOTOS_LIMPIEZA_CRON` | Opcional | `0 30 4 * * *`; `-` la desactiva |
+| `FOTOS_LIMITE_DIARIO` | Opcional | `25` subidas por usuario y día |
 
 La aplicación tampoco arranca si la carpeta no admite escritura, en vez de descubrirlo con la primera
 subida. Para el emulador de Android en local, la base pública es `http://10.0.2.2:8080/fotos`.
@@ -2061,6 +2087,5 @@ subida. Para el emulador de Android en local, la base pública es `http://10.0.2
 
 | Pendiente | Bloque |
 |---|---|
-| **No hay cupo de subidas por usuario.** Un usuario autenticado puede llenar el volumen subiendo fotos que nunca usa; la limpieza solo las borra pasado un día | Sin bloque asignado. Se resolvería con un límite diario por usuario, como el de matches (RF-24) |
 | WebP, miniaturas, o servir las fotos desde una CDN | Ninguno lo pide un requisito. WebP exige una dependencia nueva |
 | El despliegue en Railway: volumen, permisos del usuario `spring` sobre él y el `max-swallow-size` de Tomcat para que un archivo muy grande reciba un `413` limpio | Fase 9 de este mismo bloque |

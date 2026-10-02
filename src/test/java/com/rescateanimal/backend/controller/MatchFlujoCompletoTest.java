@@ -8,6 +8,7 @@ import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
@@ -74,6 +75,8 @@ class MatchFlujoCompletoTest {
 
     @Autowired
     private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
 
@@ -157,7 +160,7 @@ class MatchFlujoCompletoTest {
                 .toList());
         avistamientoRepository.deleteAllById(avistamientos);
         alertaRepository.deleteById(alertaId);
-        FotosDePrueba.borrarLasDe(List.of(idDuenyo, idTestigo, idCurioso), fotoRepository, almacenFotos);
+        FotosDePrueba.borrarLasDe(List.of(idDuenyo, idTestigo, idCurioso), fotoRepository, limiteFotoDiarioRepository, almacenFotos);
         usuarioRepository.deleteAllById(List.of(idDuenyo, idTestigo, idCurioso));
     }
 

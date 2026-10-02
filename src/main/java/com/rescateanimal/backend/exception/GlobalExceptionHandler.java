@@ -248,6 +248,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
     }
 
+    /** 429 — cupo diario de subidas de fotos agotado. Mismo cuerpo que el de matches. */
+    @ExceptionHandler(LimiteFotosAlcanzadoException.class)
+    public ResponseEntity<ErrorResponse> limiteFotosAlcanzado(LimiteFotosAlcanzadoException ex,
+                                                              WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_FOTOS_ALCANZADO",
+                ex.getMessage(), ruta(request));
+        cuerpo.setLimiteDiario(ex.getLimiteDiario());
+        cuerpo.setReiniciaEn(ex.getReiniciaEn());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
+    }
+
     /**
      * 409 — choque contra una restricción única de la base de datos.
      *

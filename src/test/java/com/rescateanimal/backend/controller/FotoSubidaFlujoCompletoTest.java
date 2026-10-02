@@ -5,6 +5,7 @@ import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.ImagenesDePrueba;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 import org.junit.jupiter.api.AfterEach;
@@ -12,8 +13,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.io.ByteArrayOutputStream;
@@ -25,6 +28,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -48,6 +53,13 @@ class FotoSubidaFlujoCompletoTest {
 
     private static final Duration ESPERA = Duration.ofSeconds(10);
     private static final String CLAVE = "passw0rd123";
+    private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
+
+    @Value("${app.fotos.limite-diario}")
+    private int limiteDiario;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @LocalServerPort
     private int puerto;
@@ -56,6 +68,8 @@ class FotoSubidaFlujoCompletoTest {
     private AlertaRepository alertaRepository;
     @Autowired
     private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
     @Autowired
@@ -82,7 +96,7 @@ class FotoSubidaFlujoCompletoTest {
         alertaRepository.deleteAll(alertaRepository.findAll().stream()
                 .filter(a -> usuarios.contains(a.getUsuario().getId()))
                 .toList());
-        FotosDePrueba.borrarLasDe(usuarios, fotoRepository, almacen);
+        FotosDePrueba.borrarLasDe(usuarios, fotoRepository, limiteFotoDiarioRepository, almacen);
         usuarioRepository.deleteAllById(usuarios);
     }
 
@@ -102,6 +116,58 @@ class FotoSubidaFlujoCompletoTest {
         HttpResponse<String> aceptada = perfil(propia);
         assertThat(aceptada.statusCode()).isEqualTo(200);
         assertThat((String) JsonPath.read(aceptada.body(), "$.fotoUrl")).isEqualTo(propia);
+    }
+
+    @Test
+    @DisplayName("Agotado el cupo del día: 429 con el límite y la medianoche siguiente, sin archivo ni fila")
+    void cupoDiario() throws Exception {
+        fijarContadorDeHoy(limiteDiario - 1);
+
+        assertThat(subir(ImagenesDePrueba.jpeg(8, 8), token).statusCode())
+                .as("la última del cupo").isEqualTo(201);
+        long fotosAntes = fotoRepository.count();
+
+        HttpResponse<String> pasada = subir(ImagenesDePrueba.jpeg(8, 8), token);
+
+        assertThat(pasada.statusCode()).isEqualTo(429);
+        assertThat((String) JsonPath.read(pasada.body(), "$.codigo")).isEqualTo("LIMITE_FOTOS_ALCANZADO");
+        assertThat((Integer) JsonPath.read(pasada.body(), "$.limiteDiario")).isEqualTo(limiteDiario);
+        assertThat((String) JsonPath.read(pasada.body(), "$.reiniciaEn"))
+                .startsWith(LocalDate.now(ZONA_CUPO).plusDays(1) + "T00:00");
+        assertThat(fotoRepository.count()).isEqualTo(fotosAntes);
+    }
+
+    @Test
+    @DisplayName("El cupo se reinicia al cambiar de día")
+    void cupoSeReiniciaAlDiaSiguiente() throws Exception {
+        fijarContadorDeHoy(limiteDiario);
+        assertThat(subir(ImagenesDePrueba.jpeg(8, 8), token).statusCode()).isEqualTo(429);
+
+        // Medianoche: el contador agotado pasa a ser el de ayer. Es exactamente
+        // lo que ve la aplicación al cambiar de día, sin esperar a que cambie.
+        jdbc.update("UPDATE limite_foto_diario SET fecha = fecha - 1 WHERE usuario_id = ?", idUsuario);
+
+        assertThat(subir(ImagenesDePrueba.jpeg(8, 8), token).statusCode()).isEqualTo(201);
+    }
+
+    @Test
+    @DisplayName("Una subida rechazada con 400 no gasta cupo")
+    void rechazadaNoGastaCupo() throws Exception {
+        fijarContadorDeHoy(limiteDiario - 1);
+
+        assertThat(subir("no soy una imagen".getBytes(StandardCharsets.UTF_8), token).statusCode()).isEqualTo(400);
+
+        assertThat(subir(ImagenesDePrueba.jpeg(8, 8), token).statusCode())
+                .as("el 400 deshizo su consumo: aún queda la última del cupo")
+                .isEqualTo(201);
+    }
+
+    /** Deja el contador de hoy del usuario en el valor pedido, exista o no la fila. */
+    private void fijarContadorDeHoy(int valor) {
+        jdbc.update("""
+                INSERT INTO limite_foto_diario (usuario_id, fecha, contador) VALUES (?, ?, ?)
+                ON CONFLICT (usuario_id, fecha) DO UPDATE SET contador = EXCLUDED.contador
+                """, idUsuario, LocalDate.now(ZONA_CUPO), valor);
     }
 
     @Test

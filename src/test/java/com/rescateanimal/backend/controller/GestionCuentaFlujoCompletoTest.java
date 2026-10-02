@@ -9,6 +9,7 @@ import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.MensajeRepository;
@@ -75,6 +76,8 @@ class GestionCuentaFlujoCompletoTest {
 
     @Autowired
     private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
 
@@ -160,7 +163,7 @@ class GestionCuentaFlujoCompletoTest {
             alertaRepository.deleteById(idAlerta);
         }
         protectoraRepository.deleteAllById(protectorasCreadas);
-        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, almacenFotos);
+        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, limiteFotoDiarioRepository, almacenFotos);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 

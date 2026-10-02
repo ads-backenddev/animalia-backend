@@ -7,6 +7,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
@@ -85,6 +86,8 @@ class DirectorioProtectorasFlujoCompletoTest {
 
     @Autowired
     private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
 
@@ -174,7 +177,7 @@ class DirectorioProtectorasFlujoCompletoTest {
                 .toList());
         animalAdopcionRepository.deleteAllById(animalesCreados);
         protectoraRepository.deleteAllById(protectorasCreadas);
-        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, almacenFotos);
+        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, limiteFotoDiarioRepository, almacenFotos);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 

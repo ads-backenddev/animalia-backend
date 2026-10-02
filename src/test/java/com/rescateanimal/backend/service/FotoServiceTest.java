@@ -4,10 +4,12 @@ import com.rescateanimal.backend.ImagenesDePrueba;
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
+import com.rescateanimal.backend.exception.LimiteFotosAlcanzadoException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,11 +27,14 @@ import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -45,21 +50,26 @@ class FotoServiceTest {
 
     private static final String BASE = "https://fotos.test/fotos";
     private static final Long ID_USUARIO = 7L;
+    private static final int LIMITE_DIARIO = 25;
+    private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
 
     @TempDir
     Path carpeta;
 
     private final FotoRepository fotoRepository = mock(FotoRepository.class);
     private final UsuarioRepository usuarioRepository = mock(UsuarioRepository.class);
+    private final LimiteFotoDiarioRepository limiteRepository = mock(LimiteFotoDiarioRepository.class);
     private AlmacenFotosService almacen;
     private FotoService servicio;
 
     @BeforeEach
     void preparar() {
         almacen = new AlmacenFotosService(carpeta.toString(), BASE, true);
-        servicio = new FotoService(fotoRepository, usuarioRepository, almacen);
+        servicio = new FotoService(fotoRepository, usuarioRepository, limiteRepository, almacen, LIMITE_DIARIO);
         when(usuarioRepository.getReferenceById(ID_USUARIO)).thenReturn(new Usuario());
         when(fotoRepository.save(any(Foto.class))).thenAnswer(i -> i.getArgument(0));
+        // Con cupo, salvo en las pruebas del límite: el mock devolvería 0, que es "agotado".
+        when(limiteRepository.incrementarSiHayCupo(any(), any(), anyInt())).thenReturn(1);
     }
 
     @AfterEach
@@ -203,6 +213,46 @@ class FotoServiceTest {
             for (TransactionSynchronization s : TransactionSynchronizationManager.getSynchronizations()) {
                 s.afterCompletion(estado);
             }
+        }
+    }
+
+    @Nested
+    @DisplayName("Cupo diario de subidas")
+    class CupoDiario {
+
+        @Test
+        @DisplayName("Cada subida consume cupo del día de Madrid, con el límite configurado")
+        void consumeCupoDelDia() {
+            servicio.subir(ImagenesDePrueba.jpeg(8, 8), ID_USUARIO);
+
+            LocalDate hoy = LocalDate.now(ZONA_CUPO);
+            verify(limiteRepository).crearContadorSiNoExiste(ID_USUARIO, hoy);
+            verify(limiteRepository).incrementarSiHayCupo(ID_USUARIO, hoy, LIMITE_DIARIO);
+        }
+
+        @Test
+        @DisplayName("Sin cupo: 429 con el límite y la medianoche siguiente, sin decodificar ni escribir nada")
+        void sinCupo() throws Exception {
+            when(limiteRepository.incrementarSiHayCupo(any(), any(), anyInt())).thenReturn(0);
+
+            assertThatThrownBy(() -> servicio.subir(ImagenesDePrueba.jpeg(8, 8), ID_USUARIO))
+                    .isInstanceOfSatisfying(LimiteFotosAlcanzadoException.class, e -> {
+                        assertThat(e.getLimiteDiario()).isEqualTo(LIMITE_DIARIO);
+                        assertThat(e.getReiniciaEn())
+                                .isEqualTo(LocalDate.now(ZONA_CUPO).plusDays(1).atStartOfDay());
+                    });
+
+            assertDiscoVacio();
+            verify(fotoRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Sin cupo se rechaza antes de mirar el archivo, aunque no sea una imagen")
+        void sinCupoNoMiraElArchivo() {
+            when(limiteRepository.incrementarSiHayCupo(any(), any(), anyInt())).thenReturn(0);
+
+            assertThatThrownBy(() -> servicio.subir("no soy una imagen".getBytes(StandardCharsets.UTF_8), ID_USUARIO))
+                    .isInstanceOf(LimiteFotosAlcanzadoException.class);
         }
     }
 

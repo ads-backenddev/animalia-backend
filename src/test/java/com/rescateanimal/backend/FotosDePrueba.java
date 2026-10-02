@@ -3,6 +3,7 @@ package com.rescateanimal.backend;
 import com.jayway.jsonpath.JsonPath;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 
 import java.io.ByteArrayOutputStream;
@@ -55,18 +56,22 @@ public final class FotosDePrueba {
     }
 
     /**
-     * Borra las fotos —archivo y fila— de estos usuarios. Va antes de borrar a
-     * los usuarios: FOTO tiene una clave ajena a USUARIO.
+     * Borra las fotos —archivo y fila— de estos usuarios y sus contadores de
+     * subidas del día. Va antes de borrar a los usuarios: FOTO y
+     * LIMITE_FOTO_DIARIO tienen clave ajena a USUARIO.
      *
      * getUsuario().getId() es seguro sobre la entidad ya desconectada: pedirle
      * el id a un proxy no lo inicializa.
      */
     public static void borrarLasDe(Collection<Long> usuarios, FotoRepository fotoRepository,
-                                   AlmacenFotosService almacen) {
+                                   LimiteFotoDiarioRepository limiteRepository, AlmacenFotosService almacen) {
         List<Foto> suyas = fotoRepository.findAll().stream()
                 .filter(f -> usuarios.contains(f.getUsuario().getId()))
                 .toList();
         suyas.forEach(f -> almacen.borrar(f.getNombre()));
         fotoRepository.deleteAll(suyas);
+        limiteRepository.deleteAll(limiteRepository.findAll().stream()
+                .filter(l -> usuarios.contains(l.getUsuario().getId()))
+                .toList());
     }
 }

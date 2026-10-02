@@ -9,6 +9,7 @@ import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
@@ -79,6 +80,8 @@ class ValoracionesReportesFlujoCompletoTest {
 
     @Autowired
     private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
 
@@ -166,7 +169,7 @@ class ValoracionesReportesFlujoCompletoTest {
         if (idProtectora != null) {
             protectoraRepository.deleteById(idProtectora);
         }
-        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, almacenFotos);
+        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, limiteFotoDiarioRepository, almacenFotos);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 

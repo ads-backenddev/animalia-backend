@@ -3,12 +3,14 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.dto.response.FotoResponse;
 import com.rescateanimal.backend.exception.FotoNoValidaException;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
+import com.rescateanimal.backend.exception.LimiteFotosAlcanzadoException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
@@ -29,6 +31,8 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Optional;
@@ -63,10 +67,16 @@ import java.util.Optional;
  * antes del INSERT; si el INSERT o el commit fallan, una retrollamada de
  * afterCompletion lo quita. Si ni eso llega a ejecutarse —el proceso cae entre
  * medias—, el archivo queda sin fila y lo recoge la limpieza diaria.
+ *
+ * HAY UN CUPO DIARIO DE SUBIDAS por usuario (app.fotos.limite-diario), con el
+ * mismo mecanismo que el de matches (RF-24) y el mismo día natural de
+ * Europe/Madrid. Sin él, un usuario podía llenar el volumen —que se paga por
+ * espacio— con fotos que nunca usa. Se consume lo primero, para que quien lo
+ * ha agotado no cueste ni una decodificación; y como va dentro de la misma
+ * transacción, una subida que acaba en 400 deshace su consumo y no cuenta.
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class FotoService {
 
     /** Lado mayor de lo que se guarda. Sobra para un móvil y para el panel. */
@@ -75,14 +85,33 @@ public class FotoService {
     /** Por encima de esto la cabecera miente o la imagen no es una foto. */
     static final long MAX_PIXELES = 100_000_000L;
 
+    /** El día del cupo es el de Madrid, como el de matches (MatchService). */
+    private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
+
     private static final float CALIDAD_JPEG = 0.85f;
 
     private final FotoRepository fotoRepository;
     private final UsuarioRepository usuarioRepository;
+    private final LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     private final AlmacenFotosService almacen;
+    private final int limiteDiario;
+
+    public FotoService(FotoRepository fotoRepository,
+                       UsuarioRepository usuarioRepository,
+                       LimiteFotoDiarioRepository limiteFotoDiarioRepository,
+                       AlmacenFotosService almacen,
+                       @Value("${app.fotos.limite-diario}") int limiteDiario) {
+        this.fotoRepository = fotoRepository;
+        this.usuarioRepository = usuarioRepository;
+        this.limiteFotoDiarioRepository = limiteFotoDiarioRepository;
+        this.almacen = almacen;
+        this.limiteDiario = limiteDiario;
+    }
 
     @Transactional
     public FotoResponse subir(byte[] contenido, Long usuarioId) {
+        consumirCupo(usuarioId);
+
         Formato formato = Formato.detectar(contenido)
                 .orElseThrow(() -> new FotoNoValidaException("La foto debe ser una imagen JPEG o PNG"));
 
@@ -199,6 +228,20 @@ public class FotoService {
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
+
+    /**
+     * Suma una subida al cupo del día o falla con 429. Las dos sentencias son
+     * atómicas en la base de datos: ver LimiteFotoDiarioRepository.
+     */
+    private void consumirCupo(Long usuarioId) {
+        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        limiteFotoDiarioRepository.crearContadorSiNoExiste(usuarioId, hoy);
+        if (limiteFotoDiarioRepository.incrementarSiHayCupo(usuarioId, hoy, limiteDiario) == 0) {
+            log.info("Usuario {} ha agotado sus {} subidas de fotos del día", usuarioId, limiteDiario);
+            // Medianoche de Madrid, como reiniciaEn en el cupo de matches.
+            throw new LimiteFotosAlcanzadoException(limiteDiario, hoy.plusDays(1).atStartOfDay());
+        }
+    }
 
     private void borrarSiNoSeConfirma(String nombre) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
