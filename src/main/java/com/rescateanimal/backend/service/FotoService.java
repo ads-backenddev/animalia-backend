@@ -160,13 +160,13 @@ public class FotoService {
             log.warn("El perfil del usuario {} apuntaba a la foto {}, que no es suya", usuarioId, nombre);
             return;
         }
-        if (fotoRepository.usadaEnPublicaciones(url)) {
+        if (fotoRepository.usadaEnPublicaciones(nombre)) {
             log.debug("La foto {} sigue en una publicación del usuario {}: se conserva", nombre, usuarioId);
             return;
         }
 
         fotoRepository.deleteById(nombre);
-        borrarArchivoTrasConfirmar(nombre);
+        almacen.borrarTrasConfirmar(nombre);
     }
 
     /**
@@ -199,21 +199,6 @@ public class FotoService {
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
-
-    private void borrarArchivoTrasConfirmar(String nombre) {
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            almacen.borrar(nombre);
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                // borrar() no lanza: si falla lo registra, y el archivo, ya sin
-                // fila, lo recoge la limpieza diaria.
-                almacen.borrar(nombre);
-            }
-        });
-    }
 
     private void borrarSiNoSeConfirma(String nombre) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {

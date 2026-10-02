@@ -3,15 +3,20 @@ package com.rescateanimal.backend.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 /**
  * Los archivos de las fotos en disco: guardarlos, encontrarlos y borrarlos, y
@@ -37,6 +42,9 @@ public class AlmacenFotosService {
 
     private static final Pattern NOMBRE_VALIDO = Pattern.compile(
             "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png)$");
+
+    /** Los temporales que crea guardar(): "subida-" + dígitos + ".tmp". */
+    private static final Pattern TEMPORAL = Pattern.compile("^subida-\\d+\\.tmp$");
 
     private final Path directorio;
     private final String urlPublica;
@@ -111,6 +119,63 @@ public class AlmacenFotosService {
         }
     }
 
+    /**
+     * Borra el archivo cuando la transacción en curso se confirme, o ya si no
+     * hay ninguna.
+     *
+     * Es el segundo paso de quitar una foto: la fila se borra dentro de la
+     * transacción y el archivo solo después, porque un rollback devolvería una
+     * fila que apuntaría a un archivo ya borrado. Si este paso falla, el
+     * archivo queda sin fila —no se sirve— y lo recoge la limpieza diaria.
+     */
+    public void borrarTrasConfirmar(String nombre) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            borrar(nombre);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                borrar(nombre);
+            }
+        });
+    }
+
+    /**
+     * Los nombres de foto cuyo archivo se modificó por última vez antes de
+     * limite. Lo que no tenga nombre válido —los temporales, cualquier otra
+     * cosa que alguien haya dejado en la carpeta— no aparece.
+     */
+    public List<String> nombresAnterioresA(Instant limite) {
+        try (Stream<Path> archivos = Files.list(directorio)) {
+            return archivos
+                    .filter(archivo -> esNombreValido(archivo.getFileName().toString()))
+                    .filter(archivo -> modificadoAntesDe(archivo, limite))
+                    .map(archivo -> archivo.getFileName().toString())
+                    .toList();
+        } catch (IOException e) {
+            throw new UncheckedIOException("No se pudo listar la carpeta de fotos " + directorio, e);
+        }
+    }
+
+    /**
+     * Borra los temporales de subidas que se interrumpieron entre escribir y
+     * renombrar (guardar). Solo los de antes de limite: uno reciente puede ser
+     * una subida en curso. Devuelve cuántos ha borrado.
+     */
+    public int borrarTemporalesAnterioresA(Instant limite) {
+        try (Stream<Path> archivos = Files.list(directorio)) {
+            List<Path> temporales = archivos
+                    .filter(archivo -> TEMPORAL.matcher(archivo.getFileName().toString()).matches())
+                    .filter(archivo -> modificadoAntesDe(archivo, limite))
+                    .toList();
+            temporales.forEach(AlmacenFotosService::borrarSinFallar);
+            return temporales.size();
+        } catch (IOException e) {
+            throw new UncheckedIOException("No se pudo listar la carpeta de fotos " + directorio, e);
+        }
+    }
+
     public String urlDe(String nombre) {
         return urlPublica + "/" + nombre;
     }
@@ -144,6 +209,16 @@ public class AlmacenFotosService {
         }
         log.info("Fotos en {}", directorio);
         return directorio;
+    }
+
+    /** Un archivo que no se puede leer cuenta como reciente: ante la duda, no se borra. */
+    private static boolean modificadoAntesDe(Path archivo, Instant limite) {
+        try {
+            return Files.getLastModifiedTime(archivo).toInstant().isBefore(limite);
+        } catch (IOException e) {
+            log.warn("No se pudo leer la fecha de {}", archivo, e);
+            return false;
+        }
     }
 
     private static void borrarSinFallar(Path archivo) {

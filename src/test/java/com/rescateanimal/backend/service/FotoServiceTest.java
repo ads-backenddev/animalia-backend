@@ -288,7 +288,7 @@ class FotoServiceTest {
             String nombre = almacen.guardar(new byte[]{1}, "jpg");
             String url = almacen.urlDe(nombre);
             when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
-            when(fotoRepository.usadaEnPublicaciones(url)).thenReturn(true);
+            when(fotoRepository.usadaEnPublicaciones(nombre)).thenReturn(true);
 
             servicio.retirar(url, ID_USUARIO);
 

@@ -167,9 +167,12 @@ mandar foto (en `PUT /api/usuarios/me`, la quita).
 (RF-19, ver §19): deja de servirse en el momento y su archivo se borra. Salvo que alguna publicación
 del mismo usuario la use: entonces es la foto de un animal y se queda.
 
-> **En construcción** (rama `feature/subida-fotos`): la limpieza diaria que recoge los archivos sin
-> fila —subidas que nunca se usaron, o un borrado que falló— todavía no existe. Hasta que llegue, esos
-> archivos no se sirven, pero siguen ocupando disco.
+**Una foto subida que no se llega a usar se borra pasado un día.** Una limpieza diaria (a las 4:30,
+hora de Madrid) quita las fotos de más de un día a las que no apunta ningún `fotoUrl` —el cliente
+subió la imagen y nunca publicó—, junto con los archivos que quedaron en disco sin fila —un borrado
+que falló— y las subidas interrumpidas a medias. El cliente debe subir la foto **justo antes** de
+usarla, no guardarse la URL para más tarde: la primera limpieza tras cumplir 24 horas sin usarse la
+borra, así que una subida sin usar dura entre uno y dos días.
 
 ---
 
