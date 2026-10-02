@@ -1794,6 +1794,7 @@ comprueba índices.
 | El filtro `zona` no escapa los comodines de `LIKE` (`%`, `_`) | `GET /api/adopcion` tiene el mismo parámetro, con el mismo nombre, y tampoco los escapa: escaparlos aquí haría que dos filtros que el cliente ve iguales se comportaran distinto. No abre nada, porque un `%` devuelve lo que ya devuelve omitir el filtro |
 | La ficha enseña diez valoraciones y no admite paginarlas | El número real viaja en `totalValoraciones`. Quien quiere el histórico entero es la propia protectora, y lo tiene en `/panel/valoraciones` |
 | El directorio exige token | «Público» aquí significa «cualquier autenticado». Abrirlo sin token lo convertiría en una fuente de direcciones de correo que cualquiera puede recorrer sin registrarse |
+| **Las fotos anteriores al bloque de subida de fotos quedan fuera del borrado de RF-19.** Toda `fotoUrl` guardada antes de `POST /api/fotos` (§1) es una URL externa que puso el cliente: al anonimizar la cuenta se vacía la columna, pero el archivo sigue publicado donde esté alojado, porque el backend no lo controla. Se mantiene también al editar: reenviar esa foto sin cambiarla no se vuelve a comprobar | Hoy solo existen en la base de datos de desarrollo, sin usuarios reales, así que no se migran. Si hubiera datos reales anteriores, habría que descargarlas y volver a subirlas a `/api/fotos`, o vaciarlas, antes de poder prometer el borrado |
 
 ### El SRS **no** queda cubierto al cien por cien tras este bloque
 
