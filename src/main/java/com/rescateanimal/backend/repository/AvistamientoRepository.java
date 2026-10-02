@@ -80,4 +80,19 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
             WHERE a.id IN :ids
             """)
     List<Avistamiento> buscarConAutorYAlerta(@Param("ids") Collection<Long> ids);
+
+    /**
+     * Los avistamientos de una alerta en un estado, con su autor ya cargado,
+     * para el detalle de la alerta (GET /api/alertas/{id}). Más recientes
+     * primero: lo último que se sabe del animal es lo que más importa.
+     */
+    @Query("""
+            SELECT a FROM Avistamiento a
+            JOIN FETCH a.usuario
+            WHERE a.alerta.id = :alertaId
+              AND a.estado = :estado
+            ORDER BY a.createdAt DESC, a.id DESC
+            """)
+    List<Avistamiento> buscarDeLaAlerta(@Param("alertaId") Long alertaId,
+                                        @Param("estado") EstadoAvistamiento estado);
 }

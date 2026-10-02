@@ -2,7 +2,9 @@ package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
+import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
@@ -67,6 +69,8 @@ class AlertaServiceTest {
     @Mock
     private FotoService fotoService;
     @Mock
+    private AvistamientoService avistamientoService;
+    @Mock
     private AlertaRepository alertaRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
@@ -80,7 +84,8 @@ class AlertaServiceTest {
     @BeforeEach
     void prepararServicio() {
         alertaService = new AlertaService(alertaRepository, usuarioRepository,
-                notificacionService, fotoService, mensajeria, RADIO_METROS, VENTANA_HORAS, RADIO_MAPA_MAXIMO);
+                notificacionService, fotoService, avistamientoService, mensajeria,
+                RADIO_METROS, VENTANA_HORAS, RADIO_MAPA_MAXIMO);
     }
 
     // ---------------------------------------------------------------------
@@ -365,6 +370,60 @@ class AlertaServiceTest {
 
             verify(alertaRepository, never()).save(any());
             verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+    }
+
+    @Nested
+    @DisplayName("Detalle")
+    class Detalle {
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Una ACTIVA o ENCONTRADA se ve entera, con sus avistamientos")
+        @EnumSource(value = EstadoAlerta.class, names = {"ACTIVA", "ENCONTRADA"})
+        void completa(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setDescripcion("Perro pequeño marrón");
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            AvistamientoResponse visto = AvistamientoResponse.builder().id(70L).alertaId(5L).build();
+            when(avistamientoService.visiblesDeLaAlerta(5L)).thenReturn(List.of(visto));
+
+            AlertaDetalleResponse detalle = alertaService.detalle(5L);
+
+            assertThat(detalle.getEstado()).isEqualTo(estado);
+            assertThat(detalle.getDescripcion()).isEqualTo("Perro pequeño marrón");
+            assertThat(detalle.getUbicacion()).isNotNull();
+            assertThat(detalle.getAutor().getNombre()).isEqualTo("Ana");
+            assertThat(detalle.getAvistamientos()).containsExactly(visto);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Una RETIRADA o ELIMINADA responde con su estado, pero sin su contenido")
+        @EnumSource(value = EstadoAlerta.class, names = {"RETIRADA", "ELIMINADA"})
+        void reducida(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setDescripcion("Contenido que se retiró");
+            alerta.setFotoUrl("https://fotos.test/fotos/x.jpg");
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            AlertaDetalleResponse detalle = alertaService.detalle(5L);
+
+            assertThat(detalle.getId()).isEqualTo(5L);
+            assertThat(detalle.getEstado()).isEqualTo(estado);
+            assertThat(detalle.getEspecie()).isEqualTo("perro");
+            assertThat(detalle).extracting("descripcion", "fotoUrl", "ubicacion", "autor", "fechaAvistamiento")
+                    .containsOnlyNulls();
+            assertThat(detalle.getAvistamientos()).isEmpty();
+            verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong());
+        }
+
+        @Test
+        @DisplayName("Solo un id que nunca existió da 404")
+        void inexistente() {
+            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> alertaService.detalle(123L)).isInstanceOf(ResourceNotFoundException.class);
         }
     }
 

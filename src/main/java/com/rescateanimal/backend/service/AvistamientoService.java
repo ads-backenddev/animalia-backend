@@ -156,6 +156,19 @@ public class AvistamientoService {
                 .build();
     }
 
+    /**
+     * Los avistamientos VISIBLE de una alerta, para su detalle. Los ELIMINADO no
+     * salen: los retiró el administrador por incumplir las normas, y el detalle
+     * los volvería a publicar.
+     */
+    @Transactional(readOnly = true)
+    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId) {
+        return avistamientoRepository.buscarDeLaAlerta(alertaId, EstadoAvistamiento.VISIBLE)
+                .stream()
+                .map(this::aAvistamientoResponse)
+                .toList();
+    }
+
     private AvistamientoResponse aAvistamientoResponse(Avistamiento avistamiento) {
         return AvistamientoResponse.builder()
                 .id(avistamiento.getId())

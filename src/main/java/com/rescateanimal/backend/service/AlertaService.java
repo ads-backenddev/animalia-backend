@@ -2,6 +2,7 @@ package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
@@ -67,6 +68,7 @@ public class AlertaService {
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
     private final FotoService fotoService;
+    private final AvistamientoService avistamientoService;
     private final SimpMessagingTemplate mensajeria;
 
     private final double radioDuplicadosMetros;
@@ -83,6 +85,7 @@ public class AlertaService {
                          UsuarioRepository usuarioRepository,
                          NotificacionService notificacionService,
                          FotoService fotoService,
+                         AvistamientoService avistamientoService,
                          SimpMessagingTemplate mensajeria,
                          @Value("${app.alertas.radio-duplicados-metros}") double radioDuplicadosMetros,
                          @Value("${app.alertas.ventana-duplicados-horas}") int ventanaDuplicadosHoras,
@@ -91,6 +94,7 @@ public class AlertaService {
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.fotoService = fotoService;
+        this.avistamientoService = avistamientoService;
         this.mensajeria = mensajeria;
         this.radioDuplicadosMetros = radioDuplicadosMetros;
         this.ventanaDuplicadosHoras = ventanaDuplicadosHoras;
@@ -283,6 +287,58 @@ public class AlertaService {
                     "El radio debe ser mayor que cero y como mucho " + radioMapaMaximoMetros + " metros");
         }
         return radioMetros;
+    }
+
+    /**
+     * Detalle de una alerta con sus avistamientos (GET /api/alertas/{id}).
+     *
+     * 200 PARA CUALQUIER ALERTA QUE HAYA EXISTIDO, sea cual sea su estado; 404
+     * solo para un id que nunca existió. Las alertas no se borran, así que
+     * "terminada" y "no encontrada" son hechos distintos, y el cliente necesita
+     * distinguirlos: un aviso ALERTA_CERCANA cuya alerta se cerró es un aviso
+     * viejo, uno que da 404 es un aviso huérfano (docs/api-rest.md §12).
+     *
+     * LO RETIRADO RESPONDE, PERO NO SE VUELVE A PUBLICAR. Una RETIRADA la quitó
+     * su dueño y una ELIMINADA el administrador; devolverlas enteras desharía las
+     * dos decisiones para cualquiera que tenga el id. Su detalle lleva solo lo
+     * que dice qué fue y en qué quedó: id, especie, estado y fecha.
+     */
+    @Transactional(readOnly = true)
+    public AlertaDetalleResponse detalle(Long alertaId) {
+        Alerta alerta = alertaRepository.findById(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
+
+        return switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA -> detalleCompleto(alerta);
+            case RETIRADA, ELIMINADA -> detalleDeRetirada(alerta);
+        };
+    }
+
+    private AlertaDetalleResponse detalleCompleto(Alerta alerta) {
+        AlertaResponse base = aAlertaResponse(alerta);
+        return AlertaDetalleResponse.builder()
+                .id(base.getId())
+                .descripcion(base.getDescripcion())
+                .fotoUrl(base.getFotoUrl())
+                .especie(base.getEspecie())
+                .fechaAvistamiento(base.getFechaAvistamiento())
+                .ubicacion(base.getUbicacion())
+                .radioBusqueda(base.getRadioBusqueda())
+                .estado(base.getEstado())
+                .createdAt(base.getCreatedAt())
+                .autor(base.getAutor())
+                .avistamientos(avistamientoService.visiblesDeLaAlerta(alerta.getId()))
+                .build();
+    }
+
+    private static AlertaDetalleResponse detalleDeRetirada(Alerta alerta) {
+        return AlertaDetalleResponse.builder()
+                .id(alerta.getId())
+                .especie(alerta.getEspecie())
+                .estado(alerta.getEstado())
+                .createdAt(alerta.getCreatedAt())
+                .avistamientos(List.of())
+                .build();
     }
 
     /** Alertas del usuario autenticado, en cualquier estado. */

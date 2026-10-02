@@ -1,6 +1,7 @@
 package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
@@ -91,6 +92,17 @@ public class AlertaController {
             @RequestParam(name = "radio", required = false) Double radioMetros) {
 
         return ResponseEntity.ok(alertaService.listarParaMapa(latitud, longitud, radioMetros));
+    }
+
+    /**
+     * GET /api/alertas/{id} -> 200, 401, 404
+     *
+     * 200 para cualquier alerta que haya existido, en el estado que esté; 404
+     * solo si el id nunca existió. Una RETIRADA o ELIMINADA llega reducida.
+     */
+    @GetMapping("/{id}")
+    public ResponseEntity<AlertaDetalleResponse> detalle(@PathVariable Long id) {
+        return ResponseEntity.ok(alertaService.detalle(id));
     }
 
     /** GET /api/alertas/mis-alertas -> 200. Alertas del usuario autenticado. */

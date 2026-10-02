@@ -1,9 +1,11 @@
 package com.rescateanimal.backend.controller;
 
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
+import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
@@ -305,6 +307,46 @@ class AlertaControllerTest {
             mockMvc.perform(get("/api/alertas").param("estado", "PERDIDA"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /{id} -> 200 con los avistamientos, sin contacto de ningún autor")
+        void detalle() throws Exception {
+            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+                    .id(42L).especie("perro").estado(EstadoAlerta.ACTIVA)
+                    .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
+                    .avistamientos(List.of(AvistamientoResponse.builder().id(70L).alertaId(42L)
+                            .autor(AutorResponse.builder().id(8L).nombre("Luis").build()).build()))
+                    .build());
+
+            mockMvc.perform(get("/api/alertas/42"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.estado").value("ACTIVA"))
+                    .andExpect(jsonPath("$.avistamientos[0].id").value(70))
+                    .andExpect(jsonPath("$.autor.email").doesNotExist())
+                    .andExpect(jsonPath("$.avistamientos[0].autor.telefono").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("GET /{id} de una alerta retirada -> 200 con su estado, no 404")
+        void detalleDeRetirada() throws Exception {
+            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+                    .id(42L).especie("perro").estado(EstadoAlerta.ELIMINADA).avistamientos(List.of()).build());
+
+            mockMvc.perform(get("/api/alertas/42"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.estado").value("ELIMINADA"))
+                    .andExpect(jsonPath("$.descripcion").doesNotExist());
+        }
+
+        @Test
+        @DisplayName("GET /{id} de un id que nunca existió -> 404 NO_ENCONTRADO")
+        void detalleInexistente() throws Exception {
+            when(alertaService.detalle(999L)).thenThrow(new ResourceNotFoundException("La alerta no existe"));
+
+            mockMvc.perform(get("/api/alertas/999"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
         }
 
         @Test
