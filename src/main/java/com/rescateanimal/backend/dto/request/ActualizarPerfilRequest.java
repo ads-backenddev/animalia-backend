@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.dto.request;
 
+import com.rescateanimal.backend.dto.validation.UrlHttps;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
@@ -44,5 +45,6 @@ public class ActualizarPerfilRequest {
     private String areaGeografica;
 
     @Size(max = 500, message = "la URL de la foto no puede superar los 500 caracteres")
+    @UrlHttps
     private String fotoUrl;
 }

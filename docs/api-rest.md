@@ -122,6 +122,18 @@ por día natural y "mañana a las 00:00" depende de qué calendario se mire. Ese
 **`Europe/Madrid`**, fijado explícitamente en el servidor — con sus límites, en §6, *Estado del
 límite diario*.
 
+### Fotos (`fotoUrl`)
+
+La API no recibe archivos: todo campo `fotoUrl` es una URL que el cliente ya tiene alojada. Debe
+ser **`https://` absoluta, con host y sin credenciales** (`https://usuario@host/...` se rechaza);
+cualquier otra cosa —`http://`, `javascript:`, `data:`, una ruta relativa— devuelve `400`
+`VALIDACION` con `errores.fotoUrl`. Los campos opcionales siguen admitiendo `null`, y en
+`PUT /api/usuarios/me` una cadena vacía quita la foto.
+
+> **Pendiente:** de dónde sale esa URL —subida al propio backend o Firebase Storage desde el
+> cliente— está sin decidir, y con ello el borrado del archivo cuando una cuenta se anonimiza
+> (RF-19): hoy la baja solo vacía la columna.
+
 ---
 
 ## 2. `/api/auth` — Registro, sesión y contraseña
