@@ -7,6 +7,7 @@ import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
@@ -16,6 +17,7 @@ import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.repository.AlertaRepository;
+import com.rescateanimal.backend.repository.AlertaSpec;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +26,10 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -53,6 +59,9 @@ public class AlertaService {
 
     /** excluirId de buscarSimilar al publicar: ningún id de IDENTITY vale 0. */
     private static final long NINGUNA_ALERTA = 0L;
+
+    /** Tope de tamaño de página del listado, el mismo que el del catálogo de adopción. */
+    static final int MAXIMO_POR_PAGINA = 100;
 
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
@@ -216,6 +225,45 @@ public class AlertaService {
         }
 
         return alertas.stream().map(this::aAlertaMapaResponse).toList();
+    }
+
+    /**
+     * Listado paginado de alertas (GET /api/alertas), para navegar y buscar.
+     *
+     * QUÉ ESTADOS SE LISTAN lo decide este método, no el cliente: ACTIVA por
+     * defecto y ENCONTRADA si se pide —los casos resueltos también interesan—.
+     * RETIRADA y ELIMINADA no se navegan: una la quitó su dueño y la otra el
+     * administrador, y listarlas desharía las dos decisiones. Siguen
+     * respondiendo por su id en el detalle, con el cuerpo reducido.
+     *
+     * Los filtros —especie sin distinguir mayúsculas, zona como círculo— los
+     * describe AlertaSpec. La zona se valida igual que en el mapa.
+     */
+    @Transactional(readOnly = true)
+    public PaginaResponse<AlertaResponse> listar(String especie, EstadoAlerta estado, Double latitud,
+                                                 Double longitud, Double radioMetros, Pageable paginacion) {
+        EstadoAlerta estadoListado = estado == null ? EstadoAlerta.ACTIVA : estado;
+        boolean seNavega = switch (estadoListado) {
+            case ACTIVA, ENCONTRADA -> true;
+            case RETIRADA, ELIMINADA -> false;
+        };
+        if (!seNavega) {
+            throw new ParametrosInvalidosException("Solo se pueden listar alertas ACTIVA o ENCONTRADA");
+        }
+
+        boolean conZona = latitud != null || longitud != null || radioMetros != null;
+        if (conZona) {
+            validarArea(latitud, longitud, radioMetros);
+        }
+
+        PageRequest peticion = PageRequest.of(
+                Math.max(0, paginacion.getPageNumber()),
+                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+
+        Page<Alerta> pagina = alertaRepository.findAll(
+                AlertaSpec.de(estadoListado, especie, latitud, longitud, radioMetros), peticion);
+        return PaginaResponse.de(pagina, this::aAlertaResponse);
     }
 
     /** Comprueba el filtro de área y devuelve el radio ya validado. */

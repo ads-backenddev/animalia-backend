@@ -3,10 +3,14 @@ package com.rescateanimal.backend.controller;
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AlertaService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -60,6 +64,26 @@ public class AlertaController {
      * al área visible y se indican los tres o ninguno; sin ellos devuelve todas
      * las alertas activas.
      */
+    /**
+     * GET /api/alertas -> 200, 400, 401
+     *
+     * Listado paginado para navegar y buscar, no para el mapa —que ya recibe las
+     * activas en tiempo real por /topic/mapa—. Por defecto solo ACTIVA; estado
+     * admite también ENCONTRADA. Zona = los tres de lat, lng y radio, o ninguno.
+     */
+    @GetMapping
+    public ResponseEntity<PaginaResponse<AlertaResponse>> listar(
+            @RequestParam(required = false) String especie,
+            @RequestParam(required = false) EstadoAlerta estado,
+            @RequestParam(name = "lat", required = false) Double latitud,
+            @RequestParam(name = "lng", required = false) Double longitud,
+            @RequestParam(name = "radio", required = false) Double radioMetros,
+            @PageableDefault(size = 20) Pageable paginacion) {
+
+        return ResponseEntity.ok(
+                alertaService.listar(especie, estado, latitud, longitud, radioMetros, paginacion));
+    }
+
     @GetMapping("/mapa")
     public ResponseEntity<List<AlertaMapaResponse>> listarParaMapa(
             @RequestParam(name = "lat", required = false) Double latitud,

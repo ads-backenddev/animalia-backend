@@ -4,6 +4,7 @@ import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
@@ -266,6 +267,42 @@ class AlertaControllerTest {
         void mapaConLatNoNumericaDevuelve400() throws Exception {
             mockMvc.perform(get("/api/alertas/mapa")
                             .param("lat", "norte").param("lng", "-3.7038").param("radio", "2000"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas -> 200 paginado, y los filtros llegan al service")
+        void listadoPaginado() throws Exception {
+            when(alertaService.listar(eq("perro"), eq(EstadoAlerta.ENCONTRADA), eq(40.4), eq(-3.7), eq(5000.0), any()))
+                    .thenReturn(PaginaResponse.<AlertaResponse>builder()
+                            .content(List.of(alertaResponse())).page(0).size(20)
+                            .totalElements(1).totalPages(1).last(true).build());
+
+            mockMvc.perform(get("/api/alertas")
+                            .param("especie", "perro").param("estado", "ENCONTRADA")
+                            .param("lat", "40.4").param("lng", "-3.7").param("radio", "5000"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content[0].id").value(42))
+                    .andExpect(jsonPath("$.content[0].autor.email").doesNotExist())
+                    .andExpect(jsonPath("$.totalElements").value(1));
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas sin filtros pasa nulos: el estado por defecto lo decide el service")
+        void listadoSinFiltros() throws Exception {
+            when(alertaService.listar(any(), any(), any(), any(), any(), any()))
+                    .thenReturn(PaginaResponse.<AlertaResponse>builder().content(List.of()).build());
+
+            mockMvc.perform(get("/api/alertas")).andExpect(status().isOk());
+
+            verify(alertaService).listar(eq(null), eq(null), eq(null), eq(null), eq(null), any());
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas?estado=PERDIDA -> 400, no 500")
+        void listadoConEstadoInventado() throws Exception {
+            mockMvc.perform(get("/api/alertas").param("estado", "PERDIDA"))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
         }

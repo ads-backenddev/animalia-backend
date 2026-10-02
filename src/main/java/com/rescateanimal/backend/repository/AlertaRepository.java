@@ -2,7 +2,12 @@ package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -16,7 +21,19 @@ import java.util.Optional;
  * temporal) llegan como parámetros desde AlertaService, que es donde se decide.
  */
 @Repository
-public interface AlertaRepository extends JpaRepository<Alerta, Long> {
+public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecificationExecutor<Alerta> {
+
+    /**
+     * Listado filtrado de GET /api/alertas. Los criterios los describe AlertaSpec.
+     *
+     * Se sobrescribe solo para colgarle el grafo del autor, que cada tarjeta
+     * enseña: sin él habría una consulta por fila (N+1). Es seguro al paginar
+     * porque `usuario` es una asociación a-uno, igual que la protectora en
+     * AnimalAdopcionRepository.
+     */
+    @Override
+    @EntityGraph(attributePaths = "usuario")
+    Page<Alerta> findAll(Specification<Alerta> filtros, Pageable paginacion);
 
     /**
      * Alertas activas y geolocalizadas, para pintar el mapa (RF-04).
