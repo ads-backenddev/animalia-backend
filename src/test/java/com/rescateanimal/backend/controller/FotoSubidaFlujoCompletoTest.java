@@ -321,6 +321,18 @@ class FotoSubidaFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("Muy por encima del límite (15 MB) -> 413 limpio, no una conexión cortada")
+    void muchoMasGrande() throws Exception {
+        // Tomcat solo lee y descarta 2 MB del cuerpo que sobra antes de cortar la
+        // conexión (max-swallow-size). Con 15 MB de cuerpo, el cliente recibía una
+        // conexión cerrada en vez del 413: server.tomcat.max-swallow-size.
+        HttpResponse<String> respuesta = subir(new byte[15 * 1024 * 1024], token);
+
+        assertThat(respuesta.statusCode()).isEqualTo(413);
+        assertThat((String) JsonPath.read(respuesta.body(), "$.codigo")).isEqualTo("FOTO_DEMASIADO_GRANDE");
+    }
+
+    @Test
     @DisplayName("Sin token -> 401")
     void sinToken() throws Exception {
         assertThat(subir(ImagenesDePrueba.jpeg(8, 8), null).statusCode()).isEqualTo(401);

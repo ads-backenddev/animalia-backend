@@ -2070,6 +2070,28 @@ por `created_at` para la limpieza y ninguno por `usuario_id`, porque nada busca 
 La aplicación tampoco arranca si la carpeta no admite escritura, en vez de descubrirlo con la primera
 subida. Para el emulador de Android en local, la base pública es `http://10.0.2.2:8080/fotos`.
 
+### Despliegue
+
+Las fotos viven en un **volumen de Railway** montado en `/data` (`FOTOS_DIR=/data/fotos`): sin él,
+cada despliegue las borraría. Los pasos manuales están en el README, *Despliegue en Railway*.
+
+**Railway monta el volumen como root, y la aplicación corre como `spring`.** Sin más, no podía crear
+su carpeta y no arrancaba. La imagen lo resuelve con `docker-entrypoint.sh`: arranca como root solo
+para crear `/data/fotos` y dársela a `spring`, y ejecuta Java como `spring` con `su-exec`. Se prefirió
+a `RAILWAY_RUN_UID=0`, que ejecutaría la aplicación entera como root y tiraría el usuario sin
+privilegios del `Dockerfile`. `su-exec` —un paquete de Alpine, no una dependencia del `pom.xml`— hace
+`exec`, así que Java es el proceso 1 y recibe directamente la señal de parada.
+
+Se probó en local reproduciendo el montaje de Railway: perfil `prod` y un volumen de Docker montado
+como root en `/data`. La imagen anterior no arrancaba (`AccessDeniedException` al crear
+`/data/fotos`). La actual arranca con Java como `spring`, sirve una foto subida, la conserva al
+volver a crear el contenedor y se para con código 143 (SIGTERM atendido), no 137 (muerte forzada).
+
+**Un archivo muy grande recibe un `413` limpio**, no una conexión cortada. Tomcat solo lee y descarta
+2 MB del cuerpo que sobra antes de cortar; con un archivo de 15 MB, el cliente veía la conexión
+anulada en vez del `413 FOTO_DEMASIADO_GRANDE`. `server.tomcat.max-swallow-size=20MB` lo extiende, y
+una prueba contra el servidor real lo comprueba.
+
 ### Limitaciones aceptadas
 
 | Limitación | Por qué se acepta |
@@ -2082,10 +2104,10 @@ subida. Para el emulador de Android en local, la base pública es `http://10.0.2
 | Una foto de más de un día sin usar puede borrarse justo mientras su dueño la está publicando | Exige usar una subida de hace más de un día en el segundo exacto de la limpieza, de madrugada |
 | Comprobar si una foto se usa recorre las columnas `foto_url`, que no tienen índice | Solo se pregunta al cambiar una foto de perfil, al dar de baja una cuenta y una vez al día. A este volumen, un índice costaría más de lo que ahorra |
 | `GET /fotos/{nombre}` es público | Una etiqueta `<img>` no manda la cabecera `Authorization`. Lo que impide recorrerlas es que el nombre es un UUID aleatorio |
+| Un archivo de más de unos 25 MB recibe una conexión cortada, no un `413` | Para responder, Tomcat tiene que leer y descartar lo que sobra, y leer sin límite cuerpos enormes solo para rechazarlos sería peor. La aplicación de Android no debería mandar nunca algo así: puede comprobar el tamaño antes de subir |
 
 ### Fuera de alcance, pendientes
 
 | Pendiente | Bloque |
 |---|---|
 | WebP, miniaturas, o servir las fotos desde una CDN | Ninguno lo pide un requisito. WebP exige una dependencia nueva |
-| El despliegue en Railway: volumen, permisos del usuario `spring` sobre él y el `max-swallow-size` de Tomcat para que un archivo muy grande reciba un `413` limpio | Fase 9 de este mismo bloque |

@@ -189,6 +189,10 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
 | `SERVER_PORT` | `8080` | Puerto de la API |
 | `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción |
+| `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
+| `APP_FOTOS_URL_PUBLICA` | `http://localhost:8080/fotos` | Base de las URLs de las fotos. **Obligatoria y `https` en producción** |
+| `FOTOS_LIMITE_DIARIO` | `25` | Subidas de fotos por usuario y día |
+| `FOTOS_LIMPIEZA_CRON` | `0 30 4 * * *` | Hora de la limpieza diaria de fotos sin uso (Europe/Madrid); `-` la desactiva |
 
 En el perfil `prod` los secretos **no tienen valor por defecto**: si falta una variable, la
 aplicación no arranca en lugar de usar una credencial de desarrollo.
@@ -202,6 +206,31 @@ configuración versionado con credenciales es `.env.example`, y solo lleva marca
 | `.env` | Docker Compose, para crear la base de datos | No |
 | `.env.example` | Nadie: es la plantilla de `.env` | Sí, sin credenciales reales |
 | `application-local.properties` | Spring Boot con el perfil `local` | No |
+
+## Despliegue en Railway: el volumen de fotos
+
+Railway construye la imagen con el `Dockerfile`. Las fotos que suben los usuarios se guardan en disco,
+y el disco de un contenedor se pierde en cada despliegue: **sin un volumen, cada despliegue borra todas
+las fotos**. Para configurarlo, en el servicio de la aplicación:
+
+1. **Añadir un volumen** con punto de montaje `/data`.
+2. **Variables**: `FOTOS_DIR=/data/fotos` y `APP_FOTOS_URL_PUBLICA=https://<dominio público del
+   servicio>/fotos`. El dominio tiene que ser estable: las URLs se guardan completas, y si cambia, las
+   fotos ya publicadas dejan de cargar.
+3. **Una sola réplica.** Un volumen no se comparte entre instancias.
+4. **No hace falta `RAILWAY_RUN_UID=0`.** Railway monta el volumen como root, y la imagen ya lo
+   resuelve: `docker-entrypoint.sh` crea `/data/fotos`, se la da al usuario `spring` y arranca la
+   aplicación como `spring`, nunca como root. `RAILWAY_RUN_UID=0` la ejecutaría entera como root.
+
+Comprobación tras desplegar: el log de arranque debe decir `Fotos en /data/fotos`. Si en su lugar la
+aplicación no arranca con `No se pudo crear la carpeta de fotos` o `La carpeta de fotos no admite
+escritura`, el volumen no está montado donde dice `FOTOS_DIR` o no tiene permisos. Falla al
+arrancar a propósito, para no descubrirlo con la primera subida de un usuario.
+
+Esto se ha probado en local reproduciendo lo que hace Railway: la imagen en perfil `prod` con un
+volumen de Docker montado como root en `/data`. La imagen anterior no arrancaba (`AccessDeniedException`
+al crear `/data/fotos`); la actual arranca, sirve las fotos, las conserva al volver a crear el
+contenedor y se para limpiamente.
 
 ## Convención de commits
 
