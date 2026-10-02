@@ -49,6 +49,22 @@ public class NotificacionService {
      * pidió— se perdería. La entidad que llega ya tiene cargados su id y su
      * autor, así que no hace falta inicializar nada perezoso desde esta
      * transacción nueva.
+     *
+     * LIMITACIÓN ACEPTADA: EL AVISO PUEDE SOBREVIVIR A LA ALERTA. Esta
+     * transacción se confirma antes que la de publicar, así que si aquella
+     * fallara después, quedarían notificaciones ALERTA_CERCANA apuntando con su
+     * referencia_id a una alerta que nunca llegó a existir; el cliente que abra
+     * una recibiría un 404. Es el mismo riesgo simétrico que se acepta en
+     * notificarDecisionAdministrativa, pero aquí no se corrige solo: la
+     * notificación queda huérfana para siempre. Se acepta porque es remoto:
+     * Alerta usa IDENTITY, de modo que el INSERT ya se ejecutó en save() y
+     * cualquier CHECK, NOT NULL o clave ajena habría fallado antes de llegar
+     * aquí; solo queda que falle el propio commit (conexión perdida, caída de la
+     * base de datos). Y no puede apuntar a la alerta equivocada: un id de
+     * IDENTITY consumido no se reutiliza aunque la transacción se deshaga.
+     * Si hubiera que cerrarlo, la llamada se movería a un afterCommit, como el
+     * evento del mapa en AlertaService.publicarEnMapa: el aviso solo se crearía
+     * con la alerta ya confirmada.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public int notificarAlertaCercana(Alerta alerta) {
