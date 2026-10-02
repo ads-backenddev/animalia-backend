@@ -89,7 +89,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Sin coincidencias la alerta se publica")
         void publicaCuandoNoHayDuplicado() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> {
@@ -109,7 +109,7 @@ class AlertaServiceTest {
         @DisplayName("Con una alerta similar se bloquea la publicación y no se guarda nada")
         void bloqueaLaPublicacionDuplicada() {
             Alerta existente = alertaExistente(42L);
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.of(existente));
             when(alertaRepository.distanciaMetros(42L, LAT, LNG)).thenReturn(180.4);
 
@@ -124,7 +124,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("El 409 incluye la alerta existente para poder redirigir al ciudadano")
         void informaDeLaAlertaExistente() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.of(alertaExistente(42L)));
             when(alertaRepository.distanciaMetros(42L, LAT, LNG)).thenReturn(180.4);
 
@@ -141,7 +141,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("La búsqueda usa el radio y la ventana temporal configurados: 500 m y 24 h")
         void consultaConLosUmbralesDelRequisito() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
@@ -152,7 +152,7 @@ class AlertaServiceTest {
             ArgumentCaptor<Double> radio = ArgumentCaptor.forClass(Double.class);
             ArgumentCaptor<Instant> desde = ArgumentCaptor.forClass(Instant.class);
             verify(alertaRepository).buscarSimilar(eq("perro"), eq(LAT), eq(LNG),
-                    radio.capture(), desde.capture());
+                    radio.capture(), desde.capture(), eq(0L));
 
             assertThat(radio.getValue()).isEqualTo(500.0);
             assertThat(desde.getValue()).isBetween(antesDeLlamar.minus(1, ChronoUnit.MINUTES),
@@ -169,7 +169,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("La latitud y la longitud se guardan en el orden que espera JTS: x=longitud, y=latitud")
         void guardaElPuntoConElOrdenCorrecto() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
@@ -195,7 +195,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Publicar una alerta emite un evento ALTA en /topic/mapa")
         void emiteEventoAlPublicar() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> {
@@ -218,7 +218,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Si falla la mensajería la alerta se publica igual: ya está guardada")
         void unFalloDeMensajeriaNoTumbaLaPublicacion() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
@@ -233,7 +233,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Si falla la creación de notificaciones la alerta se publica igual")
         void unFalloDeNotificacionesNoTumbaLaPublicacion() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
@@ -351,7 +351,7 @@ class AlertaServiceTest {
             assertThatThrownBy(() -> alertaService.publicar(conFoto, 1L))
                     .isInstanceOf(FotoUrlNoValidaException.class);
 
-            verify(alertaRepository, never()).buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any());
+            verify(alertaRepository, never()).buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong());
             verify(alertaRepository, never()).save(any());
         }
 
@@ -378,7 +378,7 @@ class AlertaServiceTest {
         }
 
         private void prepararPublicacion() {
-            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any()))
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));

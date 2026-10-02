@@ -304,7 +304,20 @@ cumple las tres condiciones a la vez:
 
 1. misma `especie`,
 2. `ultimaUbicacion` dentro de un radio de **500 m** (consulta espacial PostGIS `ST_DWithin`),
-3. `fechaAvistamiento` dentro de las **últimas 24 h**.
+3. **publicada o avistada** en las **últimas 24 h**: su `createdAt` o su `fechaAvistamiento` caen
+   dentro de la ventana.
+
+La misma comprobación se repite al **editar** una alerta (`PUT /api/alertas/{id}`) cuando cambian su
+especie o su ubicación, sin contarse a sí misma. Si cambian otros campos no se repite: ninguno de
+ellos decide si esta alerta duplica a otra.
+
+> **Cambio de contrato.** Hasta el bloque de los endpoints de alerta (§22) la tercera condición era
+> solo «`fechaAvistamiento` en las últimas 24 h», y dejaba dos huecos. Una alerta publicada hoy sobre
+> un animal visto hace dos días —el caso más común: se pierde el sábado y se publica el lunes— no
+> bloqueaba nunca a nadie, así que dos vecinos podían publicar el mismo animal. Y al editar, atrasar
+> esa fecha hacía que una alerta dejara de proteger su sitio. `createdAt` lo pone el servidor y no se
+> edita, así que con las dos fechas no hay forma de esquivar la detección. A cambio, ahora se
+> consideran duplicadas más alertas que antes.
 
 La respuesta redirige al ciudadano a la alerta existente incluyéndola en el cuerpo:
 

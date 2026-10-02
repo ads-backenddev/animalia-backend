@@ -50,6 +50,9 @@ public class AlertaService {
     /** SRID 4326: coordenadas geográficas WGS84, las mismas que da el GPS. */
     private static final int SRID_WGS84 = 4326;
 
+    /** excluirId de buscarSimilar al publicar: ningún id de IDENTITY vale 0. */
+    private static final long NINGUNA_ALERTA = 0L;
+
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
@@ -102,7 +105,7 @@ public class AlertaService {
             fotoService.exigirPropia(fotoUrl, autorId);
         }
 
-        comprobarQueNoEsDuplicada(peticion);
+        comprobarQueNoEsDuplicada(peticion.getEspecie(), peticion.getUbicacion(), NINGUNA_ALERTA);
 
         Usuario autor = usuarioRepository.findById(autorId)
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
@@ -130,7 +133,13 @@ public class AlertaService {
 
     /**
      * Detección de alertas duplicadas (RF-25): misma especie, radio de 500 m y
-     * ventana de 24 h, los tres a la vez.
+     * ventana de 24 h, los tres a la vez. La ventana mira cuándo se publicó la
+     * alerta existente además de cuándo se vio al animal: el porqué está en
+     * AlertaRepository.buscarSimilar.
+     *
+     * Sirve a la publicación y a la edición. Al editar, excluirId deja fuera a
+     * la propia alerta, que si no chocaría consigo misma; al publicar se pasa
+     * NINGUNA_ALERTA.
      *
      * LA VENTANA SON 24 HORAS REALES. Se calcula restando sobre un Instant, no
      * sobre un LocalDateTime como antes, y eso arregla dos cosas distintas:
@@ -151,13 +160,13 @@ public class AlertaService {
      * alta el mismo animal en el mismo segundo— es poco probable y el coste de
      * fallar es una alerta repetida, no un dato corrupto.
      */
-    private void comprobarQueNoEsDuplicada(CrearAlertaRequest peticion) {
+    private void comprobarQueNoEsDuplicada(String especie, UbicacionRequest ubicacion, long excluirId) {
         Instant desde = Instant.now().minus(ventanaDuplicadosHoras, ChronoUnit.HOURS);
-        double latitud = peticion.getUbicacion().getLatitud();
-        double longitud = peticion.getUbicacion().getLongitud();
+        double latitud = ubicacion.getLatitud();
+        double longitud = ubicacion.getLongitud();
 
         Optional<Alerta> similar = alertaRepository.buscarSimilar(
-                peticion.getEspecie(), latitud, longitud, radioDuplicadosMetros, desde);
+                especie, latitud, longitud, radioDuplicadosMetros, desde, excluirId);
 
         if (similar.isEmpty()) {
             return;

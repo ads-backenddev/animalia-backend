@@ -53,9 +53,19 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
                                     @Param("radioMetros") double radioMetros);
 
     /**
-     * Busca una alerta que haga duplicada a la que se quiere publicar (RF-25):
-     * misma especie, dentro del radio indicado y con avistamiento posterior a la
-     * fecha dada. Devuelve la más cercana.
+     * Busca una alerta que haga duplicada a la que se quiere publicar o editar
+     * (RF-25): misma especie, dentro del radio indicado y PUBLICADA O AVISTADA
+     * después de la fecha dada. Devuelve la más cercana.
+     *
+     * LAS DOS FECHAS, NO SOLO LA DEL AVISTAMIENTO. Con solo fecha_avistamiento,
+     * una alerta publicada hoy sobre un animal visto hace dos días no bloqueaba
+     * nunca a nadie —el caso más común: se pierde el sábado y se publica el
+     * lunes—, y atrasar esa fecha al editar dejaba de proteger su sitio. created_at
+     * lo pone la base de datos y no se edita, así que ninguna de las dos vías
+     * sirve ya para esquivar la detección.
+     *
+     * excluirId deja fuera a la propia alerta cuando se comprueba una edición;
+     * al publicar se pasa 0, que no es el id de ninguna (IDENTITY empieza en 1).
      *
      * Consulta nativa porque JPQL no conoce los operadores espaciales de PostGIS.
      * ST_DWithin sobre geography mide en metros reales sobre el elipsoide; con
@@ -73,8 +83,9 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
             SELECT a.*
             FROM alerta a
             WHERE a.estado = 'ACTIVA'
+              AND a.id <> :excluirId
               AND lower(a.especie) = lower(:especie)
-              AND a.fecha_avistamiento >= :desde
+              AND (a.created_at >= :desde OR a.fecha_avistamiento >= :desde)
               AND a.ultima_ubicacion IS NOT NULL
               AND ST_DWithin(
                     CAST(a.ultima_ubicacion AS geography),
@@ -89,7 +100,8 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long> {
                                    @Param("latitud") double latitud,
                                    @Param("longitud") double longitud,
                                    @Param("radioMetros") double radioMetros,
-                                   @Param("desde") Instant desde);
+                                   @Param("desde") Instant desde,
+                                   @Param("excluirId") long excluirId);
 
     /**
      * Distancia en metros entre una alerta y unas coordenadas. Se consulta a
