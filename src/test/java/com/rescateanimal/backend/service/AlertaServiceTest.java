@@ -491,6 +491,72 @@ class AlertaServiceTest {
     }
 
     @Nested
+    @DisplayName("Retirada por el dueño")
+    class RetiradaPorElDuenyo {
+
+        @Test
+        @DisplayName("Una ACTIVA pasa a RETIRADA, sin borrarse, y su marcador sale del mapa")
+        void activa() {
+            Alerta alerta = alertaExistente(5L);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            alertaService.retirar(5L, 1L);
+
+            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.RETIRADA);
+            verify(alertaRepository, never()).delete(any(Alerta.class));
+            verify(alertaRepository, never()).deleteById(any());
+            ArgumentCaptor<EventoMapaResponse> evento = ArgumentCaptor.forClass(EventoMapaResponse.class);
+            verify(mensajeria).convertAndSend(eq(AlertaService.CANAL_MAPA), evento.capture());
+            assertThat(evento.getValue().getAccion()).isEqualTo(EventoMapaResponse.Accion.CIERRE);
+        }
+
+        @Test
+        @DisplayName("Una ENCONTRADA también se retira, sin evento: ya no estaba en el mapa")
+        void encontrada() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(EstadoAlerta.ENCONTRADA);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            alertaService.retirar(5L, 1L);
+
+            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.RETIRADA);
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Sobre una RETIRADA o ELIMINADA no cambia nada: el dueño no pisa la moderación")
+        @EnumSource(value = EstadoAlerta.class, names = {"RETIRADA", "ELIMINADA"})
+        void yaRetirada(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            alertaService.retirar(5L, 1L);
+
+            assertThat(alerta.getEstado()).isEqualTo(estado);
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Otro usuario no puede retirarla")
+        void ajena() {
+            Alerta alerta = alertaExistente(5L);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThatThrownBy(() -> alertaService.retirar(5L, 999L)).isInstanceOf(AccessDeniedException.class);
+            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ACTIVA);
+        }
+
+        @Test
+        @DisplayName("Una alerta inexistente da 404")
+        void inexistente() {
+            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> alertaService.retirar(123L, 1L)).isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    @Nested
     @DisplayName("Detalle")
     class Detalle {
 

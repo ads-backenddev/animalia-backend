@@ -15,6 +15,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -119,6 +120,18 @@ public class AlertaController {
             @AuthenticationPrincipal UsuarioPrincipal usuario) {
 
         return ResponseEntity.ok(alertaService.actualizar(id, peticion, usuario.getId()));
+    }
+
+    /**
+     * DELETE /api/alertas/{id} -> 204, 401, 403, 404
+     *
+     * Retira la alerta: pasa a RETIRADA, no se borra. Idempotente.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> retirar(@PathVariable Long id,
+                                        @AuthenticationPrincipal UsuarioPrincipal usuario) {
+        alertaService.retirar(id, usuario.getId());
+        return ResponseEntity.noContent().build();
     }
 
     /** GET /api/alertas/mis-alertas -> 200. Alertas del usuario autenticado. */

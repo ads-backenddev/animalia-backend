@@ -40,8 +40,10 @@ import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -380,6 +382,23 @@ class AlertaControllerTest {
             mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON).content(cuerpoValido()))
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.alertaExistente.id").value(7));
+        }
+
+        @Test
+        @DisplayName("DELETE /{id} -> 204, retirada a nombre del usuario autenticado")
+        void retirar() throws Exception {
+            mockMvc.perform(delete("/api/alertas/42")).andExpect(status().isNoContent());
+
+            verify(alertaService).retirar(42L, ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("DELETE /{id} de una alerta ajena -> 403")
+        void retirarAjena() throws Exception {
+            doThrow(new AccessDeniedException("Solo quien publicó la alerta puede retirarla"))
+                    .when(alertaService).retirar(42L, ID_USUARIO);
+
+            mockMvc.perform(delete("/api/alertas/42")).andExpect(status().isForbidden());
         }
 
         @Test

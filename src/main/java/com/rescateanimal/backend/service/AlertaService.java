@@ -420,6 +420,46 @@ public class AlertaService {
     }
 
     // ---------------------------------------------------------------------
+    // Retirada por el dueño
+    // ---------------------------------------------------------------------
+
+    /**
+     * Retira una alerta propia (DELETE /api/alertas/{id}): pasa a RETIRADA.
+     *
+     * NO BORRA NADA. Ni la alerta ni lo que cuelga de ella: sus avistamientos,
+     * los matches sobre ellos, sus chats y sus mensajes siguen ahí, porque la
+     * conversación pertenece también a la otra parte. Basta con el estado: el
+     * feed y los matches ya solo admiten avistamientos de alertas ACTIVA, así
+     * que los de esta salen del feed sin tocarlos.
+     *
+     * Se puede retirar una ACTIVA o una ENCONTRADA —el dueño puede no querer que
+     * su caso resuelto se siga listando—. Si estaba en el mapa, se emite CIERRE.
+     * Repetirlo no cambia nada, y sobre una ELIMINADA tampoco: responde igual,
+     * pero la marca de moderación se queda, porque el dueño nunca sobrescribe la
+     * decisión del administrador.
+     */
+    @Transactional
+    public void retirar(Long alertaId, Long usuarioId) {
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede retirarla");
+
+        boolean cambia = switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA -> true;
+            case RETIRADA, ELIMINADA -> false;
+        };
+        if (!cambia) {
+            log.debug("La alerta {} ya estaba {}: retirarla no cambia nada", alertaId, alerta.getEstado());
+            return;
+        }
+
+        boolean estabaEnElMapa = seVeEnElMapa(alerta.getEstado());
+        alerta.setEstado(EstadoAlerta.RETIRADA);
+        log.info("Alerta {} retirada por su autor", alertaId);
+        if (estabaEnElMapa) {
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Cierre (RF-14)
     // ---------------------------------------------------------------------
 
