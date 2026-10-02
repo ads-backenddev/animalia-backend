@@ -174,6 +174,8 @@ que falló— y las subidas interrumpidas a medias. El cliente debe subir la fot
 usarla, no guardarse la URL para más tarde: la primera limpieza tras cumplir 24 horas sin usarse la
 borra, así que una subida sin usar dura entre uno y dos días.
 
+Por qué se construyó así —y no con Firebase Storage—, su configuración y sus limitaciones: §21.
+
 ---
 
 ## 2. `/api/auth` — Registro, sesión y contraseña
@@ -1151,7 +1153,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF | Dónde se cubre |
 |---|---|
 | RF-01 | `POST /api/auth/registro/ciudadano`, `POST /api/auth/registro/protectora` |
-| RF-02 | `GET` y `PUT /api/usuarios/me` |
+| RF-02 | `GET` y `PUT /api/usuarios/me`; la foto se sube antes por `POST /api/fotos` (§1) |
 | RF-03 | `POST /api/alertas` |
 | RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
 | RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` — **diseñado, sin construir** (§20) |
@@ -1168,9 +1170,9 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
 | RF-18 | `PUT /api/usuarios/me/idioma` |
-| RF-19 | `DELETE /api/usuarios/me` — anonimiza, no borra (§19) |
+| RF-19 | `DELETE /api/usuarios/me` — anonimiza, no borra, salvo la foto de perfil, que sí se borra (§19, §21) |
 | RF-20 | `PUT /api/adopcion/{id}/adoptado` |
-| RF-21 | `POST /api/avistamientos` (campo `fotoUrl`) |
+| RF-21 | `POST /api/avistamientos` (campo `fotoUrl`, subida antes por `POST /api/fotos`) |
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
 | RF-23 | `PUT /api/protectoras/{id}/valoracion`; media en `GET /api/adopcion/{id}` y en `/panel/valoraciones` |
 | RF-24 | `GET /api/matches/limite`, respuesta `429` de `POST /api/matches` |
@@ -1195,6 +1197,7 @@ modelo que hicieron falta para sostenerlos:
 | `GET /api/avistamientos/{id}` | Consultar el detalle de un avistamiento |
 | `POST /api/chats/{id}/mensajes`, `PUT /api/chats/{id}/mensajes/leidos` | El campo `leido` de MENSAJE necesita una transición; el POST es la alternativa REST al WebSocket |
 | Parámetro `?tipo=` en `DELETE /api/admin/publicaciones/{id}` | Las publicaciones son de tres tablas distintas: el id solo no identifica el recurso |
+| `POST /api/fotos`, `GET /fotos/{nombre}` | **Añadidos en el bloque de subida de fotos (§21).** El resumen daba por hecho que `fotoUrl` llegaba ya alojada en alguna parte, sin decir dónde. Sin subida propia, la foto de perfil no se podía borrar en la baja (RF-19) y cualquier cadena acababa dentro de un `<img src>` |
 
 ### Cambios en el modelo de datos derivados de esta revisión
 
@@ -1947,5 +1950,117 @@ fotos, y antes de escribir código hay que fijar en el contrato:
   ya hace el administrador por `DELETE /api/admin/publicaciones/{id}` (§11).
 - **El listado**: el filtro `zona` es texto contra un `areaGeografica` que también es texto, el mismo
   problema de comparación que arrastra `/local/contactar`.
-- **Su `fotoUrl`** se validará igual que en `POST /api/alertas` tras la subida de fotos: solo fotos
-  subidas por el propio usuario a `/api/fotos`.
+- **Su `fotoUrl`**, al editar, se valida como en `POST /api/alertas` y en la edición de un animal: solo
+  fotos subidas por el propio usuario a `/api/fotos`, y reenviar la que ya tenía no se vuelve a
+  comprobar (§1, §21). Si se cambia, la anterior se queda sin uso y la recoge la limpieza diaria, como
+  ya ocurre al cambiar la foto de un animal.
+
+---
+
+## 21. Bloque de subida de fotos (RF-02, RF-03, RF-07, RF-19, RF-21)
+
+Hasta este bloque la API no recibía archivos: `fotoUrl` era una cadena de hasta 500 caracteres que el
+cliente alojaba donde quisiera, y el contrato no decía dónde. Ahora las fotos las sube el cliente al
+propio backend, que las guarda en disco —el volumen de Railway en producción— y las sirve. Cómo se usa
+está en §1, *Fotos*; aquí, lo que hubo que decidir para construirlo.
+
+### Lo que cambió en el contrato
+
+| Cambio | Antes | Ahora |
+|---|---|---|
+| `POST /api/fotos` | — | Nuevo. Multipart, parte `archivo`. JPEG o PNG por sus bytes, 5 MB. `201` con `{ "url" }`; `400 FOTO_NO_VALIDA`, `413 FOTO_DEMASIADO_GRANDE` |
+| `GET /fotos/{nombre}` | — | Nuevo. Público, sin token. Caché inmutable de un año. `404` si la foto no existe o ya se borró |
+| `fotoUrl` en perfil, alerta, avistamiento y animal | Cualquier cadena de hasta 500 caracteres; `javascript:` incluido | Solo una URL devuelta por `POST /api/fotos` **a quien la envía**. Si no, `400 VALIDACION` con `errores.fotoUrl`. Reenviar sin cambios la que ya tenía no se comprueba |
+| `fotoUrl` en blanco en `POST /api/alertas` | Se guardaba la cadena vacía | Se guarda `null`, como ya hacía el perfil |
+| Baja de cuenta (RF-19) | Vaciaba `foto_url`; la imagen seguía publicada | La foto de perfil se borra de verdad. Las de sus publicaciones, no (§19) |
+| Cambiar o quitar la foto de perfil | La anterior seguía publicada para siempre | La anterior se borra |
+| Fotos sin usar | — | Una limpieza diaria borra las de más de un día |
+| `V14` | — | Tabla `FOTO`: quién subió cada archivo |
+
+### Por qué en el backend y no en Firebase Storage
+
+Se valoraron las dos opciones. Firebase Storage habría reutilizado el proyecto de Firebase que RF-05
+necesitará para la push, pero tenía un coste que no se veía a primera vista: sus reglas de seguridad
+identifican al usuario con Firebase Auth, y esta API usa su propio JWT. O el bucket quedaba abierto, o
+el backend tenía que emitir tokens de Firebase en el login y la aplicación mantener dos sesiones.
+Además exige el plan de pago de Firebase, se prueba con un emulador aparte de la suite, y dejaba las
+fotos esperando a que se diseñara el cliente Android. Alojarlas aquí cuesta un volumen en Railway y
+este bloque, pero es autónomo y se prueba con la suite que ya existe.
+
+### Lo que se guarda no es lo que llega
+
+Toda foto se decodifica y se vuelve a escribir. Eso quita los metadatos —**las coordenadas GPS que
+pone el móvil**, que en una foto de perfil hecha en casa publicarían el domicilio— y neutraliza los
+archivos que son una imagen válida y otra cosa a la vez. El formato se decide por los bytes, nunca
+por el nombre ni el `Content-Type`.
+
+**La reducción a 2048 px se hace al decodificar, no después.** Si el lado mayor la supera, el lector
+se salta píxeles (submuestreo) y nunca tiene la imagen entera en memoria: una foto de 50 megapíxeles
+de un móvil actual cuesta lo mismo que una pequeña. Se prefirió a rechazar las fotos por encima de un
+tamaño, que habría rechazado fotos normales. Las dimensiones se leen de la cabecera antes de nada, y
+las absurdas —una cabecera que declara 100.000 × 100.000— se rechazan sin decodificar.
+
+### Quitar una foto: dos pasos, cada uno en su momento
+
+La fila de `FOTO` se borra **dentro** de la transacción —de la baja, del cambio de perfil, de la
+limpieza— y el archivo **después del commit**. Al revés, un rollback dejaría una fila apuntando a un
+archivo ya borrado. Como `GET /fotos/{nombre}` solo sirve lo que tiene fila, una foto deja de
+publicarse en el instante del commit, aunque su archivo tarde en desaparecer. La subida hace lo
+simétrico: si su transacción no se confirma, borra el archivo que acababa de escribir.
+
+**Las consultas de uso comparan por el nombre del archivo, no por la URL entera.** La URL lleva la
+base pública del entorno que la guardó, y esa base cambia: comparando URLs, un cambio de dominio
+habría dado todas las fotos por no usadas, y una limpieza lanzada desde las pruebas —que comparten
+la base de datos con el desarrollo y usan otra base pública— habría borrado las fotos del desarrollo.
+
+### La limpieza diaria
+
+A las 4:30, hora de Madrid (`app.fotos.limpieza-cron`), borra lo que tenga más de 24 horas: fotos a
+las que no apunta ningún `fotoUrl`, archivos en disco sin fila y temporales de subidas cortadas.
+Recorre el disco **antes** que las filas: en el orden contrario vería sin fila los archivos de las
+filas que ella misma acaba de quitar y los borraría antes del commit. Recoge también la foto que una
+publicación deja de usar al cambiarla, como la de un animal editado en `PUT /api/adopcion/{id}`.
+
+Es la primera tarea programada del proyecto (`@EnableScheduling`). La purga de tokens revocados lo
+evitó a propósito haciéndose en cada logout; aquí no se puede, porque encontrar archivos sin fila
+obliga a recorrer la carpeta entera.
+
+### Sobre `V14`
+
+`FOTO (nombre, usuario_id, tamanyo, created_at)`. La clave primaria es el nombre del archivo, el
+mismo que lleva la URL, como el `jti` de `TOKEN_REVOCADO` (`V8`). No guarda el tipo —lo dice la
+extensión, elegida por los bytes— ni qué filas usan la foto: eso se consulta en los `foto_url`
+existentes, en vez de mantener una segunda copia del mismo hecho en cinco services. Lleva un índice
+por `created_at` para la limpieza y ninguno por `usuario_id`, porque nada busca por él.
+
+### Configuración
+
+| Variable | Producción | Por defecto (desarrollo) |
+|---|---|---|
+| `FOTOS_DIR` | **Obligatoria**: el punto de montaje del volumen | `./uploads` |
+| `APP_FOTOS_URL_PUBLICA` | **Obligatoria y `https`**, o la aplicación no arranca | `http://localhost:8080/fotos` |
+| `FOTOS_LIMPIEZA_CRON` | Opcional | `0 30 4 * * *`; `-` la desactiva |
+
+La aplicación tampoco arranca si la carpeta no admite escritura, en vez de descubrirlo con la primera
+subida. Para el emulador de Android en local, la base pública es `http://10.0.2.2:8080/fotos`.
+
+### Limitaciones aceptadas
+
+| Limitación | Por qué se acepta |
+|---|---|
+| **Las fotos con URL externa anteriores a este bloque quedan fuera del borrado de RF-19** | Ver la fila en §20, *Limitaciones aceptadas*: hoy solo hay datos de desarrollo |
+| El cliente tiene que mandar la imagen ya girada | La orientación es un dato EXIF y se pierde al recodificar. Leerla en el servidor exige una dependencia nueva, y Android ya la aplica al comprimir un `Bitmap` |
+| La reducción por submuestreo se salta píxeles, y pierde algo de nitidez frente a un escalado suave | A cambio, la memoria queda acotada sea cual sea la foto. Para una pantalla de móvil no se nota |
+| Una sola réplica mientras las fotos vivan en un volumen | Railway no comparte un volumen entre instancias. Para la carga de este proyecto sobra; más réplicas exigirían almacenamiento externo |
+| `fotoUrl` se guarda como URL absoluta: si cambia el dominio, las URLs guardadas dejan de cargar | La limpieza no se confunde —compara por nombre—, pero las imágenes sí. Se evita con un dominio fijo o propio |
+| Una foto de más de un día sin usar puede borrarse justo mientras su dueño la está publicando | Exige usar una subida de hace más de un día en el segundo exacto de la limpieza, de madrugada |
+| Comprobar si una foto se usa recorre las columnas `foto_url`, que no tienen índice | Solo se pregunta al cambiar una foto de perfil, al dar de baja una cuenta y una vez al día. A este volumen, un índice costaría más de lo que ahorra |
+| `GET /fotos/{nombre}` es público | Una etiqueta `<img>` no manda la cabecera `Authorization`. Lo que impide recorrerlas es que el nombre es un UUID aleatorio |
+
+### Fuera de alcance, pendientes
+
+| Pendiente | Bloque |
+|---|---|
+| **No hay cupo de subidas por usuario.** Un usuario autenticado puede llenar el volumen subiendo fotos que nunca usa; la limpieza solo las borra pasado un día | Sin bloque asignado. Se resolvería con un límite diario por usuario, como el de matches (RF-24) |
+| WebP, miniaturas, o servir las fotos desde una CDN | Ninguno lo pide un requisito. WebP exige una dependencia nueva |
+| El despliegue en Railway: volumen, permisos del usuario `spring` sobre él y el `max-swallow-size` de Tomcat para que un archivo muy grande reciba un `413` limpio | Fase 9 de este mismo bloque |
