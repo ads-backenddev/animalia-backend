@@ -148,6 +148,20 @@ class AvistamientoControllerTest {
     }
 
     @Test
+    @DisplayName("Foto javascript: -> 400: fotoUrl acaba dentro de un <img src>")
+    void fotoNoHttpsDevuelve400() throws Exception {
+        mockMvc.perform(post("/api/avistamientos")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"alertaId":55,"descripcion":"Lo he visto","fotoUrl":"javascript:alert(1)",
+                                 "ubicacion":{"latitud":40.4,"longitud":-3.7}}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.codigo").value("VALIDACION"))
+                .andExpect(jsonPath("$.errores.fotoUrl").value("la foto debe ser una URL https:// válida"));
+    }
+
+    @Test
     @DisplayName("Latitud fuera de rango -> 400 señalando el campo anidado")
     void latitudFueraDeRangoDevuelve400() throws Exception {
         mockMvc.perform(post("/api/avistamientos")
