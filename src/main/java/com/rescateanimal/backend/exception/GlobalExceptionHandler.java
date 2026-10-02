@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.time.Instant;
@@ -75,6 +76,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(base(estado, codigoDe(estado), mensajeDe(estado), ruta(request)));
     }
 
+    /**
+     * 413 — el archivo de POST /api/fotos pasa de spring.servlet.multipart.
+     *
+     * Spring ya responde 413 por su cuenta; se sobrescribe para darle un código
+     * propio y un mensaje que diga el límite, en vez del genérico "ERROR".
+     */
+    @Override
+    protected ResponseEntity<Object> handleMaxUploadSizeExceededException(
+            MaxUploadSizeExceededException ex, HttpHeaders headers,
+            HttpStatusCode status, WebRequest request) {
+
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+                .body(base(HttpStatus.CONTENT_TOO_LARGE, "FOTO_DEMASIADO_GRANDE",
+                        "La foto no puede superar los 5 MB", ruta(request)));
+    }
+
     /** 400 — parámetro de ruta o query con un tipo que no encaja. */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> tipoIncorrecto(MethodArgumentTypeMismatchException ex,
@@ -92,6 +109,24 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> parametrosInvalidos(ParametrosInvalidosException ex,
                                                              WebRequest request) {
         return respuesta(HttpStatus.BAD_REQUEST, "PARAMETRO_INVALIDO", ex.getMessage(), request);
+    }
+
+    /** 400 — el archivo subido no es un JPEG o PNG que se pueda leer. */
+    @ExceptionHandler(FotoNoValidaException.class)
+    public ResponseEntity<ErrorResponse> fotoNoValida(FotoNoValidaException ex, WebRequest request) {
+        return respuesta(HttpStatus.BAD_REQUEST, "FOTO_NO_VALIDA", ex.getMessage(), request);
+    }
+
+    /**
+     * 400 — el fotoUrl no es una foto subida por quien la envía. Mismo cuerpo
+     * que un @Valid fallido sobre ese campo: para el cliente es lo mismo.
+     */
+    @ExceptionHandler(FotoUrlNoValidaException.class)
+    public ResponseEntity<ErrorResponse> fotoUrlNoValida(FotoUrlNoValidaException ex, WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.BAD_REQUEST, "VALIDACION",
+                "Los datos enviados no son válidos", ruta(request));
+        cuerpo.setErrores(Map.of("fotoUrl", ex.getMessage()));
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(cuerpo);
     }
 
     /** 400 — la operación no encaja en el dominio (deslizar lo propio, tipo no soportado). */
@@ -207,6 +242,17 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> limiteAlcanzado(LimiteMatchesAlcanzadoException ex,
                                                          WebRequest request) {
         ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_MATCHES_ALCANZADO",
+                ex.getMessage(), ruta(request));
+        cuerpo.setLimiteDiario(ex.getLimiteDiario());
+        cuerpo.setReiniciaEn(ex.getReiniciaEn());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
+    }
+
+    /** 429 — cupo diario de subidas de fotos agotado. Mismo cuerpo que el de matches. */
+    @ExceptionHandler(LimiteFotosAlcanzadoException.class)
+    public ResponseEntity<ErrorResponse> limiteFotosAlcanzado(LimiteFotosAlcanzadoException ex,
+                                                              WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_FOTOS_ALCANZADO",
                 ex.getMessage(), ruta(request));
         cuerpo.setLimiteDiario(ex.getLimiteDiario());
         cuerpo.setReiniciaEn(ex.getReiniciaEn());

@@ -81,6 +81,10 @@ public class SecurityConfig {
                         // 401 la conexión sin token válido (docs/api-rest.md §13).
                         // Esta ruta NO debe abrirse si aquel interceptor se retira.
                         .requestMatchers("/ws/**").permitAll()
+                        // Las fotos subidas se sirven sin token: una etiqueta <img> no
+                        // puede mandar la cabecera Authorization. Solo GET; subirlas
+                        // (POST /api/fotos) sigue exigiendo autenticación.
+                        .requestMatchers(HttpMethod.GET, "/fotos/*").permitAll()
                         .anyRequest().authenticated())
 
                 // Sin token válido se responde 401 seco, en vez del formulario de

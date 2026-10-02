@@ -1,6 +1,5 @@
 package com.rescateanimal.backend.dto.request;
 
-import com.rescateanimal.backend.dto.validation.UrlHttps;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -31,7 +30,6 @@ public class CrearAlertaRequest {
     private String descripcion;
 
     @Size(max = 500, message = "la URL de la foto no puede superar los 500 caracteres")
-    @UrlHttps
     private String fotoUrl;
 
     @NotBlank(message = "la especie es obligatoria")

@@ -1,16 +1,20 @@
 package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
+import com.rescateanimal.backend.FotosDePrueba;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
+import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.repository.ValoracionRepository;
+import com.rescateanimal.backend.service.AlmacenFotosService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -79,6 +83,13 @@ class DirectorioProtectorasFlujoCompletoTest {
 
     @LocalServerPort
     private int puerto;
+
+    @Autowired
+    private FotoRepository fotoRepository;
+    @Autowired
+    private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
+    @Autowired
+    private AlmacenFotosService almacenFotos;
 
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -166,6 +177,7 @@ class DirectorioProtectorasFlujoCompletoTest {
                 .toList());
         animalAdopcionRepository.deleteAllById(animalesCreados);
         protectoraRepository.deleteAllById(protectorasCreadas);
+        FotosDePrueba.borrarLasDe(usuariosCreados, fotoRepository, limiteFotoDiarioRepository, almacenFotos);
         usuarioRepository.deleteAllById(usuariosCreados);
     }
 
@@ -698,8 +710,8 @@ class DirectorioProtectorasFlujoCompletoTest {
         HttpResponse<String> alta = enviar("POST", "/api/adopcion", token, """
                 {"nombre":"%s","especie":"perro","tamanyo":"MEDIANO",
                  "descripcion":"Cariñosa y tranquila, busca familia",
-                 "fotoUrl":"https://example.test/foto.jpg","zonaGeografica":"%s"}
-                """.formatted(nombre, zona));
+                 "fotoUrl":"%s","zonaGeografica":"%s"}
+                """.formatted(nombre, FotosDePrueba.subir(http, puerto, token), zona));
         assertThat(alta.statusCode()).isEqualTo(201);
         return numero(alta.body(), "$.id");
     }

@@ -1,6 +1,5 @@
 package com.rescateanimal.backend.dto.request;
 
-import com.rescateanimal.backend.dto.validation.UrlHttps;
 import com.rescateanimal.backend.model.enums.Tamanyo;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -51,7 +50,6 @@ public class CrearAnimalRequest {
      */
     @NotBlank(message = "la foto es obligatoria")
     @Size(max = 500, message = "la URL de la foto no puede superar los 500 caracteres")
-    @UrlHttps
     private String fotoUrl;
 
     @NotBlank(message = "la zona geográfica es obligatoria")

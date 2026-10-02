@@ -67,6 +67,7 @@ public class UsuarioService {
     private final AnimalAdopcionService animalAdopcionService;
     private final PasswordEncoder passwordEncoder;
     private final AnonimizacionService anonimizacion;
+    private final FotoService fotoService;
 
     // ---------------------------------------------------------------------
     // Perfil (RF-02, RF-18)
@@ -94,10 +95,28 @@ public class UsuarioService {
     public UsuarioResponse actualizarPerfil(Long usuarioId, ActualizarPerfilRequest peticion) {
         Usuario usuario = exigirUsuario(usuarioId);
 
+        // Solo se comprueba una foto nueva: reenviar la que ya tiene el perfil
+        // —el cliente manda el perfil entero— no debe fallar aunque sea de antes
+        // de /api/fotos. Va antes de tocar ningún campo, para que un 400 no deje
+        // la entidad a medio modificar.
+        String fotoUrl = limpiar(peticion.getFotoUrl());
+        if (fotoUrl != null && !fotoUrl.equals(usuario.getFotoUrl())) {
+            fotoService.exigirPropia(fotoUrl, usuarioId);
+        }
+
+        String fotoAnterior = usuario.getFotoUrl();
+
         usuario.setNombre(peticion.getNombre().trim());
         usuario.setTelefono(limpiar(peticion.getTelefono()));
         usuario.setAreaGeografica(limpiar(peticion.getAreaGeografica()));
-        usuario.setFotoUrl(limpiar(peticion.getFotoUrl()));
+        usuario.setFotoUrl(fotoUrl);
+
+        // La foto que se cambia o se quita deja de publicarse: si no, cada foto de
+        // perfil antigua seguiría servida para siempre y la baja (RF-19) solo
+        // borraría la última.
+        if (fotoAnterior != null && !fotoAnterior.equals(fotoUrl)) {
+            fotoService.retirar(fotoAnterior, usuarioId);
+        }
 
         log.debug("Perfil actualizado del usuario {}", usuarioId);
         return aResponse(usuario);
@@ -147,11 +166,16 @@ public class UsuarioService {
      * - passwordHash: un valor sin formato BCrypt, con el que ningún login puede
      *   acertar. La columna es NOT NULL, de ahí que se ponga algo.
      * - teléfono y foto: a null. Son datos personales sin ninguna función en el
-     *   histórico.
+     *   histórico. La foto de perfil, además, deja de existir: su fila se borra
+     *   con esta transacción y su archivo justo después (FotoService.retirar).
+     *   Las fotos de sus alertas y avistamientos NO: son fotos de animales y
+     *   forman parte del histórico que la otra parte necesita ver.
      * - activo: false, que es lo que cierra las sesiones vivas.
      *
      * NO SE TOCA NADA MÁS: ni el rol, ni la fecha de alta, ni una sola fila de las
-     * nueve tablas que apuntan aquí. El histórico se conserva entero.
+     * tablas que apuntan aquí, con una única excepción: la fila de FOTO de su foto
+     * de perfil, que es la propia foto que se borra. El histórico se conserva
+     * entero, fotos de sus publicaciones incluidas.
      *
      * Es irrepetible en la práctica: una cuenta ya anonimizada no puede volver a
      * pasar por aquí, porque su credencial ya no valida ninguna contraseña y su
@@ -174,7 +198,11 @@ public class UsuarioService {
         usuario.setEmail(anonimizacion.emailAnonimizado(usuario.getEmail()));
         usuario.setPasswordHash(anonimizacion.hashInutilizable());
         usuario.setTelefono(null);
+        String foto = usuario.getFotoUrl();
         usuario.setFotoUrl(null);
+        if (foto != null) {
+            fotoService.retirar(foto, usuarioId);
+        }
         usuario.setActivo(false);
 
         // No se registra ni el email ni el nombre: la baja es justo el momento en

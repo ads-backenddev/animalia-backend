@@ -1,6 +1,5 @@
 package com.rescateanimal.backend.dto.request;
 
-import com.rescateanimal.backend.dto.validation.UrlHttps;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -33,7 +32,6 @@ public class CrearAvistamientoRequest {
      */
     @NotBlank(message = "la foto es obligatoria para poder identificar al animal")
     @Size(max = 500, message = "la URL de la foto no puede superar los 500 caracteres")
-    @UrlHttps
     private String fotoUrl;
 
     @NotNull(message = "la ubicación es obligatoria")

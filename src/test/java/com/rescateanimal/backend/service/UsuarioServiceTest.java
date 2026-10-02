@@ -3,6 +3,7 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.dto.request.ActualizarPerfilRequest;
 import com.rescateanimal.backend.dto.response.UsuarioResponse;
 import com.rescateanimal.backend.exception.CredencialesInvalidasException;
+import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Protectora;
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,6 +59,8 @@ class UsuarioServiceTest {
     private static final String CLAVE = "passw0rd123";
 
     @Mock
+    private FotoService fotoService;
+    @Mock
     private UsuarioRepository usuarioRepository;
     @Mock
     private ProtectoraRepository protectoraRepository;
@@ -74,7 +78,7 @@ class UsuarioServiceTest {
         // demostrar es que el email resultante es irreversible y determinista, y
         // con un mock eso solo diría que se llama a quien hay que llamar.
         usuarioService = new UsuarioService(usuarioRepository, protectoraRepository,
-                animalAdopcionService, passwordEncoder, new AnonimizacionService());
+                animalAdopcionService, passwordEncoder, new AnonimizacionService(), fotoService);
 
         usuario = ciudadano();
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario));
@@ -117,6 +121,50 @@ class UsuarioServiceTest {
             assertThat(respuesta.getTelefono()).isNull();
             assertThat(respuesta.getAreaGeografica()).isNull();
             assertThat(respuesta.getFotoUrl()).isNull();
+        }
+
+        @Test
+        @DisplayName("Reenviar la foto que ya tiene el perfil no la comprueba ni la retira")
+        void laMismaFotoNoSeComprueba() {
+            usuarioService.actualizarPerfil(ID_USUARIO,
+                    new ActualizarPerfilRequest("Ana", null, null, "https://example.test/ana.jpg"));
+
+            verify(fotoService, never()).exigirPropia(any(), any());
+            verify(fotoService, never()).retirar(any(), any());
+        }
+
+        @Test
+        @DisplayName("Cambiar la foto retira la anterior")
+        void cambiarLaFotoRetiraLaAnterior() {
+            String nueva = "https://fotos.test/fotos/3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+
+            usuarioService.actualizarPerfil(ID_USUARIO, new ActualizarPerfilRequest("Ana", null, null, nueva));
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+            assertThat(usuario.getFotoUrl()).isEqualTo(nueva);
+        }
+
+        @Test
+        @DisplayName("Quitar la foto también la retira")
+        void quitarLaFotoLaRetira() {
+            usuarioService.actualizarPerfil(ID_USUARIO, new ActualizarPerfilRequest("Ana", null, null, " "));
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+            assertThat(usuario.getFotoUrl()).isNull();
+        }
+
+        @Test
+        @DisplayName("Una foto nueva tiene que ser del propio usuario, y si no, el perfil no cambia")
+        void unaFotoNuevaSeComprueba() {
+            String nueva = "https://fotos.test/fotos/3f1c2a9e-0b7d-4c55-9a8e-6d2f1b0c7e4a.jpg";
+            doThrow(new FotoUrlNoValidaException("ajena")).when(fotoService).exigirPropia(nueva, ID_USUARIO);
+
+            assertThatThrownBy(() -> usuarioService.actualizarPerfil(ID_USUARIO,
+                    new ActualizarPerfilRequest("Otro nombre", null, null, nueva)))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            assertThat(usuario.getNombre()).isNotEqualTo("Otro nombre");
+            assertThat(usuario.getFotoUrl()).isEqualTo("https://example.test/ana.jpg");
         }
 
         @Test
@@ -198,6 +246,25 @@ class UsuarioServiceTest {
                     .as("el email original no puede quedar en ninguna parte")
                     .doesNotContain("ana")
                     .doesNotContain("test.es");
+        }
+
+        @Test
+        @DisplayName("La foto de perfil se retira, no solo se desenlaza")
+        void laBajaRetiraLaFotoDePerfil() {
+            usuarioService.eliminarCuenta(ID_USUARIO, CLAVE);
+
+            verify(fotoService).retirar("https://example.test/ana.jpg", ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("Sin la contraseña correcta la foto tampoco se toca")
+        void sinLaClaveNoSeRetiraLaFoto() {
+            when(passwordEncoder.matches(anyString(), anyString())).thenReturn(false);
+
+            assertThatThrownBy(() -> usuarioService.eliminarCuenta(ID_USUARIO, "otra-clave"))
+                    .isInstanceOf(CredencialesInvalidasException.class);
+
+            verify(fotoService, never()).retirar(any(), any());
         }
 
         @Test

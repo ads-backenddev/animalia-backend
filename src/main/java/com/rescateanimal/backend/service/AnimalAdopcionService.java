@@ -52,6 +52,7 @@ public class AnimalAdopcionService {
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final ProtectoraRepository protectoraRepository;
     private final ValoracionService valoracionService;
+    private final FotoService fotoService;
 
     /** Tamaño de la tanda que devuelve el feed de swipe (RF-09). */
     private final int tamanyoFeed;
@@ -59,10 +60,12 @@ public class AnimalAdopcionService {
     public AnimalAdopcionService(AnimalAdopcionRepository animalAdopcionRepository,
                                  ProtectoraRepository protectoraRepository,
                                  ValoracionService valoracionService,
+                                 FotoService fotoService,
                                  @Value("${app.adopcion.tamanyo-feed}") int tamanyoFeed) {
         this.animalAdopcionRepository = animalAdopcionRepository;
         this.protectoraRepository = protectoraRepository;
         this.valoracionService = valoracionService;
+        this.fotoService = fotoService;
         this.tamanyoFeed = tamanyoFeed;
     }
 
@@ -80,6 +83,8 @@ public class AnimalAdopcionService {
     @Transactional
     public AnimalAdopcionResponse publicar(CrearAnimalRequest peticion, Long usuarioId) {
         Protectora protectora = protectoraDe(usuarioId);
+        String fotoUrl = peticion.getFotoUrl().trim();
+        fotoService.exigirPropia(fotoUrl, usuarioId);
 
         AnimalAdopcion animal = new AnimalAdopcion();
         animal.setProtectora(protectora);
@@ -87,7 +92,7 @@ public class AnimalAdopcionService {
         animal.setEspecie(peticion.getEspecie().trim());
         animal.setTamanyo(peticion.getTamanyo());
         animal.setDescripcion(peticion.getDescripcion().trim());
-        animal.setFotoUrl(peticion.getFotoUrl().trim());
+        animal.setFotoUrl(fotoUrl);
         animal.setZonaGeografica(peticion.getZonaGeografica().trim());
         animal.setEstado(EstadoAnimal.DISPONIBLE);
 
@@ -112,11 +117,19 @@ public class AnimalAdopcionService {
 
         AnimalAdopcion animal = exigirPropietaria(animalId, usuarioId);
 
+        // La edición manda siempre la foto, cambie o no. Solo se comprueba si
+        // cambia: la que ya tiene el animal se comprobó al ponerla, y exigirlo
+        // de nuevo impediría editar un animal publicado antes de /api/fotos.
+        String fotoUrl = peticion.getFotoUrl().trim();
+        if (!fotoUrl.equals(animal.getFotoUrl())) {
+            fotoService.exigirPropia(fotoUrl, usuarioId);
+        }
+
         animal.setNombre(peticion.getNombre().trim());
         animal.setEspecie(peticion.getEspecie().trim());
         animal.setTamanyo(peticion.getTamanyo());
         animal.setDescripcion(peticion.getDescripcion().trim());
-        animal.setFotoUrl(peticion.getFotoUrl().trim());
+        animal.setFotoUrl(fotoUrl);
         animal.setZonaGeografica(peticion.getZonaGeografica().trim());
 
         log.info("Animal {} actualizado por la protectora del usuario {}", animalId, usuarioId);

@@ -183,12 +183,16 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_URL` | `jdbc:postgresql://localhost:5432/rescate_animal` | URL JDBC de PostgreSQL |
 | `DB_USER` | `rescate` | Usuario de la base de datos |
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
-| `JPA_DDL_AUTO` | `update` | Estrategia de esquema de Hibernate |
+| `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
 | `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
 | `SERVER_PORT` | `8080` | Puerto de la API |
 | `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción |
+| `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
+| `APP_FOTOS_URL_PUBLICA` | `http://localhost:8080/fotos` | Base de las URLs de las fotos. **Obligatoria y `https` en producción** |
+| `FOTOS_LIMITE_DIARIO` | `25` | Subidas de fotos por usuario y día |
+| `FOTOS_LIMPIEZA_CRON` | `0 30 4 * * *` | Hora de la limpieza diaria de fotos sin uso (Europe/Madrid); `-` la desactiva |
 
 En el perfil `prod` los secretos **no tienen valor por defecto**: si falta una variable, la
 aplicación no arranca en lugar de usar una credencial de desarrollo.
@@ -202,6 +206,31 @@ configuración versionado con credenciales es `.env.example`, y solo lleva marca
 | `.env` | Docker Compose, para crear la base de datos | No |
 | `.env.example` | Nadie: es la plantilla de `.env` | Sí, sin credenciales reales |
 | `application-local.properties` | Spring Boot con el perfil `local` | No |
+
+## Despliegue en Railway: el volumen de fotos
+
+Railway construye la imagen con el `Dockerfile`. Las fotos que suben los usuarios se guardan en disco,
+y el disco de un contenedor se pierde en cada despliegue: **sin un volumen, cada despliegue borra todas
+las fotos**. Para configurarlo, en el servicio de la aplicación:
+
+1. **Añadir un volumen** con punto de montaje `/data`.
+2. **Variables**: `FOTOS_DIR=/data/fotos` y `APP_FOTOS_URL_PUBLICA=https://<dominio público del
+   servicio>/fotos`. El dominio tiene que ser estable: las URLs se guardan completas, y si cambia, las
+   fotos ya publicadas dejan de cargar.
+3. **Una sola réplica.** Un volumen no se comparte entre instancias.
+4. **No hace falta `RAILWAY_RUN_UID=0`.** Railway monta el volumen como root, y la imagen ya lo
+   resuelve: `docker-entrypoint.sh` crea `/data/fotos`, se la da al usuario `spring` y arranca la
+   aplicación como `spring`, nunca como root. `RAILWAY_RUN_UID=0` la ejecutaría entera como root.
+
+Comprobación tras desplegar: el log de arranque debe decir `Fotos en /data/fotos`. Si en su lugar la
+aplicación no arranca con `No se pudo crear la carpeta de fotos` o `La carpeta de fotos no admite
+escritura`, el volumen no está montado donde dice `FOTOS_DIR` o no tiene permisos. Falla al
+arrancar a propósito, para no descubrirlo con la primera subida de un usuario.
+
+Esto se ha probado en local reproduciendo lo que hace Railway: la imagen en perfil `prod` con un
+volumen de Docker montado como root en `/data`. La imagen anterior no arrancaba (`AccessDeniedException`
+al crear `/data/fotos`); la actual arranca, sirve las fotos, las conserva al volver a crear el
+contenedor y se para limpiamente.
 
 ## Convención de commits
 
@@ -256,13 +285,20 @@ git merge --no-ff feature/publicar-alertas
 
 ## Estado actual
 
+El backend está construido salvo lo que señala la columna de estado. Lo pendiente está detallado en
+`docs/api-rest.md`, §20 («El SRS no queda cubierto al cien por cien» y «Trabajo futuro»).
+
 | Bloque | Estado |
 |---|---|
-| Estructura por capas, 12 entidades JPA, infraestructura Docker, contrato en `docs/api-rest.md` | Terminado |
+| Estructura por capas, 15 entidades JPA, esquema versionado con Flyway (`V1`–`V15`), Docker, contrato en `docs/api-rest.md` | Terminado |
 | Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
-| Alertas de mascota perdida, mapa en tiempo real por STOMP y detección de duplicados (RF-03, RF-04, RF-14, RF-25) | Terminado |
-| Notificaciones de zona (RF-05) | Solo persistencia; el envío *push* se conectará cuando exista la app Android que lo consuma |
-| Avistamientos, matches, chat, adopción, protectoras, reportes y panel de administración | Pendiente |
-
-El resto de endpoints se implementa uno a uno sobre `docs/api-rest.md`, que sigue siendo el contrato
-de referencia.
+| Perfil, idioma y baja de cuenta con anonimización (RF-02, RF-18, RF-19) | Terminado |
+| Alertas: publicación, mapa en tiempo real por STOMP, detección de duplicados y cierre (RF-03, RF-04, RF-14, RF-25) | Terminado, **salvo cuatro endpoints**: listado paginado, detalle con avistamientos, editar y retirar (§4) |
+| Avistamientos y su feed de swipe (RF-21) | Terminado, salvo `GET /api/avistamientos/{id}` (§5) |
+| Matches, descarte y límite diario (RF-08, RF-09, RF-15, RF-24) | Terminado |
+| Chat en tiempo real (RF-12) | Terminado |
+| Adopción: publicación, catálogo con filtros, feed y confirmación (RF-07, RF-20, RF-22) | Terminado |
+| Protectoras: directorio, ficha, valoraciones y panel (RF-06, RF-10, RF-23) | Terminado, **salvo los dos endpoints de contacto** de RF-06 (§9) |
+| Reportes y administración (RF-11, RF-26) | Terminado |
+| Subida de fotos: almacenamiento propio, borrado en la baja, limpieza diaria y cupo (§21) | Terminado |
+| Notificaciones (RF-05) | **Solo persistencia**: no hay `GET /api/notificaciones` ni entrega en vivo ni *push*, que se diseñará con la app Android delante (§12, §20) |

@@ -42,6 +42,7 @@ public class AvistamientoService {
     private final AvistamientoRepository avistamientoRepository;
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
+    private final FotoService fotoService;
 
     private final int tamanyoFeed;
 
@@ -51,10 +52,12 @@ public class AvistamientoService {
     public AvistamientoService(AvistamientoRepository avistamientoRepository,
                                AlertaRepository alertaRepository,
                                UsuarioRepository usuarioRepository,
+                               FotoService fotoService,
                                @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed) {
         this.avistamientoRepository = avistamientoRepository;
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
+        this.fotoService = fotoService;
         this.tamanyoFeed = tamanyoFeed;
     }
 
@@ -71,6 +74,9 @@ public class AvistamientoService {
      */
     @Transactional
     public AvistamientoResponse registrar(CrearAvistamientoRequest peticion, Long autorId) {
+        String fotoUrl = peticion.getFotoUrl().strip();
+        fotoService.exigirPropia(fotoUrl, autorId);
+
         Alerta alerta = alertaRepository.findById(peticion.getAlertaId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "La alerta " + peticion.getAlertaId() + " no existe"));
@@ -87,7 +93,7 @@ public class AvistamientoService {
         avistamiento.setUsuario(autor);
         avistamiento.setAlerta(alerta);
         avistamiento.setDescripcion(peticion.getDescripcion());
-        avistamiento.setFotoUrl(peticion.getFotoUrl());
+        avistamiento.setFotoUrl(fotoUrl);
         avistamiento.setUbicacion(aPunto(peticion.getUbicacion()));
         // Nace visible; solo el administrador lo retira (RF-11). El estado se
         // fija aquí y no con un DEFAULT en la columna para que la decisión viva
