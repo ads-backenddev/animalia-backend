@@ -5,12 +5,10 @@ import com.rescateanimal.backend.dto.response.ProtectoraAdminResponse;
 import com.rescateanimal.backend.dto.response.UsuarioAdminResponse;
 import com.rescateanimal.backend.exception.AutobloqueoException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
-import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
-import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoProtectora;
@@ -18,7 +16,6 @@ import com.rescateanimal.backend.model.enums.EstadoReporte;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoContenido;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
-import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
@@ -50,6 +47,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -79,7 +77,7 @@ class AdminServiceTest {
     @Mock
     private ReporteRepository reporteRepository;
     @Mock
-    private AlertaRepository alertaRepository;
+    private AlertaService alertaService;
     @Mock
     private AvistamientoRepository avistamientoRepository;
     @Mock
@@ -94,7 +92,7 @@ class AdminServiceTest {
     @BeforeEach
     void prepararServicio() {
         admin = new AdminService(usuarioRepository, protectoraRepository, reporteRepository,
-                alertaRepository, avistamientoRepository, animalAdopcionRepository,
+                alertaService, avistamientoRepository, animalAdopcionRepository,
                 animalAdopcionService, notificacionService);
     }
 
@@ -541,18 +539,13 @@ class AdminServiceTest {
     class Retirada {
 
         @Test
-        @DisplayName("Una alerta pasa a ELIMINADA, y la fila sigue ahí")
-        void laAlertaSeRetiraSinBorrarse() {
-            Alerta alerta = new Alerta();
-            alerta.setId(ID_PUBLICACION);
-            alerta.setEstado(EstadoAlerta.ACTIVA);
-            when(alertaRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(alerta));
-
+        @DisplayName("Una alerta la retira AlertaService, que es quien quita su marcador del mapa")
+        void laAlertaSeRetiraEnSuService() {
             admin.retirarPublicacion(TipoContenido.ALERTA, ID_PUBLICACION, ID_ADMIN);
 
-            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ELIMINADA);
-            verify(alertaRepository, never()).delete(any(Alerta.class));
-            verify(alertaRepository, never()).deleteById(any());
+            // Qué estado deja y que no borra la fila se prueba en AlertaServiceTest,
+            // donde vive ahora la transición.
+            verify(alertaService).retirarPorModeracion(ID_PUBLICACION, ID_ADMIN);
         }
 
         @Test
@@ -589,11 +582,6 @@ class AdminServiceTest {
         @Test
         @DisplayName("El tipo elige la tabla: retirar una alerta no toca las otras dos")
         void elTipoEligeLaTabla() {
-            Alerta alerta = new Alerta();
-            alerta.setId(ID_PUBLICACION);
-            alerta.setEstado(EstadoAlerta.ACTIVA);
-            when(alertaRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(alerta));
-
             admin.retirarPublicacion(TipoContenido.ALERTA, ID_PUBLICACION, ID_ADMIN);
 
             // El mismo id existe en las tres tablas; sin el discriminador esto
@@ -604,14 +592,13 @@ class AdminServiceTest {
         @Test
         @DisplayName("Retirar lo ya retirado no cambia nada, en los tres tipos")
         void retirarEsIdempotente() {
-            Alerta alerta = new Alerta();
-            alerta.setEstado(EstadoAlerta.ELIMINADA);
             Avistamiento avistamiento = new Avistamiento();
             avistamiento.setEstado(EstadoAvistamiento.ELIMINADO);
             AnimalAdopcion animal = new AnimalAdopcion();
             animal.setEstado(EstadoAnimal.RETIRADO);
 
-            when(alertaRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(alerta));
+            // La alerta ya retirada la resuelve AlertaService, que devuelve false.
+            when(alertaService.retirarPorModeracion(ID_PUBLICACION, ID_ADMIN)).thenReturn(false);
             when(avistamientoRepository.findById(ID_PUBLICACION))
                     .thenReturn(Optional.of(avistamiento));
             when(animalAdopcionRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(animal));
@@ -620,7 +607,6 @@ class AdminServiceTest {
                 admin.retirarPublicacion(tipo, ID_PUBLICACION, ID_ADMIN);
             }
 
-            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ELIMINADA);
             assertThat(avistamiento.getEstado()).isEqualTo(EstadoAvistamiento.ELIMINADO);
             assertThat(animal.getEstado()).isEqualTo(EstadoAnimal.RETIRADO);
         }
@@ -641,7 +627,8 @@ class AdminServiceTest {
             // estados de protectora: que nadie resuelva esa rotura de compilación
             // metiendo un default que no haga nada.
             for (TipoContenido tipo : TipoContenido.values()) {
-                when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+                doThrow(new ResourceNotFoundException("La alerta no existe"))
+                        .when(alertaService).retirarPorModeracion(anyLong(), anyLong());
                 when(avistamientoRepository.findById(anyLong())).thenReturn(Optional.empty());
                 when(animalAdopcionRepository.findById(anyLong())).thenReturn(Optional.empty());
 
@@ -654,7 +641,8 @@ class AdminServiceTest {
         @Test
         @DisplayName("Una publicación inexistente da 404 en cualquiera de los tres tipos")
         void publicacionInexistenteDa404() {
-            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+            doThrow(new ResourceNotFoundException("La alerta no existe"))
+                    .when(alertaService).retirarPorModeracion(anyLong(), anyLong());
             when(avistamientoRepository.findById(anyLong())).thenReturn(Optional.empty());
             when(animalAdopcionRepository.findById(anyLong())).thenReturn(Optional.empty());
 
@@ -672,10 +660,6 @@ class AdminServiceTest {
         @Test
         @DisplayName("Retirar una publicación no notifica a nadie: el aviso es RF-26, no RF-11")
         void retirarNoNotifica() {
-            Alerta alerta = new Alerta();
-            alerta.setEstado(EstadoAlerta.ACTIVA);
-            when(alertaRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(alerta));
-
             admin.retirarPublicacion(TipoContenido.ALERTA, ID_PUBLICACION, ID_ADMIN);
 
             // REPORTE_RESUELTO se manda al que reportó, no al autor de la

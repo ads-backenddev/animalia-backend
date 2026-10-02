@@ -7,13 +7,11 @@ import com.rescateanimal.backend.dto.response.ReporteResponse;
 import com.rescateanimal.backend.dto.response.UsuarioAdminResponse;
 import com.rescateanimal.backend.exception.AutobloqueoException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
-import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Reporte;
 import com.rescateanimal.backend.model.Usuario;
-import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.EstadoProtectora;
@@ -21,7 +19,6 @@ import com.rescateanimal.backend.model.enums.EstadoReporte;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoContenido;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
-import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
@@ -71,7 +68,7 @@ public class AdminService {
     private final UsuarioRepository usuarioRepository;
     private final ProtectoraRepository protectoraRepository;
     private final ReporteRepository reporteRepository;
-    private final AlertaRepository alertaRepository;
+    private final AlertaService alertaService;
     private final AvistamientoRepository avistamientoRepository;
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final AnimalAdopcionService animalAdopcionService;
@@ -406,7 +403,9 @@ public class AdminService {
     @Transactional
     public void retirarPublicacion(TipoContenido tipo, Long publicacionId, Long adminId) {
         boolean retirada = switch (tipo) {
-            case ALERTA -> retirarAlerta(publicacionId, adminId);
+            // La alerta la retira su propio service, que es quien sabe que hay que
+            // quitar el marcador del mapa (AlertaService.retirarPorModeracion).
+            case ALERTA -> alertaService.retirarPorModeracion(publicacionId, adminId);
             case AVISTAMIENTO -> retirarAvistamiento(publicacionId, adminId);
             case ADOPCION -> retirarAnimal(publicacionId, adminId);
         };
@@ -414,22 +413,6 @@ public class AdminService {
         if (!retirada) {
             log.debug("La publicación {} de tipo {} ya estaba retirada", publicacionId, tipo);
         }
-    }
-
-    /** @return true si esta llamada la retiró, false si ya lo estaba. */
-    private boolean retirarAlerta(Long alertaId, Long adminId) {
-        Alerta alerta = alertaRepository.findById(alertaId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "La alerta " + alertaId + " no existe"));
-
-        if (alerta.getEstado() == EstadoAlerta.ELIMINADA) {
-            return false;
-        }
-
-        alerta.setEstado(EstadoAlerta.ELIMINADA);
-        log.warn("El administrador {} ha retirado la alerta {} por incumplir las normas",
-                adminId, alertaId);
-        return true;
     }
 
     /** @return true si esta llamada lo retiró, false si ya lo estaba. */

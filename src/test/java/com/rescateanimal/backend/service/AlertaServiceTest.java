@@ -369,6 +369,62 @@ class AlertaServiceTest {
     }
 
     @Nested
+    @DisplayName("Retirada por moderación (RF-11)")
+    class Moderacion {
+
+        @Test
+        @DisplayName("Una ACTIVA pasa a ELIMINADA, sin borrarse, y su marcador sale del mapa")
+        void activaSaleDelMapa() {
+            Alerta alerta = alertaExistente(5L);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThat(alertaService.retirarPorModeracion(5L, 99L)).isTrue();
+
+            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ELIMINADA);
+            verify(alertaRepository, never()).delete(any(Alerta.class));
+            verify(alertaRepository, never()).deleteById(any());
+            ArgumentCaptor<EventoMapaResponse> evento = ArgumentCaptor.forClass(EventoMapaResponse.class);
+            verify(mensajeria).convertAndSend(eq(AlertaService.CANAL_MAPA), evento.capture());
+            assertThat(evento.getValue().getAccion()).isEqualTo(EventoMapaResponse.Accion.CIERRE);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Una ENCONTRADA o RETIRADA también pasa a ELIMINADA, sin evento: ya no estaba en el mapa")
+        @EnumSource(value = EstadoAlerta.class, names = {"ENCONTRADA", "RETIRADA"})
+        void terminadaPasaAEliminada(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(estado);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThat(alertaService.retirarPorModeracion(5L, 99L)).isTrue();
+
+            assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ELIMINADA);
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Retirar otra vez una ELIMINADA no cambia nada")
+        void idempotente() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(EstadoAlerta.ELIMINADA);
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+
+            assertThat(alertaService.retirarPorModeracion(5L, 99L)).isFalse();
+
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        @Test
+        @DisplayName("Una alerta inexistente da 404")
+        void inexistente() {
+            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> alertaService.retirarPorModeracion(123L, 99L))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    @Nested
     @DisplayName("La foto tiene que ser del autor")
     class FotoDelAutor {
 

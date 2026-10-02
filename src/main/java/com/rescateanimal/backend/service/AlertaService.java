@@ -282,6 +282,56 @@ public class AlertaService {
         return aAlertaResponse(alerta);
     }
 
+    // ---------------------------------------------------------------------
+    // Moderación (RF-11)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Retira una alerta por incumplir las normas: pasa a ELIMINADA. La llama
+     * AdminService, que decide qué se modera; aquí vive porque cambiar el estado
+     * de una alerta tiene consecuencias que solo conoce este service —el mapa—,
+     * como pasa con AnimalAdopcionService.retirarTodosLosDisponibles.
+     *
+     * SI ESTABA EN EL MAPA, SE EMITE CIERRE. Antes la retirada vivía en
+     * AdminService y no lo hacía: el marcador de una alerta moderada seguía en
+     * el mapa de quien lo tuviera abierto hasta que recargara.
+     *
+     * Una RETIRADA por su dueño también pasa a ELIMINADA: la sanción es la
+     * información más fuerte de las dos y no debe perderse. Ninguna fila se
+     * borra (ver AdminService.retirarPublicacion).
+     *
+     * @return true si esta llamada la retiró, false si ya estaba ELIMINADA
+     */
+    @Transactional
+    public boolean retirarPorModeracion(Long alertaId, Long adminId) {
+        Alerta alerta = alertaRepository.findById(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta " + alertaId + " no existe"));
+
+        boolean cambia = switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA, RETIRADA -> true;
+            case ELIMINADA -> false;
+        };
+        if (!cambia) {
+            return false;
+        }
+
+        boolean estabaEnElMapa = seVeEnElMapa(alerta.getEstado());
+        alerta.setEstado(EstadoAlerta.ELIMINADA);
+        log.warn("El administrador {} ha retirado la alerta {} por incumplir las normas", adminId, alertaId);
+        if (estabaEnElMapa) {
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+        }
+        return true;
+    }
+
+    /** Solo una ACTIVA tiene marcador en el mapa (RF-04). */
+    private static boolean seVeEnElMapa(EstadoAlerta estado) {
+        return switch (estado) {
+            case ACTIVA -> true;
+            case ENCONTRADA, RETIRADA, ELIMINADA -> false;
+        };
+    }
+
     /** La alerta, si existe (404) y si es de este usuario (403). */
     private Alerta exigirAlertaPropia(Long alertaId, Long usuarioId, String mensajeSiAjena) {
         Alerta alerta = alertaRepository.findById(alertaId)
