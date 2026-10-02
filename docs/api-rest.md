@@ -124,15 +124,33 @@ límite diario*.
 
 ### Fotos (`fotoUrl`)
 
-La API no recibe archivos: todo campo `fotoUrl` es una URL que el cliente ya tiene alojada. Debe
-ser **`https://` absoluta, con host y sin credenciales** (`https://usuario@host/...` se rechaza);
-cualquier otra cosa —`http://`, `javascript:`, `data:`, una ruta relativa— devuelve `400`
-`VALIDACION` con `errores.fotoUrl`. Los campos opcionales siguen admitiendo `null`, y en
+Las fotos se suben en dos pasos:
+
+1. **`POST /api/fotos`** (autenticado, `multipart/form-data`, parte `archivo`) recibe el archivo y
+   responde `201` con `{ "url": "https://<dominio>/fotos/<uuid>.jpg" }`, la misma URL en `Location`.
+   Es el **único endpoint de la API que recibe archivos**.
+2. El cliente pone esa URL en el campo `fotoUrl` del perfil, la alerta, el avistamiento o el animal.
+   Esos endpoints siguen recibiendo JSON y no cambian.
+
+Lo que se acepta en la subida:
+
+- **JPEG o PNG, decidido por los bytes del archivo**, no por su nombre ni por el `Content-Type` que
+  declare el cliente. Cualquier otra cosa, o una imagen que no se pueda decodificar, es `400`
+  `FOTO_NO_VALIDA`.
+- **5 MB como máximo.** Por encima, `413` `FOTO_DEMASIADO_GRANDE`.
+- **Se guarda recodificada, no tal como llega**: sin EXIF ni ningún otro metadato —tampoco las
+  coordenadas GPS de donde se hizo la foto— y con el lado mayor reducido a 2048 px si lo supera.
+  Como la orientación también es un dato EXIF, **el cliente debe enviar la imagen ya girada**.
+
+`fotoUrl` debe ser **`https://` absoluta, con host y sin credenciales** (`https://usuario@host/...`
+se rechaza); cualquier otra cosa —`http://`, `javascript:`, `data:`, una ruta relativa— devuelve
+`400` `VALIDACION` con `errores.fotoUrl`. Los campos opcionales siguen admitiendo `null`, y en
 `PUT /api/usuarios/me` una cadena vacía quita la foto.
 
-> **Pendiente:** de dónde sale esa URL —subida al propio backend o Firebase Storage desde el
-> cliente— está sin decidir, y con ello el borrado del archivo cuando una cuenta se anonimiza
-> (RF-19): hoy la baja solo vacía la columna.
+> **En construcción** (rama `feature/subida-fotos`): todavía falta servir los archivos subidos
+> (`GET /fotos/{nombre}`), exigir que `fotoUrl` apunte a una foto subida por el propio usuario a
+> `/api/fotos` —hoy vale cualquier URL `https`—, y borrar el archivo de la foto de perfil al
+> cambiarla o al anonimizar la cuenta (RF-19): hoy la baja solo vacía la columna.
 
 ---
 
