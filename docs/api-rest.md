@@ -992,6 +992,16 @@ Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTE
 Ninguna lleva texto: `NOTIFICACION` solo guarda `tipo` y `referencia_id`, así que el cliente compone
 el mensaje a partir del tipo. Es lo que impide que el `motivo` de un bloqueo llegue al afectado (§11).
 
+**Una notificación puede apuntar a algo que no existe** (limitación aceptada). Los avisos derivados
+—`ALERTA_CERCANA` al publicar una alerta y los de las decisiones del administrador (§11)— se crean en
+su propia transacción (`REQUIRES_NEW`), que se confirma **antes** que la operación que los origina.
+Si esa operación fallara justo al confirmarse, el aviso quedaría guardado y su `referencia_id`
+apuntaría a una alerta que nunca llegó a existir: el cliente que lo abra recibirá `404` y debe
+tratarlo como un aviso caducado, no como un error. Es remoto —el `INSERT` de la alerta ya se ha
+ejecutado antes de avisar, así que solo queda que falle el propio commit— y nunca apunta a otra
+alerta, porque un id consumido no se reutiliza. Se cerraría creando el aviso tras la confirmación
+(`afterCommit`), como ya se hace con el evento del mapa.
+
 > **RF-05 sigue sin implementar, y es lo único que queda del SRS.** Las dos filas de esta tabla son
 > contrato de diseño, no código: `NotificacionController` es un esqueleto vacío. Lo que **sí** existe
 > es la mitad de escritura —`NotificacionService` persiste notificaciones y los nueve tipos están en la

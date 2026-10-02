@@ -264,6 +264,11 @@ public class AlertaService {
      * guardar la alerta; aquí solo queda registrarlo. Sin las dos piezas —la
      * transacción aparte y este catch— un error creando notificaciones haría
      * fracasar un RF-03 perfectamente válido por culpa de un RF-05.
+     *
+     * Lo contrario sí puede pasar: las notificaciones se confirman antes que la
+     * alerta, y si la publicación fallara al confirmar quedarían huérfanas. Es
+     * una limitación aceptada; el razonamiento está en
+     * NotificacionService.notificarAlertaCercana.
      */
     private void notificarZona(Alerta alerta) {
         try {
