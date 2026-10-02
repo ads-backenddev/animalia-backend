@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.time.Instant;
@@ -75,6 +76,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(base(estado, codigoDe(estado), mensajeDe(estado), ruta(request)));
     }
 
+    /**
+     * 413 — el archivo de POST /api/fotos pasa de spring.servlet.multipart.
+     *
+     * Spring ya responde 413 por su cuenta; se sobrescribe para darle un código
+     * propio y un mensaje que diga el límite, en vez del genérico "ERROR".
+     */
+    @Override
+    protected ResponseEntity<Object> handleMaxUploadSizeExceededException(
+            MaxUploadSizeExceededException ex, HttpHeaders headers,
+            HttpStatusCode status, WebRequest request) {
+
+        return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+                .body(base(HttpStatus.CONTENT_TOO_LARGE, "FOTO_DEMASIADO_GRANDE",
+                        "La foto no puede superar los 5 MB", ruta(request)));
+    }
+
     /** 400 — parámetro de ruta o query con un tipo que no encaja. */
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorResponse> tipoIncorrecto(MethodArgumentTypeMismatchException ex,
@@ -92,6 +109,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> parametrosInvalidos(ParametrosInvalidosException ex,
                                                              WebRequest request) {
         return respuesta(HttpStatus.BAD_REQUEST, "PARAMETRO_INVALIDO", ex.getMessage(), request);
+    }
+
+    /** 400 — el archivo subido no es un JPEG o PNG que se pueda leer. */
+    @ExceptionHandler(FotoNoValidaException.class)
+    public ResponseEntity<ErrorResponse> fotoNoValida(FotoNoValidaException ex, WebRequest request) {
+        return respuesta(HttpStatus.BAD_REQUEST, "FOTO_NO_VALIDA", ex.getMessage(), request);
     }
 
     /** 400 — la operación no encaja en el dominio (deslizar lo propio, tipo no soportado). */

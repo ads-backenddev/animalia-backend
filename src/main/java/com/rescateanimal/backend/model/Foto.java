@@ -7,12 +7,16 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
-import lombok.AllArgsConstructor;
+import jakarta.persistence.Transient;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
+import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
 
@@ -37,8 +41,7 @@ import java.time.Instant;
 @Getter
 @Setter
 @NoArgsConstructor
-@AllArgsConstructor
-public class Foto {
+public class Foto implements Persistable<String> {
 
     /** "<uuid>.jpg" o "<uuid>.png". */
     @Id
@@ -56,4 +59,31 @@ public class Foto {
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /**
+     * Si la fila está aún por insertar. Existe por la clave asignada: con un
+     * nombre ya relleno, Spring Data da la entidad por existente y save() hace
+     * merge, que es un SELECT antes de cada INSERT para descubrir lo que ya se
+     * sabe —que el nombre acaba de generarse y no puede estar en la tabla—.
+     */
+    @Transient
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
+    private boolean pendienteDeInsertar = true;
+
+    @Override
+    public String getId() {
+        return nombre;
+    }
+
+    @Override
+    public boolean isNew() {
+        return pendienteDeInsertar;
+    }
+
+    @PostLoad
+    @PostPersist
+    void marcarInsertada() {
+        pendienteDeInsertar = false;
+    }
 }
