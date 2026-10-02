@@ -992,6 +992,25 @@ Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTE
 Ninguna lleva texto: `NOTIFICACION` solo guarda `tipo` y `referencia_id`, así que el cliente compone
 el mensaje a partir del tipo. Es lo que impide que el `motivo` de un bloqueo llegue al afectado (§11).
 
+**Una notificación puede apuntar a algo que no existe** (limitación aceptada). Los avisos derivados
+—`ALERTA_CERCANA` al publicar una alerta y los de las decisiones del administrador (§11)— se crean en
+su propia transacción (`REQUIRES_NEW`), que se confirma **antes** que la operación que los origina.
+Si esa operación fallara justo al confirmarse, el aviso quedaría guardado y su `referencia_id`
+apuntaría a una alerta que nunca llegó a existir. Es remoto —el `INSERT` de la alerta ya se ha
+ejecutado antes de avisar, así que solo queda que falle el propio commit— y nunca apunta a otra
+alerta, porque un id consumido no se reutiliza. Se cerraría creando el aviso tras la confirmación
+(`afterCommit`), como ya se hace con el evento del mapa.
+
+> **Pendiente para el cliente Android: hoy no puede distinguir este caso.** Las alertas no caducan:
+> terminan en `ENCONTRADA` o `ELIMINADA` y su fila se conserva, así que una alerta que acabó con
+> normalidad nunca debería dar `404`. Esa es la señal que separaría los dos casos —`200` con su
+> `estado` = terminó con normalidad; `404 NO_ENCONTRADO` = nunca existió, aviso huérfano que el
+> cliente descarta en silencio—, pero el contrato no la fija: `GET /api/alertas/{id}` (§4) no dice
+> qué devuelve para una alerta `ELIMINADA`, y si la ocultara con `404` —lo natural para contenido
+> retirado por moderación— los dos casos volverían a ser indistinguibles. Además, **ese endpoint no
+> está construido**. Hay que fijarlo antes de que el cliente consuma `ALERTA_CERCANA`: ver
+> «Fuera de alcance, pendientes» (§20).
+
 > **RF-05 sigue sin implementar, y es lo único que queda del SRS.** Las dos filas de esta tabla son
 > contrato de diseño, no código: `NotificacionController` es un esqueleto vacío. Lo que **sí** existe
 > es la mitad de escritura —`NotificacionService` persiste notificaciones y los nueve tipos están en la
@@ -1789,6 +1808,7 @@ uno a uno abajo, en «Trabajo futuro».
 | Ordenación del directorio por valoración o por número de animales disponibles | RF-06 no lo pide |
 | El `countQuery` del listado está escrito aparte del `JOIN FETCH`, así que la condición vive en dos sitios que hay que mantener iguales | Limitación de JPQL con `JOIN FETCH`; cubierto por una prueba que compara el total con las filas devueltas |
 | Volver a publicar automáticamente los animales de una protectora rehabilitada tras un bloqueo | Decisión tomada en contra: `RETIRADO` es terminal en todo el proyecto |
+| Que el cliente distinga un aviso `ALERTA_CERCANA` huérfano de una alerta terminada con normalidad (§12). Exige construir `GET /api/alertas/{id}` fijando que una alerta `ENCONTRADA` o `ELIMINADA` responde `200` con su `estado`, y reservar el `404` para la que nunca existió; el cliente descarta en silencio el aviso que dé `404` | Cliente Android / RF-05 |
 
 ### Trabajo futuro
 
