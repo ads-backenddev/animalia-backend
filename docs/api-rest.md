@@ -280,22 +280,39 @@ RF-03, RF-04, RF-14, RF-25.
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/alertas` | Publica una alerta de mascota perdida. Antes de guardar comprueba si ya existe una alerta similar (RF-25) | Autenticado | `CrearAlertaRequest`: `descripcion`, `fotoUrl?`, `especie`, `fechaAvistamiento`, `ubicacion{latitud,longitud}`, `radioBusqueda?` | `AlertaResponse` | `201`, `400`, `401`, `409` |
-| ~~`GET`~~ | ~~`/api/alertas`~~ | **Diseñado, no construido.** Lista paginada de alertas activas. Filtros: `especie`, `estado`, `zona` | Autenticado | — | Página de `AlertaResponse` | — |
-| ~~`GET`~~ | ~~`/api/alertas/{id}`~~ | **Diseñado, no construido.** Detalle de una alerta con sus avistamientos asociados | Autenticado | — | `AlertaDetalleResponse` | — |
-| ~~`PUT`~~ | ~~`/api/alertas/{id}`~~ | **Diseñado, no construido.** Modifica una alerta propia | Propietario | `ActualizarAlertaRequest`: mismos campos que la creación | `AlertaResponse` | — |
-| ~~`DELETE`~~ | ~~`/api/alertas/{id}`~~ | **Diseñado, no construido.** Retira una alerta propia: pasa a estado `ELIMINADA` y desaparece del mapa | Propietario | — | — | — |
+| `GET` | `/api/alertas` | Listado paginado para navegar y buscar; el mapa en tiempo real sigue siendo `/mapa` y `/topic/mapa`. `estado`: `ACTIVA` por defecto o `ENCONTRADA`; `RETIRADA` y `ELIMINADA` no se listan (`400`). `especie` sin distinguir mayúsculas. Zona: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, 50 km como máximo, igual que `/mapa`. Paginación `page`/`size` (100 como máximo), más recientes primero | Autenticado | — | Página de `AlertaResponse` | `200`, `400`, `401` |
+| `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`. **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
+| `PUT` | `/api/alertas/{id}` | Edita una alerta propia, **solo mientras esté `ACTIVA`**. Si cambian la especie o la ubicación vuelve a pasar RF-25, sin contarse a sí misma. Emite `ACTUALIZACION` por `/topic/mapa` | Propietario | `ActualizarAlertaRequest`: los mismos campos y reglas que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
+| `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**; `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
-| `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado | Autenticado | — | Página de `AlertaResponse` | `200`, `401` |
-| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14) | Propietario | — | `AlertaResponse` | `200`, `401`, `403`, `404` |
+| `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
+| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404` |
 
-> **Cuatro endpoints de esta tabla no existen.** Las cuatro filas tachadas —el listado paginado, el
-> detalle con avistamientos, editar y retirar— son contrato de diseño, no código: `AlertaController`
-> solo tiene `POST`, `/mapa`, `/mis-alertas` y `/{id}/cerrar`, y tampoco existen sus DTOs
-> (`AlertaDetalleResponse`, `ActualizarAlertaRequest`). Hasta este bloque el contrato las daba por
-> construidas. Consecuencias hoy: el dueño de una alerta no puede corregirla ni retirarla —solo
-> cerrarla como `ENCONTRADA`—; nadie puede ver una alerta fuera del mapa, y por tanto ninguna que ya
-> no esté `ACTIVA`; y los avistamientos de una alerta concreta no se pueden consultar (§5). Quedan
-> abiertos como bloque propio: ver §20, «Trabajo futuro».
+### Estados de una alerta
+
+Solo `ACTIVA` está viva: es la única que sale en el mapa, admite avistamientos y deja hacer match sobre
+ellos. Las otras tres son finales, y **en ninguna se borra nada**: los avistamientos, matches, chats y
+mensajes que colgaban de la alerta siguen ahí, porque la conversación es también de la otra parte. Un
+chat abierto sobre un avistamiento de una alerta retirada se sigue leyendo y sigue admitiendo
+mensajes.
+
+| Estado | Lo pone | Cómo | Detalle (`GET /{id}`) | Listado |
+|---|---|---|---|---|
+| `ACTIVA` | El autor, al publicarla | `POST /api/alertas` | Completo | Por defecto |
+| `ENCONTRADA` | El autor, cuando aparece el animal (RF-14) | `PUT /{id}/cerrar` | Completo | Con `estado=ENCONTRADA` |
+| `RETIRADA` | El autor, que la quita sin más | `DELETE /{id}` | Reducido | No |
+| `ELIMINADA` | El administrador, por incumplir las normas (RF-11) | `DELETE /api/admin/publicaciones/{id}?tipo=ALERTA` | Reducido | No |
+
+**`RETIRADA` y `ELIMINADA` son estados distintos a propósito.** Una es una decisión neutra del dueño
+y la otra una sanción; si compartieran valor, la diferencia se perdería en cada fila sin forma de
+reconstruirla (`V16`). Por la misma razón **nada de lo que haga el dueño sobrescribe una
+`ELIMINADA`**: no la puede cerrar, ni editar, y retirarla responde `204` sin cambiarla. El
+administrador, en cambio, sí puede pasar a `ELIMINADA` una alerta ya `RETIRADA` o `ENCONTRADA`.
+
+**El detalle reducido** de una `RETIRADA` o `ELIMINADA` lleva solo `id`, `especie`, `estado` y
+`createdAt`; el resto llega a `null` y `avistamientos` vacío. Responde `200` para que el cliente
+distinga «esta alerta terminó» de «esta alerta nunca existió» (`404`), pero sin volver a publicar lo
+que se retiró. Su autor la sigue viendo entera en `/mis-alertas`.
 
 ### Detección de alertas duplicadas (RF-25)
 
@@ -357,8 +374,9 @@ Cada tarjeta del feed lleva, además de los datos del avistamiento, la `alertaId
 > coordenadas —`areaGeografica` es texto—. Queda decidir de dónde sale ese punto.
 
 Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
-`AlertaDetalleResponse` de `GET /api/alertas/{id}`. **Ese endpoint no está construido (§4)**, así que
-hoy no hay ninguna forma de consultarlos: solo se ven uno a uno en el feed de swipe.
+`AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero, con los
+datos públicos de su autor. Los `ELIMINADO` por el administrador no salen, y una alerta retirada o
+moderada no enseña ninguno.
 
 ---
 
@@ -990,8 +1008,12 @@ match, donde `ALERTA` no es válido.
 
 El verbo es `DELETE`, pero **ninguna fila desaparece**: la publicación pasa a su estado terminal y
 deja de mostrarse, conservando los chats que colgaran de ella. Es el mismo criterio que
-`DELETE /api/adopcion/{id}` y que el diseñado para `DELETE /api/alertas/{id}` —este último **sin
-construir** (§4)—, y es idempotente.
+`DELETE /api/adopcion/{id}` y `DELETE /api/alertas/{id}`, y es idempotente.
+
+**Una alerta moderada queda `ELIMINADA`, distinta de la `RETIRADA` por su dueño** (§4, *Estados de
+una alerta*), y el dueño no puede deshacerlo ni cerrándola ni retirándola. Si estaba en el mapa,
+**se emite `CIERRE` por `/topic/mapa`**: antes del bloque de los endpoints de alerta (§22) no se
+hacía, y el marcador de una alerta moderada seguía en el mapa de quien lo tuviera abierto.
 
 | `tipo` | Tabla | Estado terminal |
 |---|---|---|
@@ -1070,17 +1092,14 @@ ejecutado antes de avisar, así que solo queda que falle el propio commit— y n
 alerta, porque un id consumido no se reutiliza. Se cerraría creando el aviso tras la confirmación
 (`afterCommit`), como ya se hace con el evento del mapa.
 
-> **Pendiente para el cliente Android: hoy no puede distinguir este caso.** Las alertas no caducan:
-> terminan en `ENCONTRADA` o `ELIMINADA` y su fila se conserva, así que una alerta que acabó con
-> normalidad nunca debería dar `404`. Esa es la señal que separaría los dos casos —`200` con su
-> `estado` = terminó con normalidad; `404 NO_ENCONTRADO` = nunca existió, aviso huérfano que el
-> cliente descarta en silencio—, pero el contrato no la fija: `GET /api/alertas/{id}` (§4) no dice
-> qué devuelve para una alerta `ELIMINADA`, y si la ocultara con `404` —lo natural para contenido
-> retirado por moderación— los dos casos volverían a ser indistinguibles. Además, **ese endpoint no
-> está construido**. Hay que fijarlo antes de que el cliente consuma `ALERTA_CERCANA`: ver
-> «Fuera de alcance, pendientes» (§20).
+**Cómo lo distingue el cliente.** Al abrir un aviso `ALERTA_CERCANA`, `GET /api/alertas/{id}` (§4)
+responde `200` con su `estado` para cualquier alerta que haya existido —también una `ENCONTRADA`,
+`RETIRADA` o `ELIMINADA`, que llegan reducidas— y `404 NO_ENCONTRADO` **solo** si nunca existió. Así
+que un `200` con un estado final es un aviso viejo de algo que ya terminó, y un `404` es un aviso
+huérfano que el cliente descarta en silencio. Las alertas no caducan ni se borran, de modo que una
+que terminó con normalidad nunca da `404`.
 
-> **RF-05 sigue sin implementar** —uno de los tres huecos que quedan, ver §20—. Las dos filas de esta tabla son
+> **RF-05 sigue sin implementar** —uno de los dos huecos que quedan, ver §20—. Las dos filas de esta tabla son
 > contrato de diseño, no código: `NotificacionController` es un esqueleto vacío. Lo que **sí** existe
 > es la mitad de escritura —`NotificacionService` persiste notificaciones y los nueve tipos están en la
 > tabla con su `CHECK` (`V6`)—, así que hoy se guardan y nadie puede leerlas. Falta el `GET`, el
@@ -1170,7 +1189,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 |---|---|
 | RF-01 | `POST /api/auth/registro/ciudadano`, `POST /api/auth/registro/protectora` |
 | RF-02 | `GET` y `PUT /api/usuarios/me`; la foto se sube antes por `POST /api/fotos` (§1) |
-| RF-03 | `POST /api/alertas` |
+| RF-03 | `POST /api/alertas`; consultarla, editarla y retirarla: `GET /api/alertas`, `GET`, `PUT` y `DELETE /api/alertas/{id}` (§4) |
 | RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
 | RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` — **diseñado, sin construir** (§20) |
 | RF-06 | `GET /api/protectoras` y `GET /api/protectoras/{id}` — directorio, ficha y contacto (§9) |
@@ -1192,7 +1211,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
 | RF-23 | `PUT /api/protectoras/{id}/valoracion`; media en `GET /api/adopcion/{id}` y en `/panel/valoraciones` |
 | RF-24 | `GET /api/matches/limite`, respuesta `429` de `POST /api/matches` |
-| RF-25 | Respuesta `409` de `POST /api/alertas` |
+| RF-25 | Respuesta `409` de `POST /api/alertas`, y de `PUT /api/alertas/{id}` si cambian la especie o la ubicación |
 | RF-26 | `POST /api/reportes`, `GET /api/admin/reportes`, `PUT /api/admin/reportes/{id}/resolver` |
 
 ---
@@ -1864,7 +1883,8 @@ comprueba índices.
 
 ### El SRS **no** queda cubierto al cien por cien tras este bloque
 
-Con RF-06 cerrado quedan **tres huecos**, y conviene enumerarlos sin rodeos.
+Con RF-06 cerrado quedaban **tres huecos**. El de los endpoints de alerta se cerró después, en su
+propio bloque (§22), así que hoy quedan **dos**: RF-05 y el contacto con la protectora.
 
 > **Corrección.** Este apartado decía que eran dos —RF-05 y el contacto con la protectora— y no era
 > cierto: cuatro endpoints de `/api/alertas` diseñados en §4 desde el principio nunca se construyeron,
@@ -1875,28 +1895,29 @@ Con RF-06 cerrado quedan **tres huecos**, y conviene enumerarlos sin rodeos.
 |---|---|
 | **RF-05 — notificaciones.** `NotificacionController` es un esqueleto vacío: no existe `GET /api/notificaciones` ni el `PATCH` de marcado, y nadie emite por `/user/queue/notificaciones`. La mitad de escritura sí está: `NotificacionService` persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy las notificaciones se guardan y **nadie puede leerlas** | Requisito entero sin construir |
 | **RF-06 — contacto con la protectora local.** `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar`, diseñados en §9 desde el principio. Este bloque construyó el directorio y la ficha, que es lo que se pidió, pero no ellos | Parte de RF-06 sin construir |
-| **Cuatro endpoints de alerta.** `GET /api/alertas` (listado paginado), `GET /api/alertas/{id}` (detalle con avistamientos), `PUT /api/alertas/{id}` (editar) y `DELETE /api/alertas/{id}` (retirar), diseñados en §4. Ninguna fila de la trazabilidad (§14) los cita, pero el resto del contrato cuenta con ellos: §5 remite al detalle para ver los avistamientos de una alerta, §11 compara su retirada con la del administrador y §12 necesita el detalle para descartar avisos huérfanos. Hoy el dueño de una alerta no puede editarla ni retirarla, solo cerrarla | Sin construir. Bloque propio, tras la subida de fotos |
+| ~~**Cuatro endpoints de alerta.** `GET /api/alertas` (listado paginado), `GET /api/alertas/{id}` (detalle con avistamientos), `PUT /api/alertas/{id}` (editar) y `DELETE /api/alertas/{id}` (retirar), diseñados en §4. Ninguna fila de la trazabilidad (§14) los cita, pero el resto del contrato cuenta con ellos: §5 remite al detalle para ver los avistamientos de una alerta, §11 compara su retirada con la del administrador y §12 necesita el detalle para descartar avisos huérfanos. Hoy el dueño de una alerta no puede editarla ni retirarla, solo cerrarla~~ | **Cerrado en el bloque de los endpoints de alerta (§22)** |
 
 Los dos primeros no se resuelven escribiendo un endpoint: RF-05 necesita un servicio de push externo
 y una tabla de dispositivos, y el contacto una decisión de modelo sobre de qué cuelga un chat sin
-publicación. El tercero sí es escribir endpoints, pero con decisiones previas. Los tres están
-descritos en «Trabajo futuro», al final de esta sección.
+publicación. El tercero era escribir endpoints con decisiones previas, y ya está hecho (§22). Los dos
+que quedan están descritos en «Trabajo futuro», al final de esta sección.
 
 ### Fuera de alcance, pendientes
 
-Lo que queda son **tres trabajos**: dos del SRS, más grandes que un endpoint, y los cuatro endpoints de
-alerta que el contrato daba por construidos. Están descritos uno a uno abajo, en «Trabajo futuro».
+Lo que queda del SRS son **dos trabajos**, y los dos son más grandes que un endpoint. Los cuatro
+endpoints de alerta que el contrato daba por construidos se hicieron en §22. Los dos pendientes están
+descritos uno a uno abajo, en «Trabajo futuro».
 
 | Pendiente | Bloque |
 |---|---|
 | **RF-05 entero, con notificación push real** | Ver «Trabajo futuro» |
 | **El contacto directo con la protectora (RF-06)**, con la decisión de modelo que arrastra | Ver «Trabajo futuro» |
-| **Los cuatro endpoints de alerta sin construir** (§4) | Bloque propio, el siguiente tras la subida de fotos. Ver «Trabajo futuro» |
+| ~~**Los cuatro endpoints de alerta sin construir** (§4)~~ | **Hecho en §22** |
 | Dejar que una protectora declare `esPersonaFisica` después de registrarse, para que las anteriores a `V12` puedan corregirlo | Sin bloque asignado |
 | Ordenación del directorio por valoración o por número de animales disponibles | RF-06 no lo pide |
 | El `countQuery` del listado está escrito aparte del `JOIN FETCH`, así que la condición vive en dos sitios que hay que mantener iguales | Limitación de JPQL con `JOIN FETCH`; cubierto por una prueba que compara el total con las filas devueltas |
 | Volver a publicar automáticamente los animales de una protectora rehabilitada tras un bloqueo | Decisión tomada en contra: `RETIRADO` es terminal en todo el proyecto |
-| Que el cliente distinga un aviso `ALERTA_CERCANA` huérfano de una alerta terminada con normalidad (§12). Exige construir `GET /api/alertas/{id}` fijando que una alerta `ENCONTRADA` o `ELIMINADA` responde `200` con su `estado`, y reservar el `404` para la que nunca existió; el cliente descarta en silencio el aviso que dé `404` | Cliente Android / RF-05 |
+| ~~Que el cliente distinga un aviso `ALERTA_CERCANA` huérfano de una alerta terminada con normalidad (§12)~~ | **Resuelto en §22**: el detalle responde `200` con su `estado` para cualquier alerta que existió y `404` solo para la que no; el cliente descarta los `404` |
 
 ### Trabajo futuro
 
@@ -1946,30 +1967,20 @@ Carabanchel»— y hay que decidir qué pasa cuando salen varias o ninguna. `400
 área fijada y `404` si no hay ninguna `ACTIVA` en esa zona es lo que §9 enuncia, pero el criterio de
 desempate está sin decidir.
 
-#### Alertas — los cuatro endpoints que faltan
+#### Alertas — los cuatro endpoints (hecho en §22)
 
-`GET /api/alertas`, `GET /api/alertas/{id}`, `PUT /api/alertas/{id}` y `DELETE /api/alertas/{id}`,
-diseñados en §4. A diferencia de los dos anteriores, esto **sí es escribir endpoints**: la tabla, los
-estados y el canal del mapa ya existen. Se abre como bloque propio, el siguiente tras la subida de
-fotos, y antes de escribir código hay que fijar en el contrato:
+Las preguntas que quedaban abiertas aquí se resolvieron así; el razonamiento está en §22:
 
-- **Qué devuelve el detalle de una alerta que ya no está `ACTIVA`.** `ENCONTRADA` debería verse —es
-  el final feliz y quien tenga un chat abierto sobre ella querrá consultarla—. `ELIMINADA` es la
-  decisión delicada: ocultarla con `404` es lo natural para contenido retirado por moderación, pero
-  entonces el cliente no puede distinguir un aviso `ALERTA_CERCANA` huérfano de una alerta retirada
-  (§12). Responder `200` con su `estado` y sin los datos personales del autor resuelve las dos cosas.
-- **Qué se puede editar.** Si cambia la ubicación, el marcador se mueve: hay que emitir `ACTUALIZACION`
-  por `/topic/mapa`, que ya existe en `EventoMapaResponse` y hoy nadie emite. Hay que decidir si la
-  edición vuelve a pasar la detección de duplicados de RF-25 y si se puede editar una alerta que ya no
-  está `ACTIVA` (lo coherente con `PUT /api/adopcion/{id}` sería permitirlo).
-- **La retirada**, `ELIMINADA`, idempotente y con evento `CIERRE` por `/topic/mapa`, igual que la que
-  ya hace el administrador por `DELETE /api/admin/publicaciones/{id}` (§11).
-- **El listado**: el filtro `zona` es texto contra un `areaGeografica` que también es texto, el mismo
-  problema de comparación que arrastra `/local/contactar`.
-- **Su `fotoUrl`**, al editar, se valida como en `POST /api/alertas` y en la edición de un animal: solo
-  fotos subidas por el propio usuario a `/api/fotos`, y reenviar la que ya tenía no se vuelve a
-  comprobar (§1, §21). Si se cambia, la anterior se queda sin uso y la recoge la limpieza diaria, como
-  ya ocurre al cambiar la foto de un animal.
+- **El detalle de una alerta que ya no está `ACTIVA`** responde `200` con su estado. Una `ENCONTRADA`
+  se ve entera; una `RETIRADA` o `ELIMINADA`, reducida, sin su contenido. `404` solo para la que nunca
+  existió.
+- **La edición** solo se permite mientras está `ACTIVA` —al contrario que con los animales— y vuelve a
+  pasar RF-25 si cambian la especie o la ubicación. Emite `ACTUALIZACION`.
+- **La retirada del dueño** no es `ELIMINADA`, sino un estado nuevo, `RETIRADA`: la moderación y la
+  decisión del dueño son hechos distintos.
+- **La zona del listado** es un círculo `lat`/`lng`/`radio`, como el mapa, y no un texto: las alertas
+  no tienen zona escrita.
+- **La foto** se valida como estaba previsto.
 
 ---
 
@@ -2124,3 +2135,111 @@ una prueba contra el servidor real lo comprueba.
 | Pendiente | Bloque |
 |---|---|
 | WebP, miniaturas, o servir las fotos desde una CDN | Ninguno lo pide un requisito. WebP exige una dependencia nueva |
+
+---
+
+## 22. Bloque de los endpoints de alerta (RF-03, RF-11, RF-14, RF-25)
+
+Cuatro endpoints de `/api/alertas` estaban en el contrato desde el principio y nunca se construyeron:
+el listado, el detalle, editar y retirar (§20 lo recogía como hueco). Este bloque los construye, y de
+paso corrige dos fallos que salieron al leer el código alrededor y amplía la detección de duplicados.
+Cómo se usan está en §4; aquí, lo que hubo que decidir.
+
+### Lo que cambió en el contrato
+
+| Cambio | Antes | Ahora |
+|---|---|---|
+| `GET /api/alertas` | Diseñado, sin construir | Listado paginado. `ACTIVA` por defecto o `ENCONTRADA`; especie; zona `lat`/`lng`/`radio` |
+| `GET /api/alertas/{id}` | Diseñado, sin construir | Detalle con avistamientos. `200` para cualquier alerta que existió, reducido si está retirada; `404` solo si nunca existió |
+| `PUT /api/alertas/{id}` | Diseñado, sin construir | Solo el autor y solo `ACTIVA`. RF-25 otra vez si cambian especie o ubicación. Emite `ACTUALIZACION` |
+| `DELETE /api/alertas/{id}` | Diseñado como «pasa a `ELIMINADA`» | Pasa a `RETIRADA`, un estado nuevo. Emite `CIERRE` si estaba en el mapa |
+| `EstadoAlerta` | `ACTIVA`, `ENCONTRADA`, `ELIMINADA` | Más `RETIRADA` (`V16`) |
+| Ventana de RF-25 | La alerta existente avistada en las últimas 24 h | Publicada **o** avistada en las últimas 24 h (§4) |
+| `PUT /api/alertas/{id}/cerrar` | Cerraba en cualquier estado | Solo desde `ACTIVA`: el dueño ya no deshace una moderación |
+| Moderación de una alerta (`DELETE /api/admin/publicaciones/{id}?tipo=ALERTA`) | No avisaba al mapa | Emite `CIERRE` |
+| `GET /api/alertas/mis-alertas` | El contrato decía «página» | Es una lista, y así lo dice ahora: no cambió el código, solo la documentación |
+
+### `RETIRADA` y `ELIMINADA`, dos estados y no uno
+
+El contrato preveía que la retirada del dueño pasara la alerta a `ELIMINADA`, el mismo valor que pone
+el administrador al moderar. Se separaron. **Son hechos distintos** —una decisión neutra del dueño y
+una sanción— y, si compartieran valor, la diferencia se perdería en cada fila sin forma de
+reconstruirla: no habría estadísticas de moderación, ni reincidencia, ni recurso contra una retirada.
+**Solo se podían separar ahora**: como el `DELETE` del dueño no existía, todas las `ELIMINADA` que hay
+son del administrador y `V16` no tuvo que migrar ningún dato.
+
+La consecuencia de diseño es que **nada de lo que hace el dueño pisa una `ELIMINADA`**: no la cierra,
+no la edita, y retirarla responde `204` sin cambiarla. El administrador sí puede moderar una alerta
+ya `RETIRADA` o `ENCONTRADA`: la sanción es la información más fuerte.
+
+Los animales en adopción no hacen esta distinción: la protectora y el administrador ponen los dos
+`RETIRADO`. Es una asimetría conocida, no un modelo a seguir; no se ha tocado.
+
+### El detalle de lo retirado responde, pero no vuelve a publicarlo
+
+`404` se reserva para un id que nunca existió, y eso es lo que permite al cliente distinguir un aviso
+`ALERTA_CERCANA` huérfano de uno viejo (§12). Pero devolver entera una alerta moderada desharía la
+moderación para cualquiera que tenga el id. Por eso una `RETIRADA` o `ELIMINADA` responde `200` con
+solo `id`, `especie`, `estado` y `createdAt`, sin descripción, foto, ubicación, autor ni avistamientos.
+Un switch exhaustivo sobre el estado decide qué forma lleva: un estado nuevo no compila hasta que
+alguien decida qué enseña.
+
+### RF-25 al editar, y por qué la ventana se amplió
+
+**Si cambian la especie o la ubicación, la edición vuelve a pasar RF-25**, sin contarse a sí misma.
+Sin ello la detección se esquivaba en dos pasos: publicar lejos y mover después la alerta encima de
+otra, o publicar con otra especie y cambiarla luego. No hay umbral de «cambio significativo»: sería un
+número inventado, y diez movimientos de 50 m suman 500. Si cambian otros campos no se repite.
+
+**Editar la fecha no la dispara, y no por descuido.** La detección compara la alerta nueva con las
+fechas de las *existentes*, nunca con las suyas; repetirla al cambiar la fecha daría el mismo
+resultado, y solo añadiría falsos positivos contra vecinas legítimas. Pero analizarlo destapó el hueco
+de verdad, que estaba en la publicación: **una alerta publicada hoy sobre un animal visto hace dos días
+no bloqueaba nunca a nadie**, el caso más común. Por eso la ventana pasó a mirar también cuándo se
+**publicó** la alerta existente (`created_at`), que el servidor pone y nadie edita. Con eso, ni atrasar
+la fecha al editar ni publicar tarde sirve para colar un duplicado. A cambio, ahora se consideran
+duplicadas más alertas que antes.
+
+### La zona del listado es un círculo
+
+El contrato preveía un filtro `zona` de texto, como el del catálogo de adopción, pero las alertas no
+tienen zona escrita: tienen el punto donde se vio al animal. El `areaGeografica` del autor es su área
+de perfil, opcional, y no dice dónde se perdió. Así que el filtro es el mismo de `/mapa`, `lat`, `lng`
+y `radio`, dentro de la misma `Specification` que los demás filtros con `ST_DistanceSphere`. No usa el
+índice GiST —desde Criteria no se puede escribir el `CAST` a `geography` que usa el mapa—, y se acepta:
+el listado va paginado y filtra antes por estado.
+
+### Dos fallos que se corrigieron por el camino
+
+- **`cerrar` deshacía la moderación.** No miraba el estado, así que el dueño de una alerta `ELIMINADA`
+  podía marcarla como `ENCONTRADA` y volver a exponerla. Con el listado de resueltas y el detalle
+  completo de las `ENCONTRADA`, eso se habría convertido en una vía real para esquivar al
+  administrador. Ahora solo cierra desde `ACTIVA`.
+- **La moderación no quitaba el marcador del mapa.** `AdminService` cambiaba el estado sin emitir
+  `CIERRE`, y la alerta seguía en el mapa de quien lo tuviera abierto. La transición pasó a
+  `AlertaService.retirarPorModeracion`, que es quien emite los eventos del mapa, como ya se hizo con
+  la retirada de animales.
+
+### Nada se borra en cascada
+
+Ni cerrar, ni retirar, ni moderar borran nada: sus avistamientos, los matches sobre ellos, sus chats y
+sus mensajes se quedan. No hizo falta código para conseguirlo: el feed de avistamientos y los matches
+ya solo admitían alertas `ACTIVA`, así que los avistamientos de una alerta terminada salen del feed
+sin tocarlos. Una prueba de extremo a extremo lo comprueba: el chat abierto sobre un avistamiento
+sigue legible y admite mensajes después de retirar su alerta.
+
+### Sobre `V16`
+
+Solo rehace `alerta_estado_check` con el valor nuevo. No acompaña a ningún cambio de columna, pero sin
+ella el primer `UPDATE` a `RETIRADA` fallaría en ejecución, y `ddl-auto=validate` no comprueba los
+`CHECK`.
+
+### Limitaciones aceptadas
+
+| Limitación | Por qué se acepta |
+|---|---|
+| Al editar, la alerta no vuelve a avisar a la zona (RF-05) | El aviso es de la publicación; repetirlo en cada corrección sería ruido |
+| El listado no usa el índice espacial | Desde Criteria no se puede escribir el `CAST` a `geography`. El listado va paginado y filtra antes por estado |
+| El detalle trae todos los avistamientos visibles de la alerta, sin paginar | Una alerta recibe pocos; si alguna llegara a cientos habría que paginarlos dentro del detalle |
+| Con la ventana ampliada de RF-25 se rechazan más alertas que antes | Es el precio de cerrar los dos huecos; el `409` sigue llevando la alerta existente para redirigir al usuario |
+| Los animales siguen sin distinguir retirada por la protectora de retirada por el administrador | Fuera del alcance de este bloque; separarlo exigiría su propia migración y decidir qué pasa con los `RETIRADO` actuales, que ya no se pueden atribuir |
