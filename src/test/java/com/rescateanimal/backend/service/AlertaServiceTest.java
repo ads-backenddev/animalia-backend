@@ -34,6 +34,7 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -55,6 +56,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -303,6 +305,21 @@ class AlertaServiceTest {
                     .isInstanceOf(ParametrosInvalidosException.class);
             assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, LNG, 0.0))
                     .isInstanceOf(ParametrosInvalidosException.class);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("NaN e infinito se rechazan en los tres parámetros, en el mapa y en el listado")
+        @ValueSource(doubles = {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY})
+        void noFinitosSeRechazan(double valor) {
+            assertThatThrownBy(() -> alertaService.listarParaMapa(valor, LNG, 2000.0))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, valor, 2000.0))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            assertThatThrownBy(() -> alertaService.listarParaMapa(LAT, LNG, valor))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            assertThatThrownBy(() -> alertaService.listar(null, null, LAT, LNG, valor, PageRequest.of(0, 20)))
+                    .isInstanceOf(ParametrosInvalidosException.class);
+            verifyNoInteractions(alertaRepository);
         }
     }
 

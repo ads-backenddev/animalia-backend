@@ -271,11 +271,22 @@ public class AlertaService {
         return PaginaResponse.de(pagina, this::aAlertaResponse);
     }
 
-    /** Comprueba el filtro de área y devuelve el radio ya validado. */
+    /**
+     * Comprueba el filtro de área y devuelve el radio ya validado.
+     *
+     * NaN SE RECHAZA ANTES QUE NADA. Spring convierte "radio=NaN" en un Double
+     * válido, y cualquier comparación con NaN da falso: pasaba los tres rangos
+     * de abajo. PostgreSQL, en cambio, ordena NaN por encima de todo número, así
+     * que "distancia <= NaN" es cierto para cualquier distancia y el listado se
+     * saltaba el tope de radio. Los infinitos también se descartan aquí.
+     */
     private double validarArea(Double latitud, Double longitud, Double radioMetros) {
         if (latitud == null || longitud == null || radioMetros == null) {
             throw new ParametrosInvalidosException(
                     "Los parámetros lat, lng y radio deben indicarse los tres o ninguno");
+        }
+        if (!Double.isFinite(latitud) || !Double.isFinite(longitud) || !Double.isFinite(radioMetros)) {
+            throw new ParametrosInvalidosException("Los parámetros lat, lng y radio deben ser números finitos");
         }
         if (latitud < -90 || latitud > 90) {
             throw new ParametrosInvalidosException("La latitud debe estar entre -90 y 90");
