@@ -2238,6 +2238,24 @@ el listado va paginado y filtra antes por estado.
   `AlertaService.retirarPorModeracion`, que es quien emite los eventos del mapa, como ya se hizo con
   la retirada de animales.
 
+### Lo que corrigió la revisión
+
+Una revisión del bloque terminado encontró cuatro problemas más, que se corrigieron antes de fusionarlo:
+
+- **El dueño y el administrador podían pisarse.** Si el dueño editaba la alerta justo mientras el
+  administrador la moderaba, el `PUT` leía `ACTIVA` antes de que la moderación se confirmara y, al
+  confirmar él, escribía `ACTIVA` encima de `ELIMINADA`: la moderación se deshacía. Ahora editar,
+  retirar, cerrar y moderar leen la alerta con `SELECT … FOR UPDATE`. La segunda operación espera a
+  que la primera confirme y decide sobre el estado nuevo: el dueño recibe `400 ALERTA_NO_ACTIVA`, o la
+  moderación se aplica encima de lo que hizo el dueño. No hizo falta migración, que sí la habría
+  exigido un `@Version`.
+- **El chat seguía enseñando la foto de una alerta retirada o moderada** (§7). Ahora la omite, con
+  el mismo recorte que el detalle.
+- **`radio=NaN` se saltaba el tope de 50 km**, en el listado y en `/mapa`. Ahora `lat`, `lng` y
+  `radio` tienen que ser números finitos (§4).
+- **La foto de una alerta moderada seguía servida en `/fotos/…`.** Ahora la moderación la borra
+  (§11).
+
 ### Nada se borra en cascada
 
 Ni cerrar, ni retirar, ni moderar borran nada: sus avistamientos, los matches sobre ellos, sus chats y
@@ -2261,5 +2279,6 @@ ella el primer `UPDATE` a `RETIRADA` fallaría en ejecución, y `ddl-auto=valida
 | El detalle trae todos los avistamientos visibles de la alerta, sin paginar | Una alerta recibe pocos; si alguna llegara a cientos habría que paginarlos dentro del detalle |
 | Con la ventana ampliada de RF-25 se rechazan más alertas que antes | Es el precio de cerrar los dos huecos; el `409` sigue llevando la alerta existente para redirigir al usuario |
 | Los animales siguen sin distinguir retirada por la protectora de retirada por el administrador | Fuera del alcance de este bloque; separarlo exigiría su propia migración y decidir qué pasa con los `RETIRADO` actuales, que ya no se pueden atribuir |
+| Dos operaciones sobre la misma alerta —del dueño o del administrador— se hacen una detrás de otra | El bloqueo dura lo que su transacción, milisegundos; y solo se bloquea esa fila, no la tabla |
 | La foto de una alerta moderada se conserva si otra publicación o un perfil usan la misma | Borrarla dejaría sin imagen una publicación que nadie ha moderado. La alerta deja de apuntar a ella igualmente |
 | La foto externa de una alerta moderada, anterior a `/api/fotos`, no se borra | El backend no la aloja; la alerta deja de apuntar a ella (§20) |
