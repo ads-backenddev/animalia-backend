@@ -61,13 +61,6 @@ public class AlertaController {
     }
 
     /**
-     * GET /api/alertas/mapa -> 200, 400, 401
-     *
-     * Alertas ACTIVA geolocalizadas (RF-04). Los tres parámetros acotan el mapa
-     * al área visible y se indican los tres o ninguno; sin ellos devuelve todas
-     * las alertas activas.
-     */
-    /**
      * GET /api/alertas -> 200, 400, 401
      *
      * Listado paginado para navegar y buscar, no para el mapa —que ya recibe las
@@ -87,6 +80,13 @@ public class AlertaController {
                 alertaService.listar(especie, estado, latitud, longitud, radioMetros, paginacion));
     }
 
+    /**
+     * GET /api/alertas/mapa -> 200, 400, 401
+     *
+     * Alertas ACTIVA geolocalizadas (RF-04). Los tres parámetros acotan el mapa
+     * al área visible y se indican los tres o ninguno; sin ellos devuelve todas
+     * las alertas activas.
+     */
     @GetMapping("/mapa")
     public ResponseEntity<List<AlertaMapaResponse>> listarParaMapa(
             @RequestParam(name = "lat", required = false) Double latitud,
@@ -143,8 +143,11 @@ public class AlertaController {
     }
 
     /**
-     * PUT /api/alertas/{id}/cerrar -> 200, 401, 403, 404
-     * Marca la mascota como encontrada y la retira del mapa (RF-14).
+     * PUT /api/alertas/{id}/cerrar -> 200, 400, 401, 403, 404
+     *
+     * Marca la mascota como encontrada y la retira del mapa (RF-14). El 400
+     * (ALERTA_NO_ACTIVA) es para una alerta RETIRADA o ELIMINADA; cerrar una ya
+     * ENCONTRADA no cambia nada y responde 200.
      */
     @PutMapping("/{id}/cerrar")
     public ResponseEntity<AlertaResponse> cerrar(

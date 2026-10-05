@@ -95,8 +95,10 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
      * una alerta publicada hoy sobre un animal visto hace dos días no bloqueaba
      * nunca a nadie —el caso más común: se pierde el sábado y se publica el
      * lunes—, y atrasar esa fecha al editar dejaba de proteger su sitio. created_at
-     * lo pone la base de datos y no se edita, así que ninguna de las dos vías
-     * sirve ya para esquivar la detección.
+     * lo pone Hibernate al insertar (@CreationTimestamp, con el reloj de la JVM,
+     * el mismo que calcula "desde") y la columna no se actualiza nunca
+     * (updatable = false), así que ninguna de las dos vías sirve ya para
+     * esquivar la detección.
      *
      * excluirId deja fuera a la propia alerta cuando se comprueba una edición;
      * al publicar se pasa 0, que no es el id de ninguna (IDENTITY empieza en 1).
