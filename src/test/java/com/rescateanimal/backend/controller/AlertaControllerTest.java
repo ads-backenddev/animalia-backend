@@ -38,6 +38,8 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -288,7 +290,6 @@ class AlertaControllerTest {
                             .param("lat", "40.4").param("lng", "-3.7").param("radio", "5000"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.content[0].id").value(42))
-                    .andExpect(jsonPath("$.content[0].autor.email").doesNotExist())
                     .andExpect(jsonPath("$.totalElements").value(1));
         }
 
@@ -312,7 +313,7 @@ class AlertaControllerTest {
         }
 
         @Test
-        @DisplayName("GET /{id} -> 200 con los avistamientos, sin contacto de ningún autor")
+        @DisplayName("GET /{id} -> 200 con los avistamientos")
         void detalle() throws Exception {
             when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
                     .id(42L).especie("perro").estado(EstadoAlerta.ACTIVA)
@@ -324,9 +325,7 @@ class AlertaControllerTest {
             mockMvc.perform(get("/api/alertas/42"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.estado").value("ACTIVA"))
-                    .andExpect(jsonPath("$.avistamientos[0].id").value(70))
-                    .andExpect(jsonPath("$.autor.email").doesNotExist())
-                    .andExpect(jsonPath("$.avistamientos[0].autor.telefono").doesNotExist());
+                    .andExpect(jsonPath("$.avistamientos[0].id").value(70));
         }
 
         @Test
@@ -338,7 +337,10 @@ class AlertaControllerTest {
             mockMvc.perform(get("/api/alertas/42"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.estado").value("ELIMINADA"))
-                    .andExpect(jsonPath("$.descripcion").doesNotExist());
+                    // El contrato (§4) dice que el resto "llega a null": la clave está, vacía.
+                    // Qué campos se vacían lo decide el service y se prueba en AlertaServiceTest.
+                    .andExpect(jsonPath("$", hasKey("descripcion")))
+                    .andExpect(jsonPath("$.descripcion").value(nullValue()));
         }
 
         @Test

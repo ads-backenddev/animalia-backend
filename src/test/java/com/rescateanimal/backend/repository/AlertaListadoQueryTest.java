@@ -8,6 +8,7 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.service.AlertaService;
+import org.hibernate.Hibernate;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -142,9 +143,27 @@ class AlertaListadoQueryTest {
 
         assertThat(ids(pagina)).containsExactly(reciente, antigua);
         assertThat(pagina.getSize()).as("tope de página").isEqualTo(100);
-        assertThat(pagina.getContent().get(0).getAutor().getNombre())
-                .as("el autor viaja ya cargado, sin una consulta por tarjeta")
-                .isEqualTo("Listado");
+    }
+
+    /**
+     * Se llama al repositorio fuera de toda transacción, a propósito. Dentro de
+     * AlertaService.listar —que es transaccional— el autor se cargaría igual
+     * aunque faltara el @EntityGraph, con una consulta por tarjeta, y la prueba
+     * no distinguiría una cosa de la otra. Aquí la sesión se cierra al volver
+     * del repositorio: si el autor no vino en la misma consulta, es un proxy
+     * sin inicializar.
+     */
+    @Test
+    @DisplayName("El autor llega en la misma consulta que la alerta, sin una consulta por tarjeta")
+    void elAutorLlegaEnLaMismaConsulta() {
+        alerta(EstadoAlerta.ACTIVA, LAT, 0);
+        alerta(EstadoAlerta.ACTIVA, LAT, 1);
+
+        List<Alerta> pagina = alertaRepository.findAll(
+                AlertaSpec.de(EstadoAlerta.ACTIVA, especie, null, null, null), PageRequest.of(0, 20)).getContent();
+
+        assertThat(pagina).hasSize(2)
+                .allSatisfy(alerta -> assertThat(Hibernate.isInitialized(alerta.getUsuario())).isTrue());
     }
 
     // ---------------------------------------------------------------------

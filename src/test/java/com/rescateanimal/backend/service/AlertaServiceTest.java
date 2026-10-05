@@ -32,14 +32,20 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionSynchronizationUtils;
+
+import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -621,6 +627,30 @@ class AlertaServiceTest {
                     .containsOnlyNulls();
             assertThat(detalle.getAvistamientos()).isEmpty();
             verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong());
+        }
+
+        /*
+         * Se serializa la respuesta que produce el service a partir de un autor
+         * que sí tiene email y teléfono. Comprobarlo en el controller con un
+         * service simulado no prueba nada: la respuesta simulada ya viene sin
+         * ellos.
+         */
+        @Test
+        @DisplayName("Ni el detalle ni el listado llevan el email ni el teléfono del autor (RNF-10)")
+        void sinContactoDelAutor() {
+            Alerta alerta = alertaExistente(5L);
+            alerta.getUsuario().setTelefono("600111222");
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(avistamientoService.visiblesDeLaAlerta(5L)).thenReturn(List.of());
+            when(alertaRepository.findAll(ArgumentMatchers.<Specification<Alerta>>any(), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(alerta)));
+
+            String detalle = JsonMapper.builder().build().writeValueAsString(alertaService.detalle(5L));
+            String listado = JsonMapper.builder().build().writeValueAsString(
+                    alertaService.listar(null, null, null, null, null, PageRequest.of(0, 20)));
+
+            assertThat(detalle).contains("\"nombre\":\"Ana\"").doesNotContain("ana@test.es", "600111222");
+            assertThat(listado).contains("\"nombre\":\"Ana\"").doesNotContain("ana@test.es", "600111222");
         }
 
         @Test
