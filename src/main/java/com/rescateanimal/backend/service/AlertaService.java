@@ -21,7 +21,6 @@ import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AlertaSpec;
 import com.rescateanimal.backend.repository.UsuarioRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
