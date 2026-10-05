@@ -8,6 +8,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.PrecisionModel;
@@ -113,12 +115,24 @@ class DeteccionDuplicadosQueryTest {
         assertThat(buscar(NINGUNA)).isPresent();
     }
 
-    @Test
-    @DisplayName("Una alerta que ya no está ACTIVA no bloquea")
-    void soloLasActivas() {
-        existente(Duration.ZERO, Duration.ZERO, EstadoAlerta.ENCONTRADA);
+    @ParameterizedTest(name = "{0}")
+    @DisplayName("Una alerta que ya no está ACTIVA no bloquea, sea cual sea el motivo")
+    @EnumSource(value = EstadoAlerta.class, names = {"ENCONTRADA", "RETIRADA", "ELIMINADA"})
+    void soloLasActivas(EstadoAlerta estado) {
+        existente(Duration.ZERO, Duration.ZERO, estado);
 
         assertThat(buscar(NINGUNA)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("El radio son 500 m reales: a unos 400 m bloquea, a unos 600 m no")
+    void radioDeQuinientosMetros() {
+        // 0,0036º de latitud son unos 400 m, y 0,0054º unos 600 m, a cualquier longitud.
+        existente(Duration.ZERO, Duration.ZERO, EstadoAlerta.ACTIVA, LAT + 0.0054);
+        assertThat(buscar(NINGUNA)).as("a 600 m").isEmpty();
+
+        long cerca = existente(Duration.ZERO, Duration.ZERO, EstadoAlerta.ACTIVA, LAT + 0.0036);
+        assertThat(buscar(NINGUNA)).as("a 400 m").get().extracting(Alerta::getId).isEqualTo(cerca);
     }
 
     // ---------------------------------------------------------------------
@@ -129,12 +143,16 @@ class DeteccionDuplicadosQueryTest {
 
     /** Una alerta en el punto de la prueba, publicada y avistada hace lo indicado. */
     private long existente(Duration publicadaHace, Duration avistadaHace, EstadoAlerta estado) {
+        return existente(publicadaHace, avistadaHace, estado, LAT);
+    }
+
+    private long existente(Duration publicadaHace, Duration avistadaHace, EstadoAlerta estado, double latitud) {
         Alerta alerta = new Alerta();
         alerta.setUsuario(autor);
         alerta.setDescripcion("Para RF-25");
         alerta.setEspecie(especie);
         alerta.setFechaAvistamiento(Instant.now().minus(avistadaHace));
-        alerta.setUltimaUbicacion(geometrias.createPoint(new Coordinate(LNG, LAT)));
+        alerta.setUltimaUbicacion(geometrias.createPoint(new Coordinate(LNG, latitud)));
         alerta.setEstado(estado);
         Long id = alertaRepository.save(alerta).getId();
         alertas.add(id);
