@@ -523,6 +523,14 @@ public class AlertaService {
      * información más fuerte de las dos y no debe perderse. Ninguna fila se
      * borra (ver AdminService.retirarPublicacion).
      *
+     * LA FOTO SÍ SE VA. La alerta deja de apuntar a ella y FotoService la borra
+     * —fila ahora, archivo tras el commit—: una imagen que sigue servida en
+     * /fotos para quien tenga la URL deja la sanción a medias. Se conserva si
+     * otra publicación o un perfil la usan, o si no la aloja este backend (ver
+     * FotoService.retirarDeAlertaModerada); la alerta deja de apuntar a ella
+     * igualmente. Sus avistamientos, con sus fotos, no se tocan: no son lo
+     * moderado.
+     *
      * Lee la fila bloqueada, como las operaciones del dueño: si el dueño está
      * editando la alerta en ese momento, la moderación espera a que confirme y
      * se aplica encima; si es al revés, el dueño ve ya la ELIMINADA.
@@ -545,6 +553,13 @@ public class AlertaService {
         boolean estabaEnElMapa = seVeEnElMapa(alerta.getEstado());
         alerta.setEstado(EstadoAlerta.ELIMINADA);
         log.warn("El administrador {} ha retirado la alerta {} por incumplir las normas", adminId, alertaId);
+
+        String foto = alerta.getFotoUrl();
+        if (foto != null) {
+            alerta.setFotoUrl(null);
+            fotoService.retirarDeAlertaModerada(foto, alerta.getUsuario().getId(), alerta.getId());
+        }
+
         if (estabaEnElMapa) {
             publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
         }

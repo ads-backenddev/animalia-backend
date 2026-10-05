@@ -60,7 +60,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * - que retirar una alerta NO toca lo que cuelga de ella: el chat abierto sobre
  *   uno de sus avistamientos sigue legible y sigue admitiendo mensajes;
  * - que ACTUALIZACION y CIERRE llegan de verdad por /topic/mapa;
- * - que el dueño no deshace la moderación ni cerrando ni retirando.
+ * - que el dueño no deshace la moderación ni cerrando ni retirando;
+ * - que la moderación borra la foto de la alerta, pero no la que también es
+ *   foto de perfil.
  *
  * Cada prueba usa una especie aleatoria y un punto lejos de los de otras
  * pruebas, para que RF-25 no choque con alertas ajenas, y cada usuario un área
@@ -239,6 +241,41 @@ class AlertasFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("La moderación borra la foto de la alerta, salvo si también es la foto del perfil del autor")
+    void moderacionBorraLaFoto() throws Exception {
+        String tokenAdmin = entrar(crearAdmin());
+        String sola = FotosDePrueba.subir(http, puerto, tokenDuenyo);
+        String tambienDePerfil = FotosDePrueba.subir(http, puerto, tokenDuenyo);
+        assertThat(enviar("PUT", "/api/usuarios/me", tokenDuenyo, """
+                {"nombre":"duenyo","fotoUrl":"%s"}
+                """.formatted(tambienDePerfil)).statusCode()).isEqualTo(200);
+        long conFotoSola = publicar(tokenDuenyo, cuerpo("Con su foto", latitud, longitud, sola));
+        long conFotoDePerfil = publicar(tokenDuenyo,
+                cuerpo("Con la foto del perfil", latitud + 0.05, longitud, tambienDePerfil));
+        String nombreSola = almacenFotos.nombreDe(sola).orElseThrow();
+        String nombreDePerfil = almacenFotos.nombreDe(tambienDePerfil).orElseThrow();
+        assertThat(enviar("GET", "/fotos/" + nombreSola, null, null).statusCode()).isEqualTo(200);
+
+        for (long alerta : List.of(conFotoSola, conFotoDePerfil)) {
+            assertThat(enviar("DELETE", "/api/admin/publicaciones/" + alerta + "?tipo=ALERTA", tokenAdmin, null)
+                    .statusCode()).isEqualTo(204);
+        }
+
+        assertThat(enviar("GET", "/fotos/" + nombreSola, null, null).statusCode())
+                .as("deja de servirse en cuanto se confirma la moderación").isEqualTo(404);
+        assertThat(fotoRepository.existsById(nombreSola)).isFalse();
+        assertThat(almacenFotos.abrir(nombreSola)).as("archivo, borrado tras el commit").isEmpty();
+
+        assertThat(fotoRepository.existsById(nombreDePerfil)).as("el perfil no está moderado").isTrue();
+        assertThat(almacenFotos.abrir(nombreDePerfil)).isPresent();
+
+        HttpResponse<String> mias = enviar("GET", "/api/alertas/mis-alertas", tokenDuenyo, null);
+        assertThat(JsonPath.<List<Object>>read(mias.body(), "$[*].fotoUrl"))
+                .as("ninguna de las dos alertas moderadas apunta ya a su foto")
+                .containsOnlyNulls();
+    }
+
+    @Test
     @DisplayName("Mover una alerta encima de otra de la misma especie es 409: RF-25 no se esquiva editando")
     void rf25AlEditar() throws Exception {
         long primera = publicar(tokenDuenyo, latitud, longitud);
@@ -258,7 +295,11 @@ class AlertasFlujoCompletoTest {
     // ---------------------------------------------------------------------
 
     private long publicar(String token, double lat, double lng) throws Exception {
-        HttpResponse<String> alta = enviar("POST", "/api/alertas", token, cuerpo("Perra marrón con collar rojo", lat, lng));
+        return publicar(token, cuerpo("Perra marrón con collar rojo", lat, lng));
+    }
+
+    private long publicar(String token, String cuerpo) throws Exception {
+        HttpResponse<String> alta = enviar("POST", "/api/alertas", token, cuerpo);
         assertThat(alta.statusCode()).as(alta.body()).isEqualTo(201);
         return numero(alta, "$.id");
     }
@@ -268,6 +309,13 @@ class AlertasFlujoCompletoTest {
                 {"descripcion":"%s","especie":"%s","fechaAvistamiento":"%s",
                  "ubicacion":{"latitud":%s,"longitud":%s},"radioBusqueda":1000}
                 """.formatted(descripcion, especie, Instant.now().minus(1, ChronoUnit.HOURS), lat, lng);
+    }
+
+    private String cuerpo(String descripcion, double lat, double lng, String fotoUrl) {
+        return """
+                {"descripcion":"%s","especie":"%s","fechaAvistamiento":"%s","fotoUrl":"%s",
+                 "ubicacion":{"latitud":%s,"longitud":%s},"radioBusqueda":1000}
+                """.formatted(descripcion, especie, Instant.now().minus(1, ChronoUnit.HOURS), fotoUrl, lat, lng);
     }
 
     /** La acción del siguiente evento del mapa sobre esta alerta, ignorando los de otras. */

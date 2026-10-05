@@ -701,11 +701,38 @@ class AlertaServiceTest {
         void idempotente() {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(EstadoAlerta.ELIMINADA);
+            alerta.setFotoUrl("https://fotos.test/fotos/x.jpg");
             when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThat(alertaService.retirarPorModeracion(5L, 99L)).isFalse();
 
             verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+            verify(fotoService, never()).retirarDeAlertaModerada(any(), any(), any());
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Al moderarla, la alerta deja de apuntar a su foto y se pide borrarla, venga del estado que venga")
+        @EnumSource(value = EstadoAlerta.class, names = {"ACTIVA", "ENCONTRADA", "RETIRADA"})
+        void borraLaFoto(EstadoAlerta estado) {
+            Alerta alerta = alertaExistente(5L);
+            alerta.setEstado(estado);
+            alerta.setFotoUrl("https://fotos.test/fotos/x.jpg");
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
+
+            alertaService.retirarPorModeracion(5L, 99L);
+
+            assertThat(alerta.getFotoUrl()).isNull();
+            verify(fotoService).retirarDeAlertaModerada("https://fotos.test/fotos/x.jpg", 1L, 5L);
+        }
+
+        @Test
+        @DisplayName("Sin foto no hay nada que borrar")
+        void sinFoto() {
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+
+            alertaService.retirarPorModeracion(5L, 99L);
+
+            verify(fotoService, never()).retirarDeAlertaModerada(any(), any(), any());
         }
 
         @Test

@@ -1,7 +1,9 @@
 package com.rescateanimal.backend.repository;
 
+import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +14,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -36,10 +39,13 @@ class FotoPersistenciaTest {
     private FotoRepository fotoRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
+    @Autowired
+    private AlertaRepository alertaRepository;
 
     private Usuario duenyo;
     private Usuario otro;
     private final List<String> fotosCreadas = new ArrayList<>();
+    private final List<Long> alertasCreadas = new ArrayList<>();
 
     @BeforeEach
     void sembrar() {
@@ -49,6 +55,7 @@ class FotoPersistenciaTest {
 
     @AfterEach
     void limpiar() {
+        alertaRepository.deleteAllById(alertasCreadas);
         fotoRepository.deleteAllById(fotosCreadas);
         usuarioRepository.delete(duenyo);
         usuarioRepository.delete(otro);
@@ -84,6 +91,38 @@ class FotoPersistenciaTest {
 
         assertThatThrownBy(() -> guardar(fantasma, 10))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("usadaFueraDeLaAlerta no cuenta a la propia alerta; sí a otra alerta y a un perfil")
+    void usadaFueraDeLaAlerta() {
+        String nombre = UUID.randomUUID() + ".jpg";
+        String url = "https://otra-base.test/fotos/" + nombre;
+        long propia = alertaCon(url);
+
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("solo la usa ella").isFalse();
+
+        long otra = alertaCon(url);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("otra alerta").isTrue();
+
+        alertaRepository.deleteById(otra);
+        alertasCreadas.remove(Long.valueOf(otra));
+        otro.setFotoUrl(url);
+        otro = usuarioRepository.save(otro);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("un perfil").isTrue();
+    }
+
+    private long alertaCon(String fotoUrl) {
+        Alerta alerta = new Alerta();
+        alerta.setUsuario(duenyo);
+        alerta.setDescripcion("Para la foto");
+        alerta.setEspecie("foto-" + UUID.randomUUID().toString().substring(0, 8));
+        alerta.setFechaAvistamiento(Instant.now());
+        alerta.setFotoUrl(fotoUrl);
+        alerta.setEstado(EstadoAlerta.ACTIVA);
+        long id = alertaRepository.save(alerta).getId();
+        alertasCreadas.add(id);
+        return id;
     }
 
     private Foto guardar(Usuario usuario, int tamanyo) {
