@@ -18,12 +18,14 @@ import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -34,6 +36,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionSynchronizationUtils;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -713,6 +718,84 @@ class AlertaServiceTest {
                     .thenReturn(Optional.empty());
             when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+        }
+    }
+
+    @Nested
+    @DisplayName("Cuándo sale el evento del mapa: tras el commit, y nunca si hay rollback")
+    class MomentoDelEvento {
+
+        /*
+         * Las demás pruebas corren sin transacción, y entonces publicarEnMapa
+         * envía en el acto: prueban qué se emite, no cuándo. Aquí se abre la
+         * sincronización de transacciones como lo hace Spring al entrar en un
+         * método @Transactional, y se dispara a mano el final de la transacción.
+         */
+        @BeforeEach
+        void abrirTransaccion() {
+            TransactionSynchronizationManager.initSynchronization();
+        }
+
+        @AfterEach
+        void cerrarTransaccion() {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Nada se envía dentro de la transacción; tras el commit, una vez")
+        @ValueSource(strings = {"publicar", "editar", "retirar", "cerrar", "moderar"})
+        void soloTrasElCommit(String operacion) {
+            ejecutar(operacion);
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+
+            TransactionSynchronizationUtils.triggerAfterCommit();
+
+            verify(mensajeria).convertAndSend(eq(AlertaService.CANAL_MAPA), any(EventoMapaResponse.class));
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Si la transacción se deshace, no se envía nada")
+        @ValueSource(strings = {"publicar", "editar", "retirar", "cerrar", "moderar"})
+        void nadaTrasUnRollback(String operacion) {
+            ejecutar(operacion);
+
+            TransactionSynchronizationUtils.invokeAfterCompletion(
+                    TransactionSynchronizationManager.getSynchronizations(),
+                    TransactionSynchronization.STATUS_ROLLED_BACK);
+
+            verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+        }
+
+        /** Cada operación que avisa al mapa, sobre una alerta ACTIVA de su autor. */
+        private void ejecutar(String operacion) {
+            switch (operacion) {
+                case "publicar" -> {
+                    when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(),
+                            anyLong())).thenReturn(Optional.empty());
+                    when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor()));
+                    when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+                    alertaService.publicar(peticion(), 1L);
+                }
+                case "editar" -> {
+                    when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+                    alertaService.actualizar(5L, new ActualizarAlertaRequest("Otra descripción", null, "perro",
+                            Instant.now(), new UbicacionRequest(LAT, LNG), null), 1L);
+                }
+                case "retirar" -> {
+                    when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+                    alertaService.retirar(5L, 1L);
+                }
+                case "cerrar" -> {
+                    when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+                    when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+                    alertaService.cerrar(5L, 1L);
+                }
+                case "moderar" -> {
+                    when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+                    alertaService.retirarPorModeracion(5L, 2L);
+                }
+                default -> throw new IllegalArgumentException(operacion);
+            }
         }
     }
 
