@@ -28,6 +28,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -201,6 +203,42 @@ class ChatServiceTest {
             // AutorResponse solo expone id, nombre y foto: si alguien añadiera
             // email o teléfono, esta comprobación de forma lo delataría.
             assertThat(detalle.getOtroParticipante()).hasNoNullFieldsOrPropertiesExcept("fotoUrl");
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Con la alerta publicada, el chat enseña su foto")
+        @EnumSource(value = EstadoAlerta.class, names = {"ACTIVA", "ENCONTRADA"})
+        void alertaPublicadaConFoto(EstadoAlerta estado) {
+            conAlertaEn(estado);
+
+            ChatDetalleResponse detalle = chatService.detalle(ID_CHAT, ID_EMISOR);
+
+            assertThat(detalle.getAlertaFotoUrl()).isEqualTo("https://fotos/alerta.jpg");
+            assertThat(detalle.getAlertaEstado()).isEqualTo(estado.name());
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Con la alerta retirada o moderada, el chat sigue pero sin su foto")
+        @EnumSource(value = EstadoAlerta.class, names = {"RETIRADA", "ELIMINADA"})
+        void alertaRetiradaSinFoto(EstadoAlerta estado) {
+            conAlertaEn(estado);
+
+            ChatDetalleResponse detalle = chatService.detalle(ID_CHAT, ID_EMISOR);
+
+            assertThat(detalle.getAlertaFotoUrl()).isNull();
+            assertThat(detalle.getAlertaId()).isEqualTo(ID_ALERTA);
+            assertThat(detalle.getAlertaEspecie()).isEqualTo("perro");
+            assertThat(detalle.getAlertaEstado()).isEqualTo(estado.name());
+            assertThat(detalle.getAvistamientoFotoUrl())
+                    .as("el avistamiento es del otro participante: la sanción de la alerta no lo toca")
+                    .isEqualTo("https://fotos/avistamiento.jpg");
+        }
+
+        private void conAlertaEn(EstadoAlerta estado) {
+            Avistamiento avistamiento = avistamiento();
+            avistamiento.getAlerta().setEstado(estado);
+            when(avistamientoRepository.buscarConAutorYAlerta(anyCollection()))
+                    .thenReturn(List.of(avistamiento));
         }
 
         @Test
@@ -527,6 +565,7 @@ class ChatServiceTest {
         alerta.setId(ID_ALERTA);
         alerta.setUsuario(usuario(ID_DUENYO_ALERTA));
         alerta.setEspecie("perro");
+        alerta.setFotoUrl("https://fotos/alerta.jpg");
         alerta.setEstado(EstadoAlerta.ACTIVA);
 
         Avistamiento avistamiento = new Avistamiento();

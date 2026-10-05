@@ -529,6 +529,11 @@ de contexto; el otro se omite del JSON:
 | `AVISTAMIENTO` | `avistamientoId`, `avistamientoFotoUrl`, `avistamientoDescripcion`, `alertaId`, `alertaEspecie`, `alertaFotoUrl`, `alertaEstado` |
 | `ADOPCION` | `animalId`, `animalNombre`, `animalEspecie`, `animalFotoUrl`, `animalEstado`, `protectoraId`, `protectoraNombre` |
 
+Si la alerta está `RETIRADA` o `ELIMINADA`, el chat sigue funcionando pero `alertaFotoUrl` se omite:
+se mantienen `alertaId`, `alertaEspecie` y `alertaEstado`, el mismo recorte que hace el detalle de
+la alerta (§4). Los campos del avistamiento no cambian: son del otro participante, y la retirada o la
+moderación de la alerta no los alcanza.
+
 Un chat cuya publicación ya no existe se omite del listado en vez de tumbarlo entero, y responde
 `404` al pedir su detalle, que es donde ese chat concreto es lo que se ha pedido. Retirar un animal
 del catálogo ya no provoca ese caso: desde que `DELETE /api/adopcion/{id}` lo deja en `RETIRADO` en
