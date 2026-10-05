@@ -311,7 +311,7 @@ class AlertaServiceTest {
         @DisplayName("El autor puede cerrarla: pasa a ENCONTRADA y se avisa al mapa")
         void elAutorPuedeCerrarla() {
             Alerta alerta = alertaExistente(5L);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
             when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
 
             AlertaResponse respuesta = alertaService.cerrar(5L, 1L);
@@ -326,7 +326,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Otro usuario no puede cerrar una alerta ajena")
         void otroUsuarioNoPuedeCerrarla() {
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
 
             assertThatThrownBy(() -> alertaService.cerrar(5L, 999L))
                     .isInstanceOf(AccessDeniedException.class);
@@ -337,7 +337,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Cerrar una alerta inexistente da 404")
         void alertaInexistente() {
-            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+            when(alertaRepository.bloquearParaModificar(anyLong())).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> alertaService.cerrar(123L, 1L))
                     .isInstanceOf(ResourceNotFoundException.class);
@@ -349,7 +349,7 @@ class AlertaServiceTest {
         void noSeCierraLoRetirado(EstadoAlerta estado) {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(estado);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThatThrownBy(() -> alertaService.cerrar(5L, 1L))
                     .isInstanceOfSatisfying(OperacionNoPermitidaException.class,
@@ -365,7 +365,7 @@ class AlertaServiceTest {
         void cerrarDosVecesEsIdempotente() {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(EstadoAlerta.ENCONTRADA);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThat(alertaService.cerrar(5L, 1L).getEstado()).isEqualTo(EstadoAlerta.ENCONTRADA);
 
@@ -382,7 +382,7 @@ class AlertaServiceTest {
         @DisplayName("Cambiar solo la descripción no repite RF-25, y avisa al mapa con ACTUALIZACION")
         void soloDescripcion() {
             Alerta alerta = alertaExistente(5L);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             AlertaResponse respuesta = alertaService.actualizar(5L, edicion("perro", LAT, LNG), 1L);
 
@@ -397,7 +397,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Mover la ubicación repite RF-25 sobre el punto nuevo, sin contarse a sí misma")
         void moverRepiteRf25() {
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
             when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.empty());
 
@@ -411,7 +411,7 @@ class AlertaServiceTest {
         void cambiarEspecieADuplicada() {
             Alerta alerta = alertaExistente(5L);
             alerta.setDescripcion("Original");
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
             when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
                     .thenReturn(Optional.of(alertaExistente(42L)));
 
@@ -426,7 +426,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Cambiar solo mayúsculas de la especie no es cambiar de especie")
         void especieEnMayusculas() {
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
 
             alertaService.actualizar(5L, edicion("PERRO", LAT, LNG), 1L);
 
@@ -438,7 +438,7 @@ class AlertaServiceTest {
         void foto() {
             Alerta alerta = alertaExistente(5L);
             alerta.setFotoUrl("https://fotos.test/fotos/vieja.jpg");
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             ActualizarAlertaRequest misma = edicion("perro", LAT, LNG);
             misma.setFotoUrl("https://fotos.test/fotos/vieja.jpg");
@@ -454,7 +454,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Otro usuario no puede editarla")
         void ajena() {
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alertaExistente(5L)));
 
             assertThatThrownBy(() -> alertaService.actualizar(5L, edicion("perro", LAT, LNG), 999L))
                     .isInstanceOf(AccessDeniedException.class);
@@ -467,7 +467,7 @@ class AlertaServiceTest {
             Alerta alerta = alertaExistente(5L);
             alerta.setDescripcion("Original");
             alerta.setEstado(estado);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThatThrownBy(() -> alertaService.actualizar(5L, edicion("perro", LAT, LNG), 1L))
                     .isInstanceOfSatisfying(OperacionNoPermitidaException.class,
@@ -478,7 +478,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Una alerta inexistente da 404")
         void inexistente() {
-            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+            when(alertaRepository.bloquearParaModificar(anyLong())).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> alertaService.actualizar(123L, edicion("perro", LAT, LNG), 1L))
                     .isInstanceOf(ResourceNotFoundException.class);
@@ -498,7 +498,7 @@ class AlertaServiceTest {
         @DisplayName("Una ACTIVA pasa a RETIRADA, sin borrarse, y su marcador sale del mapa")
         void activa() {
             Alerta alerta = alertaExistente(5L);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             alertaService.retirar(5L, 1L);
 
@@ -515,7 +515,7 @@ class AlertaServiceTest {
         void encontrada() {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(EstadoAlerta.ENCONTRADA);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             alertaService.retirar(5L, 1L);
 
@@ -529,7 +529,7 @@ class AlertaServiceTest {
         void yaRetirada(EstadoAlerta estado) {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(estado);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             alertaService.retirar(5L, 1L);
 
@@ -541,7 +541,7 @@ class AlertaServiceTest {
         @DisplayName("Otro usuario no puede retirarla")
         void ajena() {
             Alerta alerta = alertaExistente(5L);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThatThrownBy(() -> alertaService.retirar(5L, 999L)).isInstanceOf(AccessDeniedException.class);
             assertThat(alerta.getEstado()).isEqualTo(EstadoAlerta.ACTIVA);
@@ -550,7 +550,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Una alerta inexistente da 404")
         void inexistente() {
-            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+            when(alertaRepository.bloquearParaModificar(anyLong())).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> alertaService.retirar(123L, 1L)).isInstanceOf(ResourceNotFoundException.class);
         }
@@ -618,7 +618,7 @@ class AlertaServiceTest {
         @DisplayName("Una ACTIVA pasa a ELIMINADA, sin borrarse, y su marcador sale del mapa")
         void activaSaleDelMapa() {
             Alerta alerta = alertaExistente(5L);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThat(alertaService.retirarPorModeracion(5L, 99L)).isTrue();
 
@@ -636,7 +636,7 @@ class AlertaServiceTest {
         void terminadaPasaAEliminada(EstadoAlerta estado) {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(estado);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThat(alertaService.retirarPorModeracion(5L, 99L)).isTrue();
 
@@ -649,7 +649,7 @@ class AlertaServiceTest {
         void idempotente() {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(EstadoAlerta.ELIMINADA);
-            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
 
             assertThat(alertaService.retirarPorModeracion(5L, 99L)).isFalse();
 
@@ -659,7 +659,7 @@ class AlertaServiceTest {
         @Test
         @DisplayName("Una alerta inexistente da 404")
         void inexistente() {
-            when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
+            when(alertaRepository.bloquearParaModificar(anyLong())).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> alertaService.retirarPorModeracion(123L, 99L))
                     .isInstanceOf(ResourceNotFoundException.class);

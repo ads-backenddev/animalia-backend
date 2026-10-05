@@ -2,12 +2,14 @@ package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -34,6 +36,21 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
     @Override
     @EntityGraph(attributePaths = "usuario")
     Page<Alerta> findAll(Specification<Alerta> filtros, Pageable paginacion);
+
+    /**
+     * La alerta con su fila bloqueada hasta el final de la transacción
+     * (SELECT ... FOR UPDATE), para las operaciones que deciden según su estado
+     * y después lo escriben: editar, retirar, cerrar y moderar.
+     *
+     * Sin el bloqueo, dos de ellas a la vez leían el mismo estado y la última en
+     * confirmar ganaba: un PUT del dueño que leyó ACTIVA antes de que el
+     * administrador confirmara la moderación escribía ACTIVA encima de
+     * ELIMINADA, porque Hibernate actualiza todas las columnas. Con él, la
+     * segunda espera a que la primera confirme y decide sobre el estado nuevo.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT a FROM Alerta a WHERE a.id = :id")
+    Optional<Alerta> bloquearParaModificar(@Param("id") Long id);
 
     /**
      * Alertas activas y geolocalizadas, para pintar el mapa (RF-04).

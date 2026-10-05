@@ -513,11 +513,15 @@ public class AlertaService {
      * información más fuerte de las dos y no debe perderse. Ninguna fila se
      * borra (ver AdminService.retirarPublicacion).
      *
+     * Lee la fila bloqueada, como las operaciones del dueño: si el dueño está
+     * editando la alerta en ese momento, la moderación espera a que confirme y
+     * se aplica encima; si es al revés, el dueño ve ya la ELIMINADA.
+     *
      * @return true si esta llamada la retiró, false si ya estaba ELIMINADA
      */
     @Transactional
     public boolean retirarPorModeracion(Long alertaId, Long adminId) {
-        Alerta alerta = alertaRepository.findById(alertaId)
+        Alerta alerta = alertaRepository.bloquearParaModificar(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta " + alertaId + " no existe"));
 
         boolean cambia = switch (alerta.getEstado()) {
@@ -545,9 +549,14 @@ public class AlertaService {
         };
     }
 
-    /** La alerta, si existe (404) y si es de este usuario (403). */
+    /**
+     * La alerta, si existe (404) y si es de este usuario (403), con su fila
+     * bloqueada hasta el commit: quien llama va a decidir según su estado y a
+     * escribirlo, y el administrador no debe poder moderarla entre medias (ver
+     * AlertaRepository.bloquearParaModificar).
+     */
     private Alerta exigirAlertaPropia(Long alertaId, Long usuarioId, String mensajeSiAjena) {
-        Alerta alerta = alertaRepository.findById(alertaId)
+        Alerta alerta = alertaRepository.bloquearParaModificar(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
 
         if (!alerta.getUsuario().getId().equals(usuarioId)) {
