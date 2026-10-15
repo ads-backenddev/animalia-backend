@@ -364,7 +364,7 @@ RF-08, RF-15, RF-21.
 |---|---|---|---|---|---|---|
 | `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409` |
 | `GET` | `/api/avistamientos/feed` | Feed para el swipe: avistamientos candidatos, excluyendo los propios y los ya deslizados por el usuario (RF-15) | Autenticado | — | Lista de `AvistamientoFeedResponse` | `200`, `401` |
-| `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento. **Pendiente de implementar** | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
+| `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento. **Sin construir: pendiente aceptado** (§20) | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
 
 `fotoUrl` es obligatoria aunque el modelo la admita nula: el swipe se decide comparando la foto del
 animal perdido con la del avistado, así que una tarjeta sin imagen no sirve para nada (RF-21).
@@ -1905,6 +1905,8 @@ comprueba índices.
 
 Con RF-06 cerrado quedaban **tres huecos**. El de los endpoints de alerta se cerró después, en su
 propio bloque (§22), así que hoy quedan **dos**: RF-05 y el contacto con la protectora.
+Aparte de esos dos huecos del SRS queda un endpoint del contrato sin construir,
+`GET /api/avistamientos/{id}`, que no responde a ningún requisito y se acepta como pendiente.
 
 > **Corrección.** Este apartado decía que eran dos —RF-05 y el contacto con la protectora— y no era
 > cierto: cuatro endpoints de `/api/alertas` diseñados en §4 desde el principio nunca se construyeron,
@@ -1915,6 +1917,7 @@ propio bloque (§22), así que hoy quedan **dos**: RF-05 y el contacto con la pr
 |---|---|
 | **RF-05 — notificaciones.** `NotificacionController` es un esqueleto vacío: no existe `GET /api/notificaciones` ni el `PATCH` de marcado, y nadie emite por `/user/queue/notificaciones`. La mitad de escritura sí está: `NotificacionService` persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy las notificaciones se guardan y **nadie puede leerlas** | Requisito entero sin construir |
 | **RF-06 — contacto con la protectora local.** `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar`, diseñados en §9 desde el principio. Este bloque construyó el directorio y la ficha, que es lo que se pidió, pero no ellos | Parte de RF-06 sin construir |
+| **`GET /api/avistamientos/{id}`, el detalle de un avistamiento** (§5). Ningún requisito lo pide y ninguna pantalla lo necesita hoy: los avistamientos ya llegan enteros por los sitios donde se consultan (ver «Trabajo futuro») | Pendiente conocido y aceptado |
 | ~~**Cuatro endpoints de alerta.** `GET /api/alertas` (listado paginado), `GET /api/alertas/{id}` (detalle con avistamientos), `PUT /api/alertas/{id}` (editar) y `DELETE /api/alertas/{id}` (retirar), diseñados en §4. Ninguna fila de la trazabilidad (§14) los cita, pero el resto del contrato cuenta con ellos: §5 remite al detalle para ver los avistamientos de una alerta, §11 compara su retirada con la del administrador y §12 necesita el detalle para descartar avisos huérfanos. Hoy el dueño de una alerta no puede editarla ni retirarla, solo cerrarla~~ | **Cerrado en el bloque de los endpoints de alerta (§22)** |
 
 Los dos primeros no se resuelven escribiendo un endpoint: RF-05 necesita un servicio de push externo
@@ -1932,6 +1935,7 @@ descritos uno a uno abajo, en «Trabajo futuro».
 |---|---|
 | **RF-05 entero, con notificación push real** | Ver «Trabajo futuro» |
 | **El contacto directo con la protectora (RF-06)**, con la decisión de modelo que arrastra | Ver «Trabajo futuro» |
+| **`GET /api/avistamientos/{id}`**, pendiente aceptado hasta que haga falta enlazar un avistamiento suelto | Ver «Trabajo futuro» |
 | ~~**Los cuatro endpoints de alerta sin construir** (§4)~~ | **Hecho en §22** |
 | Dejar que una protectora declare `esPersonaFisica` después de registrarse, para que las anteriores a `V12` puedan corregirlo | Sin bloque asignado |
 | Ordenación del directorio por valoración o por número de animales disponibles | RF-06 no lo pide |
@@ -1986,6 +1990,23 @@ del `areaGeografica` del usuario es una comparación de textos libres —«Madri
 Carabanchel»— y hay que decidir qué pasa cuando salen varias o ninguna. `400` si el usuario no tiene
 área fijada y `404` si no hay ninguna `ACTIVA` en esa zona es lo que §9 enuncia, pero el criterio de
 desempate está sin decidir.
+
+#### `GET /api/avistamientos/{id}` — pendiente conocido y aceptado
+
+Diseñado en §5 desde el principio y sin construir. **Se acepta dejarlo así porque hoy ningún cliente
+necesita pedir un avistamiento suelto**: cada sitio donde se consulta uno ya lo trae entero.
+
+- **El detalle de la alerta** (`GET /api/alertas/{id}`, §4) devuelve sus avistamientos `VISIBLE`, con
+  su autor público: es donde el dueño de una alerta ve lo que le han mandado.
+- **El feed de swipe** (§5) lleva en cada tarjeta los datos del avistamiento y los de su alerta.
+- **El detalle de un chat** (§7) lleva los del avistamiento que originó el match.
+
+Lo que no tiene camino es llegar a un avistamiento **por su id, desde fuera** de esas tres vistas. Hoy
+nada lo pide: ninguna notificación apunta a un avistamiento —`NUEVO_MATCH` lleva al match, y de ahí al
+chat—. **Hará falta en cuanto exista un enlace directo**: un aviso *push* de «han visto a tu mascota»
+que abra el avistamiento (al diseñar RF-05), o un enlace compartido. Entonces habrá que decidir qué
+responde para un avistamiento `ELIMINADO` por moderación o de una alerta ya terminada, con el mismo
+criterio que el detalle de alerta: `200` reducido para lo que existió y `404` solo para lo que no.
 
 #### Alertas — los cuatro endpoints (hecho en §22)
 
