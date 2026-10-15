@@ -271,7 +271,7 @@ public class ChatService {
                     .avistamientoDescripcion(avistamiento.getDescripcion())
                     .alertaId(alerta.getId())
                     .alertaEspecie(alerta.getEspecie())
-                    .alertaFotoUrl(alerta.getFotoUrl())
+                    .alertaFotoUrl(fotoDeLaAlertaVisible(alerta))
                     .alertaEstado(alerta.getEstado().name());
 
         } else if (participantes.publicacion() instanceof PublicacionDelChat.DeAdopcion origen) {
@@ -287,6 +287,22 @@ public class ChatService {
         }
 
         return detalle.build();
+    }
+
+    /**
+     * La foto de la alerta, solo si la alerta sigue publicada.
+     *
+     * El chat sobrevive a la alerta —la conversación es también de la otra
+     * parte—, pero no debe seguir enseñando lo que su dueño retiró o el
+     * administrador moderó: sería la misma puerta trasera que el detalle de
+     * GET /api/alertas/{id} cierra. Se queda lo que dice de qué alerta se
+     * trataba y en qué quedó: id, especie y estado.
+     */
+    private static String fotoDeLaAlertaVisible(Alerta alerta) {
+        return switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA -> alerta.getFotoUrl();
+            case RETIRADA, ELIMINADA -> null;
+        };
     }
 
     /**

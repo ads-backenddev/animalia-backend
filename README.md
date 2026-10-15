@@ -184,6 +184,7 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_USER` | `rescate` | Usuario de la base de datos |
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
 | `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
+| `JPA_LOCK_TIMEOUT_MS` | `5000` | Espera máxima, en milisegundos, de un bloqueo de fila sobre una alerta. Al vencer, el cliente recibe `409 RECURSO_OCUPADO` en lugar de quedarse esperando |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
 | `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
@@ -293,7 +294,7 @@ El backend está construido salvo lo que señala la columna de estado. Lo pendie
 | Estructura por capas, 15 entidades JPA, esquema versionado con Flyway (`V1`–`V15`), Docker, contrato en `docs/api-rest.md` | Terminado |
 | Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
 | Perfil, idioma y baja de cuenta con anonimización (RF-02, RF-18, RF-19) | Terminado |
-| Alertas: publicación, mapa en tiempo real por STOMP, detección de duplicados y cierre (RF-03, RF-04, RF-14, RF-25) | Terminado, **salvo cuatro endpoints**: listado paginado, detalle con avistamientos, editar y retirar (§4) |
+| Alertas: publicación, listado y detalle, edición, cierre y retirada, mapa en tiempo real por STOMP y detección de duplicados (RF-03, RF-04, RF-14, RF-25) | Terminado |
 | Avistamientos y su feed de swipe (RF-21) | Terminado, salvo `GET /api/avistamientos/{id}` (§5) |
 | Matches, descarte y límite diario (RF-08, RF-09, RF-15, RF-24) | Terminado |
 | Chat en tiempo real (RF-12) | Terminado |

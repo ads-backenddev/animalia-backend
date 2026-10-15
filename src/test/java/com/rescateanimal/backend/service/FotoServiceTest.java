@@ -361,6 +361,70 @@ class FotoServiceTest {
     }
 
     @Nested
+    @DisplayName("Retirar la foto de una alerta moderada")
+    class RetirarDeAlertaModerada {
+
+        private static final Long ID_ALERTA = 5L;
+
+        @Test
+        @DisplayName("La fila se borra ya y el archivo solo tras el commit")
+        void filaYaArchivoTrasCommit() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            TransactionSynchronizationManager.initSynchronization();
+
+            servicio.retirarDeAlertaModerada(almacen.urlDe(nombre), ID_USUARIO, ID_ALERTA);
+
+            verify(fotoRepository).usadaFueraDeLaAlerta(nombre, ID_ALERTA);
+            verify(fotoRepository).deleteById(nombre);
+            assertThat(almacen.abrir(nombre)).as("antes del commit sigue en disco").isPresent();
+
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+            assertThat(almacen.abrir(nombre)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Si la moderación se deshace, el archivo sigue ahí para su fila restaurada")
+        void rollbackConservaElArchivo() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            TransactionSynchronizationManager.initSynchronization();
+
+            servicio.retirarDeAlertaModerada(almacen.urlDe(nombre), ID_USUARIO, ID_ALERTA);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+
+        @Test
+        @DisplayName("Si otra publicación o un perfil la usan, se conserva: eso no está moderado")
+        void usadaFuera() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            when(fotoRepository.usadaFueraDeLaAlerta(nombre, ID_ALERTA)).thenReturn(true);
+
+            servicio.retirarDeAlertaModerada(almacen.urlDe(nombre), ID_USUARIO, ID_ALERTA);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+
+        @Test
+        @DisplayName("Una foto externa o que no es del autor no se borra, y no es un error")
+        void externaOAjena() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(false);
+
+            servicio.retirarDeAlertaModerada("https://example.test/perro.jpg", ID_USUARIO, ID_ALERTA);
+            servicio.retirarDeAlertaModerada(almacen.urlDe(nombre), ID_USUARIO, ID_ALERTA);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+    }
+
+    @Nested
     @DisplayName("Servir una foto")
     class Servir {
 

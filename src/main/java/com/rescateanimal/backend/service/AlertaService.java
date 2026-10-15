@@ -1,28 +1,36 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.EventoMapaResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.repository.AlertaRepository;
+import com.rescateanimal.backend.repository.AlertaSpec;
 import com.rescateanimal.backend.repository.UsuarioRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
@@ -50,10 +58,17 @@ public class AlertaService {
     /** SRID 4326: coordenadas geográficas WGS84, las mismas que da el GPS. */
     private static final int SRID_WGS84 = 4326;
 
+    /** excluirId de buscarSimilar al publicar: ningún id de IDENTITY vale 0. */
+    private static final long NINGUNA_ALERTA = 0L;
+
+    /** Tope de tamaño de página del listado, el mismo que el del catálogo de adopción. */
+    static final int MAXIMO_POR_PAGINA = 100;
+
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
     private final FotoService fotoService;
+    private final AvistamientoService avistamientoService;
     private final SimpMessagingTemplate mensajeria;
 
     private final double radioDuplicadosMetros;
@@ -70,6 +85,7 @@ public class AlertaService {
                          UsuarioRepository usuarioRepository,
                          NotificacionService notificacionService,
                          FotoService fotoService,
+                         AvistamientoService avistamientoService,
                          SimpMessagingTemplate mensajeria,
                          @Value("${app.alertas.radio-duplicados-metros}") double radioDuplicadosMetros,
                          @Value("${app.alertas.ventana-duplicados-horas}") int ventanaDuplicadosHoras,
@@ -78,6 +94,7 @@ public class AlertaService {
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.fotoService = fotoService;
+        this.avistamientoService = avistamientoService;
         this.mensajeria = mensajeria;
         this.radioDuplicadosMetros = radioDuplicadosMetros;
         this.ventanaDuplicadosHoras = ventanaDuplicadosHoras;
@@ -102,7 +119,7 @@ public class AlertaService {
             fotoService.exigirPropia(fotoUrl, autorId);
         }
 
-        comprobarQueNoEsDuplicada(peticion);
+        comprobarQueNoEsDuplicada(peticion.getEspecie(), peticion.getUbicacion(), NINGUNA_ALERTA);
 
         Usuario autor = usuarioRepository.findById(autorId)
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
@@ -130,7 +147,13 @@ public class AlertaService {
 
     /**
      * Detección de alertas duplicadas (RF-25): misma especie, radio de 500 m y
-     * ventana de 24 h, los tres a la vez.
+     * ventana de 24 h, los tres a la vez. La ventana mira cuándo se publicó la
+     * alerta existente además de cuándo se vio al animal: el porqué está en
+     * AlertaRepository.buscarSimilar.
+     *
+     * Sirve a la publicación y a la edición. Al editar, excluirId deja fuera a
+     * la propia alerta, que si no chocaría consigo misma; al publicar se pasa
+     * NINGUNA_ALERTA.
      *
      * LA VENTANA SON 24 HORAS REALES. Se calcula restando sobre un Instant, no
      * sobre un LocalDateTime como antes, y eso arregla dos cosas distintas:
@@ -151,13 +174,13 @@ public class AlertaService {
      * alta el mismo animal en el mismo segundo— es poco probable y el coste de
      * fallar es una alerta repetida, no un dato corrupto.
      */
-    private void comprobarQueNoEsDuplicada(CrearAlertaRequest peticion) {
+    private void comprobarQueNoEsDuplicada(String especie, UbicacionRequest ubicacion, long excluirId) {
         Instant desde = Instant.now().minus(ventanaDuplicadosHoras, ChronoUnit.HOURS);
-        double latitud = peticion.getUbicacion().getLatitud();
-        double longitud = peticion.getUbicacion().getLongitud();
+        double latitud = ubicacion.getLatitud();
+        double longitud = ubicacion.getLongitud();
 
         Optional<Alerta> similar = alertaRepository.buscarSimilar(
-                peticion.getEspecie(), latitud, longitud, radioDuplicadosMetros, desde);
+                especie, latitud, longitud, radioDuplicadosMetros, desde, excluirId);
 
         if (similar.isEmpty()) {
             return;
@@ -208,11 +231,61 @@ public class AlertaService {
         return alertas.stream().map(this::aAlertaMapaResponse).toList();
     }
 
-    /** Comprueba el filtro de área y devuelve el radio ya validado. */
+    /**
+     * Listado paginado de alertas (GET /api/alertas), para navegar y buscar.
+     *
+     * QUÉ ESTADOS SE LISTAN lo decide este método, no el cliente: ACTIVA por
+     * defecto y ENCONTRADA si se pide —los casos resueltos también interesan—.
+     * RETIRADA y ELIMINADA no se navegan: una la quitó su dueño y la otra el
+     * administrador, y listarlas desharía las dos decisiones. Siguen
+     * respondiendo por su id en el detalle, con el cuerpo reducido.
+     *
+     * Los filtros —especie sin distinguir mayúsculas, zona como círculo— los
+     * describe AlertaSpec. La zona se valida igual que en el mapa.
+     */
+    @Transactional(readOnly = true)
+    public PaginaResponse<AlertaResponse> listar(String especie, EstadoAlerta estado, Double latitud,
+                                                 Double longitud, Double radioMetros, Pageable paginacion) {
+        EstadoAlerta estadoListado = estado == null ? EstadoAlerta.ACTIVA : estado;
+        boolean seNavega = switch (estadoListado) {
+            case ACTIVA, ENCONTRADA -> true;
+            case RETIRADA, ELIMINADA -> false;
+        };
+        if (!seNavega) {
+            throw new ParametrosInvalidosException("Solo se pueden listar alertas ACTIVA o ENCONTRADA");
+        }
+
+        boolean conZona = latitud != null || longitud != null || radioMetros != null;
+        if (conZona) {
+            validarArea(latitud, longitud, radioMetros);
+        }
+
+        PageRequest peticion = PageRequest.of(
+                Math.max(0, paginacion.getPageNumber()),
+                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+
+        Page<Alerta> pagina = alertaRepository.findAll(
+                AlertaSpec.de(estadoListado, especie, latitud, longitud, radioMetros), peticion);
+        return PaginaResponse.de(pagina, this::aAlertaResponse);
+    }
+
+    /**
+     * Comprueba el filtro de área y devuelve el radio ya validado.
+     *
+     * NaN SE RECHAZA ANTES QUE NADA. Spring convierte "radio=NaN" en un Double
+     * válido, y cualquier comparación con NaN da falso: pasaba los tres rangos
+     * de abajo. PostgreSQL, en cambio, ordena NaN por encima de todo número, así
+     * que "distancia <= NaN" es cierto para cualquier distancia y el listado se
+     * saltaba el tope de radio. Los infinitos también se descartan aquí.
+     */
     private double validarArea(Double latitud, Double longitud, Double radioMetros) {
         if (latitud == null || longitud == null || radioMetros == null) {
             throw new ParametrosInvalidosException(
                     "Los parámetros lat, lng y radio deben indicarse los tres o ninguno");
+        }
+        if (!Double.isFinite(latitud) || !Double.isFinite(longitud) || !Double.isFinite(radioMetros)) {
+            throw new ParametrosInvalidosException("Los parámetros lat, lng y radio deben ser números finitos");
         }
         if (latitud < -90 || latitud > 90) {
             throw new ParametrosInvalidosException("La latitud debe estar entre -90 y 90");
@@ -227,6 +300,58 @@ public class AlertaService {
         return radioMetros;
     }
 
+    /**
+     * Detalle de una alerta con sus avistamientos (GET /api/alertas/{id}).
+     *
+     * 200 PARA CUALQUIER ALERTA QUE HAYA EXISTIDO, sea cual sea su estado; 404
+     * solo para un id que nunca existió. Las alertas no se borran, así que
+     * "terminada" y "no encontrada" son hechos distintos, y el cliente necesita
+     * distinguirlos: un aviso ALERTA_CERCANA cuya alerta se cerró es un aviso
+     * viejo, uno que da 404 es un aviso huérfano (docs/api-rest.md §12).
+     *
+     * LO RETIRADO RESPONDE, PERO NO SE VUELVE A PUBLICAR. Una RETIRADA la quitó
+     * su dueño y una ELIMINADA el administrador; devolverlas enteras desharía las
+     * dos decisiones para cualquiera que tenga el id. Su detalle lleva solo lo
+     * que dice qué fue y en qué quedó: id, especie, estado y fecha.
+     */
+    @Transactional(readOnly = true)
+    public AlertaDetalleResponse detalle(Long alertaId) {
+        Alerta alerta = alertaRepository.findById(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
+
+        return switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA -> detalleCompleto(alerta);
+            case RETIRADA, ELIMINADA -> detalleDeRetirada(alerta);
+        };
+    }
+
+    private AlertaDetalleResponse detalleCompleto(Alerta alerta) {
+        AlertaResponse base = aAlertaResponse(alerta);
+        return AlertaDetalleResponse.builder()
+                .id(base.getId())
+                .descripcion(base.getDescripcion())
+                .fotoUrl(base.getFotoUrl())
+                .especie(base.getEspecie())
+                .fechaAvistamiento(base.getFechaAvistamiento())
+                .ubicacion(base.getUbicacion())
+                .radioBusqueda(base.getRadioBusqueda())
+                .estado(base.getEstado())
+                .createdAt(base.getCreatedAt())
+                .autor(base.getAutor())
+                .avistamientos(avistamientoService.visiblesDeLaAlerta(alerta.getId()))
+                .build();
+    }
+
+    private static AlertaDetalleResponse detalleDeRetirada(Alerta alerta) {
+        return AlertaDetalleResponse.builder()
+                .id(alerta.getId())
+                .especie(alerta.getEspecie())
+                .estado(alerta.getEstado())
+                .createdAt(alerta.getCreatedAt())
+                .avistamientos(List.of())
+                .build();
+    }
+
     /** Alertas del usuario autenticado, en cualquier estado. */
     @Transactional(readOnly = true)
     public List<AlertaResponse> listarMisAlertas(Long usuarioId) {
@@ -237,29 +362,245 @@ public class AlertaService {
     }
 
     // ---------------------------------------------------------------------
+    // Edición
+    // ---------------------------------------------------------------------
+
+    /**
+     * Edita una alerta propia (PUT /api/alertas/{id}). Las comprobaciones van en
+     * este orden: existe (404), es suya (403), sigue ACTIVA (400), la foto nueva
+     * es suya (400) y no duplica a otra (409).
+     *
+     * SOLO MIENTRAS ESTÉ ACTIVA. Una alerta cerrada, retirada o moderada ya no
+     * busca a nadie; editarla cambiaría lo que vieron quienes la siguieron, y en
+     * una ELIMINADA serviría para colar contenido nuevo tras la moderación.
+     *
+     * RF-25 SE VUELVE A PASAR SI CAMBIAN LA ESPECIE O LA UBICACIÓN, y solo
+     * entonces. Sin ello, la detección se esquivaría en dos pasos: publicar lejos
+     * y mover después la alerta encima de otra, o publicar con otra especie y
+     * cambiarla luego. No hace falta ningún umbral de "cambio significativo": la
+     * propia detección ya tiene su tolerancia. Los demás campos —la fecha
+     * incluida— no deciden si esta alerta duplica a otra, porque la ventana mira
+     * las fechas de la existente, no las de esta (ver buscarSimilar). Al volver a
+     * pasarla, la alerta no se cuenta a sí misma.
+     *
+     * La foto solo se comprueba si cambia, como en el perfil y en los animales:
+     * reenviar la que ya tenía no debe fallar. La anterior, ya sin uso, la recoge
+     * la limpieza diaria de fotos.
+     *
+     * Avisa al mapa con ACTUALIZACION, que mueve el marcador si cambió la
+     * ubicación. No vuelve a avisar a la zona (RF-05): el aviso corresponde a la
+     * publicación, y repetirlo en cada corrección sería ruido.
+     */
+    @Transactional
+    public AlertaResponse actualizar(Long alertaId, ActualizarAlertaRequest peticion, Long usuarioId) {
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede editarla");
+
+        boolean editable = switch (alerta.getEstado()) {
+            case ACTIVA -> true;
+            case ENCONTRADA, RETIRADA, ELIMINADA -> false;
+        };
+        if (!editable) {
+            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta ya no está activa: no se puede editar");
+        }
+
+        String fotoUrl = StringUtils.hasText(peticion.getFotoUrl()) ? peticion.getFotoUrl().strip() : null;
+        if (fotoUrl != null && !fotoUrl.equals(alerta.getFotoUrl())) {
+            fotoService.exigirPropia(fotoUrl, usuarioId);
+        }
+
+        Point ubicacion = aPunto(peticion.getUbicacion());
+        boolean cambiaEspecie = !peticion.getEspecie().equalsIgnoreCase(alerta.getEspecie());
+        boolean cambiaUbicacion = alerta.getUltimaUbicacion() == null
+                || !ubicacion.equalsExact(alerta.getUltimaUbicacion());
+        if (cambiaEspecie || cambiaUbicacion) {
+            comprobarQueNoEsDuplicada(peticion.getEspecie(), peticion.getUbicacion(), alerta.getId());
+        }
+
+        alerta.setDescripcion(peticion.getDescripcion());
+        alerta.setFotoUrl(fotoUrl);
+        alerta.setEspecie(peticion.getEspecie());
+        alerta.setFechaAvistamiento(peticion.getFechaAvistamiento());
+        alerta.setUltimaUbicacion(ubicacion);
+        alerta.setRadioBusqueda(peticion.getRadioBusqueda());
+
+        publicarEnMapa(EventoMapaResponse.Accion.ACTUALIZACION, alerta);
+        log.info("Alerta {} editada por su autor", alertaId);
+        return aAlertaResponse(alerta);
+    }
+
+    // ---------------------------------------------------------------------
+    // Retirada por el dueño
+    // ---------------------------------------------------------------------
+
+    /**
+     * Retira una alerta propia (DELETE /api/alertas/{id}): pasa a RETIRADA.
+     *
+     * NO BORRA NADA. Ni la alerta ni lo que cuelga de ella: sus avistamientos,
+     * los matches sobre ellos, sus chats y sus mensajes siguen ahí, porque la
+     * conversación pertenece también a la otra parte. Basta con el estado: el
+     * feed y los matches ya solo admiten avistamientos de alertas ACTIVA, así
+     * que los de esta salen del feed sin tocarlos.
+     *
+     * Se puede retirar una ACTIVA o una ENCONTRADA —el dueño puede no querer que
+     * su caso resuelto se siga listando—. Si estaba en el mapa, se emite CIERRE.
+     * Repetirlo no cambia nada, y sobre una ELIMINADA tampoco: responde igual,
+     * pero la marca de moderación se queda, porque el dueño nunca sobrescribe la
+     * decisión del administrador.
+     */
+    @Transactional
+    public void retirar(Long alertaId, Long usuarioId) {
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede retirarla");
+
+        boolean cambia = switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA -> true;
+            case RETIRADA, ELIMINADA -> false;
+        };
+        if (!cambia) {
+            log.debug("La alerta {} ya estaba {}: retirarla no cambia nada", alertaId, alerta.getEstado());
+            return;
+        }
+
+        boolean estabaEnElMapa = seVeEnElMapa(alerta.getEstado());
+        alerta.setEstado(EstadoAlerta.RETIRADA);
+        log.info("Alerta {} retirada por su autor", alertaId);
+        if (estabaEnElMapa) {
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Cierre (RF-14)
     // ---------------------------------------------------------------------
 
     /**
      * Marca la alerta como ENCONTRADA y la retira del mapa (RF-14).
      * Solo puede cerrarla quien la publicó.
+     *
+     * SOLO DESDE ACTIVA. Antes no se miraba el estado, y el dueño de una alerta
+     * retirada por el administrador podía marcarla como ENCONTRADA y deshacer la
+     * moderación: volvía a verse entera en el detalle y en el listado de
+     * resueltas. Cerrar una ya ENCONTRADA no cambia nada y responde igual, como
+     * cualquier repetición de la misma orden; una RETIRADA o ELIMINADA no se
+     * puede cerrar, porque el animal ya no se está buscando a través de ella.
      */
     @Transactional
     public AlertaResponse cerrar(Long alertaId, Long usuarioId) {
-        Alerta alerta = alertaRepository.findById(alertaId)
-                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
+        Alerta alerta = exigirAlertaPropia(alertaId, usuarioId, "Solo quien publicó la alerta puede cerrarla");
 
-        if (!alerta.getUsuario().getId().equals(usuarioId)) {
-            throw new AccessDeniedException("Solo quien publicó la alerta puede cerrarla");
+        boolean seCierraAhora = switch (alerta.getEstado()) {
+            case ACTIVA -> true;
+            case ENCONTRADA -> false;
+            case RETIRADA, ELIMINADA -> throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta ya no está activa: no se puede marcar como encontrada");
+        };
+
+        if (seCierraAhora) {
+            alerta.setEstado(EstadoAlerta.ENCONTRADA);
+            alerta = alertaRepository.save(alerta);
+            // El cliente necesita saber que debe retirar el marcador del mapa.
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
         }
 
-        alerta.setEstado(EstadoAlerta.ENCONTRADA);
-        Alerta cerrada = alertaRepository.save(alerta);
+        return aAlertaResponse(alerta);
+    }
 
-        // El cliente necesita saber que debe retirar el marcador del mapa.
-        publicarEnMapa(EventoMapaResponse.Accion.CIERRE, cerrada);
+    // ---------------------------------------------------------------------
+    // Moderación (RF-11)
+    // ---------------------------------------------------------------------
 
-        return aAlertaResponse(cerrada);
+    /**
+     * Retira una alerta por incumplir las normas: pasa a ELIMINADA. La llama
+     * AdminService, que decide qué se modera; aquí vive porque cambiar el estado
+     * de una alerta tiene consecuencias que solo conoce este service —el mapa—,
+     * como pasa con AnimalAdopcionService.retirarTodosLosDisponibles.
+     *
+     * SI ESTABA EN EL MAPA, SE EMITE CIERRE. Antes la retirada vivía en
+     * AdminService y no lo hacía: el marcador de una alerta moderada seguía en
+     * el mapa de quien lo tuviera abierto hasta que recargara.
+     *
+     * Una RETIRADA por su dueño también pasa a ELIMINADA: la sanción es la
+     * información más fuerte de las dos y no debe perderse. Ninguna fila se
+     * borra (ver AdminService.retirarPublicacion).
+     *
+     * LA FOTO SÍ SE VA. La alerta deja de apuntar a ella y FotoService la borra
+     * —fila ahora, archivo tras el commit—: una imagen que sigue servida en
+     * /fotos para quien tenga la URL deja la sanción a medias. Se conserva si
+     * otra publicación o un perfil la usan, o si no la aloja este backend (ver
+     * FotoService.retirarDeAlertaModerada); la alerta deja de apuntar a ella
+     * igualmente. Sus avistamientos, con sus fotos, no se tocan: no son lo
+     * moderado. Moderar una ya ELIMINADA no hace nada, foto incluida, a
+     * propósito: la moderación es idempotente y sin efectos, así que las
+     * moderadas antes de este cambio conservan la suya.
+     *
+     * Lee la fila bloqueada, como las operaciones del dueño: si el dueño está
+     * editando la alerta en ese momento, la moderación espera a que confirme y
+     * se aplica encima; si es al revés, el dueño ve ya la ELIMINADA.
+     *
+     * @return true si esta llamada la retiró, false si ya estaba ELIMINADA
+     */
+    @Transactional
+    public boolean retirarPorModeracion(Long alertaId, Long adminId) {
+        Alerta alerta = alertaRepository.bloquearParaModificar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta " + alertaId + " no existe"));
+
+        boolean cambia = switch (alerta.getEstado()) {
+            case ACTIVA, ENCONTRADA, RETIRADA -> true;
+            case ELIMINADA -> false;
+        };
+        if (!cambia) {
+            return false;
+        }
+
+        boolean estabaEnElMapa = seVeEnElMapa(alerta.getEstado());
+        alerta.setEstado(EstadoAlerta.ELIMINADA);
+        log.warn("El administrador {} ha retirado la alerta {} por incumplir las normas", adminId, alertaId);
+
+        String foto = alerta.getFotoUrl();
+        if (foto != null) {
+            alerta.setFotoUrl(null);
+            fotoService.retirarDeAlertaModerada(foto, alerta.getUsuario().getId(), alerta.getId());
+        }
+
+        if (estabaEnElMapa) {
+            publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+        }
+        return true;
+    }
+
+    /** Solo una ACTIVA tiene marcador en el mapa (RF-04). */
+    private static boolean seVeEnElMapa(EstadoAlerta estado) {
+        return switch (estado) {
+            case ACTIVA -> true;
+            case ENCONTRADA, RETIRADA, ELIMINADA -> false;
+        };
+    }
+
+    /**
+     * La alerta, si existe (404) y si es de este usuario (403), con su fila
+     * bloqueada hasta el commit: quien llama va a decidir según su estado (400)
+     * y a escribirlo, y el administrador no debe poder moderarla entre medias
+     * (ver AlertaRepository.bloquearParaModificar).
+     *
+     * LA PROPIEDAD SE COMPRUEBA ANTES DE BLOQUEAR, y sin bloqueo. Al revés,
+     * cualquier usuario autenticado podía bloquear una alerta ajena con un PUT o
+     * un DELETE y frenar a su dueño y al administrador hasta recibir el 403. El
+     * autor de una alerta no cambia nunca —ni la baja (RF-19) lo cambia—, así
+     * que comprobarlo sin bloqueo es seguro. El estado, en cambio, sí cambia, y
+     * se lee ya bloqueado: buscarAutorId no carga la entidad, para que la
+     * lectura bloqueada no devuelva una copia anterior al bloqueo.
+     */
+    private Alerta exigirAlertaPropia(Long alertaId, Long usuarioId, String mensajeSiAjena) {
+        Long autorId = alertaRepository.buscarAutorId(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
+        if (!autorId.equals(usuarioId)) {
+            throw new AccessDeniedException(mensajeSiAjena);
+        }
+
+        // Las alertas no se borran, así que aquí sigue existiendo; el orElseThrow
+        // es solo para no confiar en ello.
+        return alertaRepository.bloquearParaModificar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
     }
 
     // ---------------------------------------------------------------------

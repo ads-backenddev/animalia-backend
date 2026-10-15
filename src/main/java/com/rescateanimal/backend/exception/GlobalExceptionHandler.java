@@ -3,6 +3,7 @@ package com.rescateanimal.backend.exception;
 import com.rescateanimal.backend.dto.response.ErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -18,6 +19,7 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -40,6 +42,11 @@ import java.util.Map;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    /** PostgreSQL: lock_not_available, la espera de un bloqueo superó lock_timeout. */
+    static final String SQLSTATE_ESPERA_VENCIDA = "55P03";
+    /** PostgreSQL: deadlock_detected, esta transacción se deshizo para romper un interbloqueo. */
+    static final String SQLSTATE_INTERBLOQUEO = "40P01";
 
     // ---------------------------------------------------------------------
     // Excepciones de Spring MVC: se conserva su código y se unifica el cuerpo
@@ -275,6 +282,47 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * 409 — otra operación tiene bloqueado el recurso y no lo ha soltado dentro
+     * de la espera máxima (spring.jpa.properties.jakarta.persistence.lock.timeout).
+     *
+     * Llega cuando PostgreSQL cancela la espera de un bloqueo de fila —SQLState
+     * 55P03, que Spring traduce a CannotAcquireLockException— y también si
+     * PostgreSQL elige esta transacción para deshacer un interbloqueo. Las dos
+     * son subclases de PessimisticLockingFailureException.
+     *
+     * 409 y no 503 ni 423. El conflicto es con el estado de ESE recurso, ahora
+     * mismo, y reintentar en unos segundos lo resuelve: es lo que significa 409.
+     * 503 diría que el servicio entero no está disponible, y un cliente podría
+     * dejar de llamar a todos los endpoints; 423 es de WebDAV y ningún cliente
+     * HTTP corriente lo trata aparte. El código RECURSO_OCUPADO lo distingue de
+     * los demás 409 (duplicados), que no se arreglan reintentando.
+     *
+     * AL CLIENTE LE DA IGUAL, AL LOG NO. Una espera vencida es carga normal:
+     * warn. Un interbloqueo no debería pasar nunca —ninguna ruta toma los
+     * bloqueos de alerta en orden inverso (docs/api-rest.md §22)—, así que si
+     * pasa es un error de orden de bloqueos que hay que ir a buscar: error, con
+     * la traza. Se distinguen por el SQLState de PostgreSQL y no por la clase de
+     * la excepción, porque la clase depende de cómo la traduzcan Hibernate y
+     * Spring, y el SQLState es lo que dijo la base de datos. Cualquier otro
+     * estado tampoco se espera, y se registra como error.
+     */
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> recursoOcupado(PessimisticLockingFailureException ex,
+                                                        WebRequest request) {
+        String sqlState = sqlStateDe(ex);
+        if (SQLSTATE_ESPERA_VENCIDA.equals(sqlState)) {
+            log.warn("Bloqueo no conseguido a tiempo en {}: {}", ruta(request), ex.getMostSpecificCause().getMessage());
+        } else if (SQLSTATE_INTERBLOQUEO.equals(sqlState)) {
+            log.error("Interbloqueo en {}: hay dos rutas que toman los bloqueos en orden distinto",
+                    ruta(request), ex);
+        } else {
+            log.error("Fallo de bloqueo inesperado en {} (SQLState {})", ruta(request), sqlState, ex);
+        }
+        return respuesta(HttpStatus.CONFLICT, "RECURSO_OCUPADO",
+                "Otra operación está modificando este recurso; vuelve a intentarlo en unos segundos", request);
+    }
+
+    /**
      * 500 — cualquier fallo no previsto. Se registra la traza completa en el log
      * pero al cliente solo le llega un mensaje genérico, para no filtrar detalles
      * internos ni datos personales (RNF-10).
@@ -304,6 +352,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 .mensaje(mensaje)
                 .ruta(ruta)
                 .build();
+    }
+
+    /** El SQLState del primer SQLException de la cadena de causas, o null. */
+    private static String sqlStateDe(Throwable ex) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa instanceof SQLException sql && sql.getSQLState() != null) {
+                return sql.getSQLState();
+            }
+        }
+        return null;
     }
 
     private String ruta(WebRequest request) {

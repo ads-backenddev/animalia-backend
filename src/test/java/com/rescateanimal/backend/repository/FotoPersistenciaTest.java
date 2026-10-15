@@ -1,7 +1,15 @@
 package com.rescateanimal.backend.repository;
 
+import com.rescateanimal.backend.model.AnimalAdopcion;
+import com.rescateanimal.backend.model.Alerta;
+import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Foto;
+import com.rescateanimal.backend.model.Protectora;
 import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
+import com.rescateanimal.backend.model.enums.EstadoProtectora;
 import com.rescateanimal.backend.model.enums.Rol;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -36,10 +45,22 @@ class FotoPersistenciaTest {
     private FotoRepository fotoRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
+    @Autowired
+    private AlertaRepository alertaRepository;
+    @Autowired
+    private AvistamientoRepository avistamientoRepository;
+    @Autowired
+    private ProtectoraRepository protectoraRepository;
+    @Autowired
+    private AnimalAdopcionRepository animalAdopcionRepository;
 
     private Usuario duenyo;
     private Usuario otro;
     private final List<String> fotosCreadas = new ArrayList<>();
+    private final List<Long> alertasCreadas = new ArrayList<>();
+    private final List<Long> avistamientosCreados = new ArrayList<>();
+    private final List<Long> animalesCreados = new ArrayList<>();
+    private Protectora protectora;
 
     @BeforeEach
     void sembrar() {
@@ -49,6 +70,12 @@ class FotoPersistenciaTest {
 
     @AfterEach
     void limpiar() {
+        avistamientoRepository.deleteAllById(avistamientosCreados);
+        animalAdopcionRepository.deleteAllById(animalesCreados);
+        if (protectora != null) {
+            protectoraRepository.delete(protectora);
+        }
+        alertaRepository.deleteAllById(alertasCreadas);
         fotoRepository.deleteAllById(fotosCreadas);
         usuarioRepository.delete(duenyo);
         usuarioRepository.delete(otro);
@@ -84,6 +111,81 @@ class FotoPersistenciaTest {
 
         assertThatThrownBy(() -> guardar(fantasma, 10))
                 .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    @DisplayName("usadaFueraDeLaAlerta no cuenta a la propia alerta; sí a otra alerta y a un perfil")
+    void usadaFueraDeLaAlerta() {
+        String nombre = UUID.randomUUID() + ".jpg";
+        String url = "https://otra-base.test/fotos/" + nombre;
+        long propia = alertaCon(url);
+
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("solo la usa ella").isFalse();
+
+        long otra = alertaCon(url);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("otra alerta").isTrue();
+
+        alertaRepository.deleteById(otra);
+        alertasCreadas.remove(Long.valueOf(otra));
+        otro.setFotoUrl(url);
+        otro = usuarioRepository.save(otro);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("un perfil").isTrue();
+    }
+
+    @Test
+    @DisplayName("usadaFueraDeLaAlerta cuenta un avistamiento con la misma foto")
+    void usadaPorUnAvistamiento() {
+        String nombre = UUID.randomUUID() + ".jpg";
+        String url = "https://otra-base.test/fotos/" + nombre;
+        long propia = alertaCon(url);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("solo la usa ella").isFalse();
+
+        Avistamiento avistamiento = new Avistamiento();
+        avistamiento.setUsuario(otro);
+        avistamiento.setAlerta(alertaRepository.getReferenceById(propia));
+        avistamiento.setFotoUrl(url);
+        avistamiento.setDescripcion("Con la misma foto");
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
+        avistamientosCreados.add(avistamientoRepository.save(avistamiento).getId());
+
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).isTrue();
+    }
+
+    @Test
+    @DisplayName("usadaFueraDeLaAlerta cuenta un animal en adopción con la misma foto")
+    void usadaPorUnAnimal() {
+        String nombre = UUID.randomUUID() + ".jpg";
+        String url = "https://otra-base.test/fotos/" + nombre;
+        long propia = alertaCon(url);
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).as("solo la usa ella").isFalse();
+
+        Protectora nueva = new Protectora();
+        nueva.setUsuario(otro);
+        nueva.setNombreOrganizacion("Protectora " + UUID.randomUUID());
+        nueva.setEstado(EstadoProtectora.ACTIVA);
+        protectora = protectoraRepository.save(nueva);
+        AnimalAdopcion animal = new AnimalAdopcion();
+        animal.setProtectora(protectora);
+        animal.setNombre("Toby");
+        animal.setEspecie("perro");
+        animal.setFotoUrl(url);
+        animal.setEstado(EstadoAnimal.DISPONIBLE);
+        animalesCreados.add(animalAdopcionRepository.save(animal).getId());
+
+        assertThat(fotoRepository.usadaFueraDeLaAlerta(nombre, propia)).isTrue();
+    }
+
+    private long alertaCon(String fotoUrl) {
+        Alerta alerta = new Alerta();
+        alerta.setUsuario(duenyo);
+        alerta.setDescripcion("Para la foto");
+        alerta.setEspecie("foto-" + UUID.randomUUID().toString().substring(0, 8));
+        alerta.setFechaAvistamiento(Instant.now());
+        alerta.setFotoUrl(fotoUrl);
+        alerta.setEstado(EstadoAlerta.ACTIVA);
+        long id = alertaRepository.save(alerta).getId();
+        alertasCreadas.add(id);
+        return id;
     }
 
     private Foto guardar(Usuario usuario, int tamanyo) {

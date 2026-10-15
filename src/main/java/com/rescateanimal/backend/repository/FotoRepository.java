@@ -40,6 +40,31 @@ public interface FotoRepository extends JpaRepository<Foto, String> {
     boolean usadaEnPublicaciones(@Param("nombre") String nombre);
 
     /**
+     * ¿Usa esta foto algo que no sea esta alerta: otra alerta, un avistamiento,
+     * un animal en adopción o un perfil? Es la pregunta antes de borrar la foto
+     * de una alerta moderada.
+     *
+     * Aquí el perfil SÍ entra, a diferencia de usadaEnPublicaciones: el autor
+     * puede haber puesto la misma foto en su perfil, y eso no está moderado.
+     *
+     * La propia alerta se excluye por id. Quien llama ya ha vaciado su foto_url
+     * en memoria, y hoy ese cambio llega a la base de datos antes de esta
+     * consulta porque Hibernate vuelca la sesión antes de cualquier consulta
+     * nativa; la exclusión hace que la respuesta no dependa de ese detalle.
+     *
+     * Mismo coste que usadaEnPublicaciones, y se pregunta aún menos: solo al
+     * moderar una alerta con foto.
+     */
+    @Query(value = """
+            SELECT EXISTS (SELECT 1 FROM alerta
+                           WHERE id <> :alertaId AND substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM avistamiento WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM animal_adopcion WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM usuario WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+            """, nativeQuery = true)
+    boolean usadaFueraDeLaAlerta(@Param("nombre") String nombre, @Param("alertaId") Long alertaId);
+
+    /**
      * Las fotos subidas antes de limite a las que no apunta ningún foto_url: ni
      * un perfil ni una publicación. Son subidas que el cliente nunca llegó a
      * usar, y las recoge la limpieza diaria.

@@ -157,7 +157,8 @@ public class FotoService {
      * Quita una foto que ha dejado de ser la de un perfil: porque se cambió, se
      * quitó, o porque la cuenta se anonimiza (RF-19). Solo la de perfil: las de
      * alertas, avistamientos y animales son fotos de animales y forman parte del
-     * histórico que la baja conserva.
+     * histórico que la baja conserva. La única foto de animal que se borra es la
+     * de una alerta moderada, y va por retirarDeAlertaModerada.
      *
      * DOS PASOS, CADA UNO EN SU MOMENTO:
      * - La fila se borra AHORA, dentro de la transacción de quien llama. Si esa
@@ -191,6 +192,51 @@ public class FotoService {
         }
         if (fotoRepository.usadaEnPublicaciones(nombre)) {
             log.debug("La foto {} sigue en una publicación del usuario {}: se conserva", nombre, usuarioId);
+            return;
+        }
+
+        fotoRepository.deleteById(nombre);
+        almacen.borrarTrasConfirmar(nombre);
+    }
+
+    /**
+     * Quita la foto de una alerta que el administrador acaba de moderar (pasa a
+     * ELIMINADA). Dejarla servida en /fotos para siempre dejaría la sanción a
+     * medias: la URL circula en respuestas, avisos y chats anteriores.
+     *
+     * Los mismos DOS PASOS que retirar —la fila ahora, dentro de la transacción
+     * de la moderación; el archivo después del commit— y por las mismas razones.
+     *
+     * NO SE BORRA, Y NO ES UN ERROR, cuando:
+     * - la URL no es de este almacén: una foto anterior a /api/fotos, que el
+     *   backend no aloja ni puede borrar (docs/api-rest.md §20);
+     * - la foto no es del autor de la alerta, cosa que exigirPropia ya impide y
+     *   aquí se comprueba de nuevo porque borrar es irreversible;
+     * - otra cosa la usa —otra alerta, un avistamiento, un animal o un perfil—:
+     *   lo moderado es esta alerta, no las demás publicaciones de su autor, que
+     *   se quedarían sin imagen. Esa foto sigue publicada por ellas.
+     *
+     * LIMITACIÓN ACEPTADA, la misma que en retirar: ni esta comprobación de uso
+     * ni exigirPropia bloquean la fila de FOTO. Si el autor pone esta foto en
+     * otra publicación en los mismos milisegundos de la moderación, esa
+     * publicación puede quedarse apuntando a una foto borrada
+     * (docs/api-rest.md §22).
+     */
+    @Transactional
+    public void retirarDeAlertaModerada(String url, Long autorId, Long alertaId) {
+        Optional<String> encontrada = almacen.nombreDe(url);
+        if (encontrada.isEmpty()) {
+            log.info("La alerta moderada {} tenía una foto externa: no se aloja aquí, no se borra", alertaId);
+            return;
+        }
+        String nombre = encontrada.get();
+        if (!fotoRepository.existsByNombreAndUsuarioId(nombre, autorId)) {
+            log.warn("La alerta moderada {} apuntaba a la foto {}, que no es de su autor", alertaId, nombre);
+            return;
+        }
+        if (fotoRepository.usadaFueraDeLaAlerta(nombre, alertaId)) {
+            log.info("La foto {} de la alerta moderada {} la usa también otra publicación o un perfil: se conserva",
+                    nombre, alertaId);
             return;
         }
 
