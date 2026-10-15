@@ -101,6 +101,8 @@ class AlertaEsperaBloqueoTest {
     private final ExecutorService hilos = Executors.newSingleThreadExecutor();
     private final List<Long> usuarios = new ArrayList<>();
     private final CountDownLatch confirmar = new CountDownLatch(1);
+    /** La moderación retenida de la prueba, para esperarla en la limpieza si falla a medias. */
+    private CompletableFuture<Void> moderacionRetenida;
     private final Logger logDelManejador = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
     private final ListAppender<ILoggingEvent> registro = new ListAppender<>();
 
@@ -129,7 +131,17 @@ class AlertaEsperaBloqueoTest {
     @AfterEach
     void limpiar() {
         logDelManejador.detachAppender(registro);
+        // Si una prueba falla a medias, la moderación sigue con la fila bloqueada: se
+        // la suelta y se espera a que confirme antes de borrar, para que el borrado no
+        // se quede esperando su bloqueo.
         confirmar.countDown();
+        if (moderacionRetenida != null) {
+            try {
+                moderacionRetenida.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+            } catch (Exception e) {
+                // La prueba ya ha fallado; aquí solo importa que haya terminado.
+            }
+        }
         hilos.shutdown();
         avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
                 .filter(a -> usuarios.contains(a.getUsuario().getId())).toList());
@@ -209,6 +221,7 @@ class AlertaEsperaBloqueoTest {
                         Thread.currentThread().interrupt();
                     }
                 }), hilos);
+        moderacionRetenida = moderacion;
         assertThat(moderada.await(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
         return moderacion;
     }
