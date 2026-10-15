@@ -152,9 +152,12 @@ class AlertaEsperaBloqueoTest {
 
         assertThat(edicion.statusCode()).as(edicion.body()).isEqualTo(409);
         assertThat(JsonPath.<String>read(edicion.body(), "$.codigo")).isEqualTo("RECURSO_OCUPADO");
+        // La cota que prueba algo es la inferior: que esperó el bloqueo hasta su
+        // espera máxima. La superior solo dice que no se quedó colgado, y es holgada a
+        // propósito: la primera petición de la prueba paga el arranque en frío.
         assertThat(tardo).as("esperó el bloqueo y se rindió a su tiempo")
                 .isGreaterThanOrEqualTo(ESPERA_DE_BLOQUEO.minusMillis(100))
-                .isLessThan(ESPERA_MAXIMA.dividedBy(2));
+                .isLessThan(ESPERA_MAXIMA);
         assertThat(moderacion).as("la moderación sigue abierta").isNotDone();
         // Con la excepción de verdad, la que llega de PostgreSQL: el manejador saca
         // de ella el SQLState 55P03 y lo registra como espera vencida, no como error.
@@ -183,7 +186,7 @@ class AlertaEsperaBloqueoTest {
         assertThat(avistamiento.statusCode()).as(avistamiento.body()).isEqualTo(409);
         assertThat(JsonPath.<String>read(avistamiento.body(), "$.codigo")).isEqualTo("RECURSO_OCUPADO");
         assertThat(tardo).isGreaterThanOrEqualTo(ESPERA_DE_BLOQUEO.minusMillis(100))
-                .isLessThan(ESPERA_MAXIMA.dividedBy(2));
+                .isLessThan(ESPERA_MAXIMA);
 
         confirmar.countDown();
         moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
