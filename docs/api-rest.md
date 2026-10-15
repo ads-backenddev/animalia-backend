@@ -2279,6 +2279,9 @@ Las revisiones del bloque terminado encontraron varios problemas más, que se co
   lo comprueba por HTTP con una fila bloqueada. Se eligió `409` porque el conflicto es con el estado
   de ese recurso en ese momento y se resuelve reintentando; `503` diría que todo el servicio está
   caído, y `423` es de WebDAV.
+  Un interbloqueo (`40P01`) responde lo mismo, pero se registra como error y con la traza: no debería
+  pasar nunca, y si pasa hay dos rutas tomando los bloqueos en orden distinto. El manejador distingue
+  los dos casos por el SQLState de PostgreSQL, no por la clase de la excepción.
 
 ### Nada se borra en cascada
 

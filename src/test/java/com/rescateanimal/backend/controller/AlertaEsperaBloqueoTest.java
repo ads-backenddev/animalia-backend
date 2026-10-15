@@ -1,7 +1,12 @@
 package com.rescateanimal.backend.controller;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.jayway.jsonpath.JsonPath;
 import com.rescateanimal.backend.FotosDePrueba;
+import com.rescateanimal.backend.exception.GlobalExceptionHandler;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
@@ -14,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -95,6 +101,8 @@ class AlertaEsperaBloqueoTest {
     private final ExecutorService hilos = Executors.newSingleThreadExecutor();
     private final List<Long> usuarios = new ArrayList<>();
     private final CountDownLatch confirmar = new CountDownLatch(1);
+    private final Logger logDelManejador = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final ListAppender<ILoggingEvent> registro = new ListAppender<>();
 
     private String tokenDuenyo;
     private String tokenTestigo;
@@ -105,6 +113,8 @@ class AlertaEsperaBloqueoTest {
 
     @BeforeEach
     void preparar() throws Exception {
+        registro.start();
+        logDelManejador.addAppender(registro);
         especie = "espera-" + UUID.randomUUID().toString().substring(0, 8);
         latitud = 41.10 + Math.random() / 10;
         longitud = -3.40 - Math.random() / 10;
@@ -118,6 +128,7 @@ class AlertaEsperaBloqueoTest {
 
     @AfterEach
     void limpiar() {
+        logDelManejador.detachAppender(registro);
         confirmar.countDown();
         hilos.shutdown();
         avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
@@ -145,6 +156,10 @@ class AlertaEsperaBloqueoTest {
                 .isGreaterThanOrEqualTo(ESPERA_DE_BLOQUEO.minusMillis(100))
                 .isLessThan(ESPERA_MAXIMA.dividedBy(2));
         assertThat(moderacion).as("la moderación sigue abierta").isNotDone();
+        // Con la excepción de verdad, la que llega de PostgreSQL: el manejador saca
+        // de ella el SQLState 55P03 y lo registra como espera vencida, no como error.
+        assertThat(registro.list).extracting(ILoggingEvent::getLevel).containsExactly(Level.WARN);
+        assertThat(registro.list.get(0).getFormattedMessage()).contains("Bloqueo no conseguido a tiempo");
 
         confirmar.countDown();
         moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
