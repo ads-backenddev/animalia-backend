@@ -529,7 +529,9 @@ public class AlertaService {
      * otra publicación o un perfil la usan, o si no la aloja este backend (ver
      * FotoService.retirarDeAlertaModerada); la alerta deja de apuntar a ella
      * igualmente. Sus avistamientos, con sus fotos, no se tocan: no son lo
-     * moderado.
+     * moderado. Moderar una ya ELIMINADA no hace nada, foto incluida, a
+     * propósito: la moderación es idempotente y sin efectos, así que las
+     * moderadas antes de este cambio conservan la suya.
      *
      * Lee la fila bloqueada, como las operaciones del dueño: si el dueño está
      * editando la alerta en ese momento, la moderación espera a que confirme y

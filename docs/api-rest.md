@@ -173,6 +173,8 @@ del mismo usuario la use: entonces es la foto de un animal y se queda.
 **La foto de una alerta moderada también deja de existir** (§11): al pasar a `ELIMINADA`, la alerta
 deja de apuntar a ella y se borra igual que una de perfil. Se conserva si otra publicación o un
 perfil usan la misma foto, porque eso no está moderado. Es la única foto de un animal que se borra.
+Vale para las alertas moderadas desde el bloque de los endpoints de alerta (§22): las que ya estaban
+`ELIMINADA` antes conservan la suya.
 
 **Una foto subida que no se llega a usar se borra pasado un día.** Una limpieza diaria (a las 4:30,
 hora de Madrid) quita las fotos de más de un día a las que no apunta ningún `fotoUrl` —el cliente
@@ -289,7 +291,7 @@ RF-03, RF-04, RF-14, RF-25.
 | `PUT` | `/api/alertas/{id}` | Edita una alerta propia, **solo mientras esté `ACTIVA`**. Si cambian la especie o la ubicación vuelve a pasar RF-25, sin contarse a sí misma. Emite `ACTUALIZACION` por `/topic/mapa` | Propietario | `ActualizarAlertaRequest`: los mismos campos y reglas que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
 | `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
-| `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA`, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
+| `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA` desde §22, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
 | `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404` |
 
 ### Estados de una alerta
@@ -316,8 +318,8 @@ administrador, en cambio, sí puede pasar a `ELIMINADA` una alerta ya `RETIRADA`
 **El detalle reducido** de una `RETIRADA` o `ELIMINADA` lleva solo `id`, `especie`, `estado` y
 `createdAt`; el resto llega a `null` y `avistamientos` vacío. Responde `200` para que el cliente
 distinga «esta alerta terminó» de «esta alerta nunca existió» (`404`), pero sin volver a publicar lo
-que se retiró. Su autor la sigue viendo entera en `/mis-alertas`, salvo la foto de una `ELIMINADA`, que
-la moderación borra (§11).
+que se retiró. Su autor la sigue viendo entera en `/mis-alertas`, salvo la foto de una `ELIMINADA`: las
+alertas moderadas desde este bloque (§22) pierden su foto (§11).
 
 ### Detección de alertas duplicadas (RF-25)
 
@@ -1025,7 +1027,7 @@ una alerta*), y el dueño no puede deshacerlo ni cerrándola ni retirándola. Si
 **se emite `CIERRE` por `/topic/mapa`**: antes del bloque de los endpoints de alerta (§22) no se
 hacía, y el marcador de una alerta moderada seguía en el mapa de quien lo tuviera abierto.
 
-**Y su foto se borra**: la alerta deja de apuntar a ella, su fila de `FOTO` se borra dentro de la
+**Y su foto se borra**, en las alertas moderadas desde el bloque de los endpoints de alerta (§22): la alerta deja de apuntar a ella, su fila de `FOTO` se borra dentro de la
 transacción de la moderación y el archivo tras el commit, el mismo mecanismo en dos pasos que la foto
 de perfil (§21). Una imagen que siguiera servida en `/fotos/…` para quien tenga la URL —que circula en
 respuestas, avisos y chats anteriores— dejaría la sanción a medias. Se conserva, sin error, si otra
@@ -2282,5 +2284,6 @@ ella el primer `UPDATE` a `RETIRADA` fallaría en ejecución, y `ddl-auto=valida
 | Los animales siguen sin distinguir retirada por la protectora de retirada por el administrador | Fuera del alcance de este bloque; separarlo exigiría su propia migración y decidir qué pasa con los `RETIRADO` actuales, que ya no se pueden atribuir |
 | Dos operaciones sobre la misma alerta —del dueño o del administrador— se hacen una detrás de otra | El bloqueo dura lo que su transacción, milisegundos; y solo se bloquea esa fila, no la tabla |
 | La foto de una alerta moderada se conserva si otra publicación o un perfil usan la misma | Borrarla dejaría sin imagen una publicación que nadie ha moderado. La alerta deja de apuntar a ella igualmente |
+| Las alertas que ya estaban `ELIMINADA` antes de este bloque conservan su foto | La foto solo se borra al pasar a `ELIMINADA`, y moderar otra vez una `ELIMINADA` no hace nada, a propósito: la moderación es idempotente y sin efectos. Ninguna base de datos real tenía alertas `ELIMINADA` con foto |
 | Si el autor pone la foto de una alerta en otra publicación o en su perfil justo mientras se modera esa alerta, la publicación nueva puede quedarse apuntando a una foto ya borrada | La comprobación de uso y el borrado no bloquean la fila de `FOTO`, y la de propiedad tampoco. Exige que el propio autor reutilice esa foto en los milisegundos de la moderación; cerrarlo obligaría a bloquear `FOTO` en cada publicación con foto. La misma carrera existe desde §21 al cambiar la foto de perfil |
 | La foto externa de una alerta moderada, anterior a `/api/fotos`, no se borra | El backend no la aloja; la alerta deja de apuntar a ella (§20) |
