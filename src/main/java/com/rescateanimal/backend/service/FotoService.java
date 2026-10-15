@@ -215,6 +215,12 @@ public class FotoService {
      * - otra cosa la usa —otra alerta, un avistamiento, un animal o un perfil—:
      *   lo moderado es esta alerta, no las demás publicaciones de su autor, que
      *   se quedarían sin imagen. Esa foto sigue publicada por ellas.
+     *
+     * LIMITACIÓN ACEPTADA, la misma que en retirar: ni esta comprobación de uso
+     * ni exigirPropia bloquean la fila de FOTO. Si el autor pone esta foto en
+     * otra publicación en los mismos milisegundos de la moderación, esa
+     * publicación puede quedarse apuntando a una foto borrada
+     * (docs/api-rest.md §22).
      */
     @Transactional
     public void retirarDeAlertaModerada(String url, Long autorId, Long alertaId) {
