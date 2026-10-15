@@ -48,7 +48,7 @@ del método.
 | `401 Unauthorized` | Falta el token, es inválido o ha caducado; credenciales incorrectas |
 | `403 Forbidden` | Autenticado pero sin permiso: rol insuficiente, no es propietario, cuenta bloqueada o protectora no verificada |
 | `404 Not Found` | El recurso no existe |
-| `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25); o `RECURSO_OCUPADO`: otra operación tiene bloqueado el recurso más allá de la espera máxima (5 s). Este último es el único `409` que se arregla reintentando |
+| `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25); o `RECURSO_OCUPADO`: otra operación tiene bloqueado el recurso más allá de la espera máxima (5 s por defecto, `JPA_LOCK_TIMEOUT_MS`). Este último es el único `409` que se arregla reintentando |
 | `429 Too Many Requests` | Límite diario de matches alcanzado (RF-24) |
 | `500 Internal Server Error` | Error no previsto |
 
@@ -2274,7 +2274,7 @@ Las revisiones del bloque terminado encontraron varios problemas más, que se co
   (§11).
 - **Un bloqueo podía esperar sin límite.** Si una transacción se quedaba colgada con la alerta
   bloqueada, las demás operaciones sobre ella esperaban sin fin, cada una con un hilo y una conexión.
-  Ahora la espera máxima es de 5 s (`JPA_LOCK_TIMEOUT_MS`), y al vencer el cliente recibe
+  Ahora la espera máxima es de 5 s por defecto, configurable con `JPA_LOCK_TIMEOUT_MS`, y al vencer el cliente recibe
   `409 RECURSO_OCUPADO`, nunca un `500`. Con Hibernate 7 y PostgreSQL la propiedad estándar de JPA se
   aplica de verdad —antes de cada consulta con bloqueo ejecuta `set local lock_timeout`—, y una prueba
   lo comprueba por HTTP con una fila bloqueada. Se eligió `409` porque el conflicto es con el estado
