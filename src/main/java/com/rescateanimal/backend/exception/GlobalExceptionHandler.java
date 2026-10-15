@@ -3,6 +3,7 @@ package com.rescateanimal.backend.exception;
 import com.rescateanimal.backend.dto.response.ErrorResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -272,6 +273,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         log.warn("Violación de integridad en {}: {}", ruta(request), ex.getMostSpecificCause().getMessage());
         return respuesta(HttpStatus.CONFLICT, "CONFLICTO",
                 "La operación choca con un registro ya existente", request);
+    }
+
+    /**
+     * 409 — otra operación tiene bloqueado el recurso y no lo ha soltado dentro
+     * de la espera máxima (spring.jpa.properties.jakarta.persistence.lock.timeout).
+     *
+     * Llega cuando PostgreSQL cancela la espera de un bloqueo de fila —SQLState
+     * 55P03, que Spring traduce a CannotAcquireLockException— y también si
+     * PostgreSQL elige esta transacción para deshacer un interbloqueo. Las dos
+     * son subclases de PessimisticLockingFailureException.
+     *
+     * 409 y no 503 ni 423. El conflicto es con el estado de ESE recurso, ahora
+     * mismo, y reintentar en unos segundos lo resuelve: es lo que significa 409.
+     * 503 diría que el servicio entero no está disponible, y un cliente podría
+     * dejar de llamar a todos los endpoints; 423 es de WebDAV y ningún cliente
+     * HTTP corriente lo trata aparte. El código RECURSO_OCUPADO lo distingue de
+     * los demás 409 (duplicados), que no se arreglan reintentando.
+     */
+    @ExceptionHandler(PessimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> recursoOcupado(PessimisticLockingFailureException ex,
+                                                        WebRequest request) {
+        log.warn("Bloqueo no conseguido a tiempo en {}: {}", ruta(request), ex.getMostSpecificCause().getMessage());
+        return respuesta(HttpStatus.CONFLICT, "RECURSO_OCUPADO",
+                "Otra operación está modificando este recurso; vuelve a intentarlo en unos segundos", request);
     }
 
     /**

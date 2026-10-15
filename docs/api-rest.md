@@ -48,7 +48,7 @@ del método.
 | `401 Unauthorized` | Falta el token, es inválido o ha caducado; credenciales incorrectas |
 | `403 Forbidden` | Autenticado pero sin permiso: rol insuficiente, no es propietario, cuenta bloqueada o protectora no verificada |
 | `404 Not Found` | El recurso no existe |
-| `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25) |
+| `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25); o `RECURSO_OCUPADO`: otra operación tiene bloqueado el recurso más allá de la espera máxima (5 s). Este último es el único `409` que se arregla reintentando |
 | `429 Too Many Requests` | Límite diario de matches alcanzado (RF-24) |
 | `500 Internal Server Error` | Error no previsto |
 
@@ -289,10 +289,10 @@ RF-03, RF-04, RF-14, RF-25.
 | `GET` | `/api/alertas` | Listado paginado para navegar y buscar; el mapa en tiempo real sigue siendo `/mapa` y `/topic/mapa`. `estado`: `ACTIVA` por defecto o `ENCONTRADA`; `RETIRADA` y `ELIMINADA` no se listan (`400`). `especie` sin distinguir mayúsculas. Zona: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`), 50 km como máximo, igual que `/mapa`. Paginación `page`/`size` (100 como máximo), más recientes primero | Autenticado | — | Página de `AlertaResponse` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`. **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
 | `PUT` | `/api/alertas/{id}` | Edita una alerta propia, **solo mientras esté `ACTIVA`**. Si cambian la especie o la ubicación vuelve a pasar RF-25, sin contarse a sí misma. Emite `ACTUALIZACION` por `/topic/mapa` | Propietario | `ActualizarAlertaRequest`: los mismos campos y reglas que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
-| `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404` |
+| `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA` desde §22, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
-| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404` |
+| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
 
 ### Estados de una alerta
 
@@ -362,7 +362,7 @@ RF-08, RF-15, RF-21.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404` |
+| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409` |
 | `GET` | `/api/avistamientos/feed` | Feed para el swipe: avistamientos candidatos, excluyendo los propios y los ya deslizados por el usuario (RF-15) | Autenticado | — | Lista de `AvistamientoFeedResponse` | `200`, `401` |
 | `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento. **Pendiente de implementar** | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
 
@@ -938,7 +938,7 @@ RF-11. **Todos los endpoints requieren rol `ADMIN`.**
 | `PUT` | `/api/admin/protectoras/{id}/rechazar` | Rechaza la solicitud, o retira una verificación ya concedida: pasa a `RECHAZADA`. Si estaba `ACTIVA`, **retira además sus animales `DISPONIBLE`** (§20) | `ADMIN` | `RechazarProtectoraRequest`: `motivo` (obligatorio, ≤500) | `ProtectoraAdminResponse` | `200`, `400`, `401`, `403`, `404` |
 | `GET` | `/api/admin/reportes` | Reportes `PENDIENTE`, más antiguos primero | `ADMIN` | — | Lista de `ReporteResponse` | `200`, `401`, `403` |
 | `PUT` | `/api/admin/reportes/{id}/resolver` | Marca el reporte como `REVISADO` y avisa a quien lo emitió | `ADMIN` | — | `ReporteResponse` | `200`, `401`, `403`, `404` |
-| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Retira una publicación que incumple las normas (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404` |
+| `DELETE` | `/api/admin/publicaciones/{id}?tipo={tipo}` | Retira una publicación que incumple las normas (RF-11) | `ADMIN` | — | — | `204`, `400`, `401`, `403`, `404`, `409` |
 
 > **Cambio de contrato.** Este bloque sustituye el borrador de arriba en cinco puntos. Las cuatro
 > transiciones de estado son `PUT` y no `PATCH`, por lo mismo que `PUT /api/adopcion/{id}/adoptado`:
@@ -2271,6 +2271,14 @@ Las revisiones del bloque terminado encontraron varios problemas más, que se co
   `radio` tienen que ser números finitos (§4).
 - **La foto de una alerta moderada seguía servida en `/fotos/…`.** Ahora la moderación la borra
   (§11).
+- **Un bloqueo podía esperar sin límite.** Si una transacción se quedaba colgada con la alerta
+  bloqueada, las demás operaciones sobre ella esperaban sin fin, cada una con un hilo y una conexión.
+  Ahora la espera máxima es de 5 s (`JPA_LOCK_TIMEOUT_MS`), y al vencer el cliente recibe
+  `409 RECURSO_OCUPADO`, nunca un `500`. Con Hibernate 7 y PostgreSQL la propiedad estándar de JPA se
+  aplica de verdad —antes de cada consulta con bloqueo ejecuta `set local lock_timeout`—, y una prueba
+  lo comprueba por HTTP con una fila bloqueada. Se eligió `409` porque el conflicto es con el estado
+  de ese recurso en ese momento y se resuelve reintentando; `503` diría que todo el servicio está
+  caído, y `423` es de WebDAV.
 
 ### Nada se borra en cascada
 

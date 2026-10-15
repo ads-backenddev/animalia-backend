@@ -184,6 +184,7 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_USER` | `rescate` | Usuario de la base de datos |
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
 | `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
+| `JPA_LOCK_TIMEOUT_MS` | `5000` | Espera máxima, en milisegundos, de un bloqueo de fila sobre una alerta. Al vencer, el cliente recibe `409 RECURSO_OCUPADO` en lugar de quedarse esperando |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
 | `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
