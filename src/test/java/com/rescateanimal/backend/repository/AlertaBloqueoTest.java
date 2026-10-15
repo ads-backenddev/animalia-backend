@@ -84,8 +84,6 @@ class AlertaBloqueoTest {
     @Autowired
     private AvistamientoService avistamientoService;
     @Autowired
-    private AvistamientoRepository avistamientoRepository;
-    @Autowired
     private FotoRepository fotoRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
@@ -140,8 +138,9 @@ class AlertaBloqueoTest {
             }
         }
         hilos.shutdownNow();
-        avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
-                .filter(a -> a.getAlerta().getId().equals(alertaId)).toList());
+        // Directo por alerta_id: la tabla es de la base de datos compartida, y
+        // cargarla entera para filtrar en memoria crece con todo lo que haya.
+        jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
         alertaRepository.deleteById(alertaId);
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
         usuarioRepository.delete(testigo);
