@@ -71,13 +71,19 @@ public class AvistamientoService {
      * La alerta tiene que estar ACTIVA: sobre una que ya se cerró porque el
      * animal apareció, un avistamiento nuevo no aporta nada y ademas ensuciaría
      * el feed de swipe con tarjetas muertas.
+     *
+     * LA ALERTA SE LEE CON BLOQUEO COMPARTIDO hasta el commit. Sin él, una
+     * retirada o una moderación que confirmara entre la comprobación de ACTIVA y
+     * el INSERT dejaba un avistamiento colgando de una alerta terminada. Es
+     * compartido para que los avistamientos de una misma alerta no se esperen
+     * entre sí (ver AlertaRepository.bloquearParaAvistar).
      */
     @Transactional
     public AvistamientoResponse registrar(CrearAvistamientoRequest peticion, Long autorId) {
         String fotoUrl = peticion.getFotoUrl().strip();
         fotoService.exigirPropia(fotoUrl, autorId);
 
-        Alerta alerta = alertaRepository.findById(peticion.getAlertaId())
+        Alerta alerta = alertaRepository.bloquearParaAvistar(peticion.getAlertaId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "La alerta " + peticion.getAlertaId() + " no existe"));
 

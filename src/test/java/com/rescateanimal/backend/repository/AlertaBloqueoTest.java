@@ -1,13 +1,17 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
+import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.model.Alerta;
+import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.service.AlertaService;
+import com.rescateanimal.backend.service.AlmacenFotosService;
+import com.rescateanimal.backend.service.AvistamientoService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -68,24 +72,37 @@ class AlertaBloqueoTest {
     @Autowired
     private UsuarioRepository usuarioRepository;
     @Autowired
+    private AvistamientoService avistamientoService;
+    @Autowired
+    private AvistamientoRepository avistamientoRepository;
+    @Autowired
+    private FotoRepository fotoRepository;
+    @Autowired
+    private AlmacenFotosService almacenFotos;
+    @Autowired
     private PlatformTransactionManager transacciones;
     @Autowired
     private JdbcTemplate jdbc;
 
     private Usuario duenyo;
+    private Usuario testigo;
+    private String fotoDelTestigo;
     private Long alertaId;
     private String especie;
 
     @BeforeEach
     void preparar() {
         especie = "bloqueo-" + UUID.randomUUID().toString().substring(0, 8);
-        Usuario nuevo = new Usuario();
-        nuevo.setNombre("Bloqueo");
-        nuevo.setEmail("bloqueo-" + UUID.randomUUID() + "@test.es");
-        nuevo.setPasswordHash("$2a$10$hashDePrueba");
-        nuevo.setRol(Rol.CIUDADANO);
-        nuevo.setActivo(true);
-        duenyo = usuarioRepository.save(nuevo);
+        duenyo = usuario("Dueño");
+        testigo = usuario("Testigo");
+
+        // registrar exige que la foto sea del testigo; para eso basta la fila.
+        Foto foto = new Foto();
+        foto.setNombre(UUID.randomUUID() + ".jpg");
+        foto.setUsuario(testigo);
+        foto.setTamanyo(1);
+        fotoRepository.save(foto);
+        fotoDelTestigo = almacenFotos.urlDe(foto.getNombre());
 
         Alerta alerta = new Alerta();
         alerta.setUsuario(duenyo);
@@ -100,7 +117,11 @@ class AlertaBloqueoTest {
     @AfterEach
     void limpiar() {
         hilos.shutdownNow();
+        avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
+                .filter(a -> a.getAlerta().getId().equals(alertaId)).toList());
         alertaRepository.deleteById(alertaId);
+        fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
+        usuarioRepository.delete(testigo);
         usuarioRepository.delete(duenyo);
     }
 
@@ -158,6 +179,84 @@ class AlertaBloqueoTest {
         assertThat(estado()).isEqualTo(EstadoAlerta.ELIMINADA);
     }
 
+    @Test
+    @DisplayName("Un avistamiento durante la moderación espera, ve la ELIMINADA y no se registra")
+    void avistamientoDuranteLaModeracion() throws Exception {
+        CountDownLatch moderada = new CountDownLatch(1);
+        CountDownLatch confirmar = new CountDownLatch(1);
+
+        CompletableFuture<Void> admin = CompletableFuture.runAsync(() ->
+                new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+                    alertaService.retirarPorModeracion(alertaId, ADMIN);
+                    moderada.countDown();
+                    esperar(confirmar);
+                }), hilos);
+        assertThat(moderada.await(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        CompletableFuture<Void> avistamiento = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueSeBloquee();
+        assertThat(avistamiento).as("el avistamiento espera a la moderación").isNotDone();
+
+        confirmar.countDown();
+        admin.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+
+        assertThatThrownBy(() -> avistamiento.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(avistamientos()).isZero();
+    }
+
+    @Test
+    @DisplayName("Una moderación durante un avistamiento espera a que se registre, y se aplica después")
+    void moderacionDuranteUnAvistamiento() throws Exception {
+        CountDownLatch registrado = new CountDownLatch(1);
+        CountDownLatch confirmar = new CountDownLatch(1);
+
+        CompletableFuture<Void> avistamiento = CompletableFuture.runAsync(() ->
+                new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+                    avistar();
+                    registrado.countDown();
+                    esperar(confirmar);
+                }), hilos);
+        assertThat(registrado.await(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        CompletableFuture<Boolean> moderacion = CompletableFuture.supplyAsync(() ->
+                alertaService.retirarPorModeracion(alertaId, ADMIN), hilos);
+        esperarAQueSeBloquee();
+        assertThat(moderacion).as("la moderación espera al avistamiento").isNotDone();
+
+        confirmar.countDown();
+        avistamiento.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+
+        assertThat(moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
+        assertThat(estado()).isEqualTo(EstadoAlerta.ELIMINADA);
+        assertThat(avistamientos()).as("se registró mientras estaba ACTIVA").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Dos avistamientos sobre la misma alerta no se esperan: el bloqueo es compartido")
+    void dosAvistamientosALaVez() throws Exception {
+        CountDownLatch registrado = new CountDownLatch(1);
+        CountDownLatch confirmar = new CountDownLatch(1);
+
+        CompletableFuture<Void> primero = CompletableFuture.runAsync(() ->
+                new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+                    avistar();
+                    registrado.countDown();
+                    esperar(confirmar);
+                }), hilos);
+        assertThat(registrado.await(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        // El primero sigue con su transacción abierta, y su bloqueo, mientras
+        // el segundo se registra y confirma entero.
+        CompletableFuture.runAsync(this::avistar, hilos).get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(primero).as("el primero sigue sin confirmar").isNotDone();
+
+        confirmar.countDown();
+        primero.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(avistamientos()).isEqualTo(2);
+    }
+
     // ---------------------------------------------------------------------
 
     /**
@@ -194,6 +293,27 @@ class AlertaBloqueoTest {
     private ActualizarAlertaRequest peticionDeEdicion() {
         return new ActualizarAlertaRequest("Descripción nueva", null, especie, Instant.now(),
                 new UbicacionRequest(LAT, LNG), null);
+    }
+
+    private void avistar() {
+        avistamientoService.registrar(new CrearAvistamientoRequest(alertaId, "Visto en la esquina",
+                fotoDelTestigo, new UbicacionRequest(LAT, LNG)), testigo.getId());
+    }
+
+    private int avistamientos() {
+        Integer total = jdbc.queryForObject("SELECT count(*) FROM avistamiento WHERE alerta_id = ?",
+                Integer.class, alertaId);
+        return total == null ? 0 : total;
+    }
+
+    private Usuario usuario(String nombre) {
+        Usuario nuevo = new Usuario();
+        nuevo.setNombre(nombre);
+        nuevo.setEmail("bloqueo-" + UUID.randomUUID() + "@test.es");
+        nuevo.setPasswordHash("$2a$10$hashDePrueba");
+        nuevo.setRol(Rol.CIUDADANO);
+        nuevo.setActivo(true);
+        return usuarioRepository.save(nuevo);
     }
 
     private EstadoAlerta estado() {

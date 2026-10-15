@@ -53,6 +53,21 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
     Optional<Alerta> bloquearParaModificar(@Param("id") Long id);
 
     /**
+     * La alerta con un bloqueo COMPARTIDO de su fila (SELECT ... FOR SHARE),
+     * para registrar un avistamiento sobre ella: quien lo registra comprueba que
+     * sigue ACTIVA y necesita que nadie la cambie hasta que confirme.
+     *
+     * Compartido y no exclusivo porque el avistamiento no escribe la alerta, solo
+     * la lee. FOR SHARE es compatible consigo mismo —dos avistamientos sobre la
+     * misma alerta no se esperan entre sí— y choca con el FOR UPDATE de
+     * bloquearParaModificar: un avistamiento espera a que termine una edición,
+     * retirada, cierre o moderación en curso, y al revés.
+     */
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("SELECT a FROM Alerta a WHERE a.id = :id")
+    Optional<Alerta> bloquearParaAvistar(@Param("id") Long id);
+
+    /**
      * Alertas activas y geolocalizadas, para pintar el mapa (RF-04).
      * Las que no tienen ubicación no pueden dibujarse, así que se excluyen.
      */

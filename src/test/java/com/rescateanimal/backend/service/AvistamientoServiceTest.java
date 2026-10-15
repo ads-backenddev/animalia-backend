@@ -89,7 +89,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("Sobre una alerta ACTIVA el avistamiento se registra")
         void seRegistraSobreAlertaActiva() {
-            when(alertaRepository.findById(ID_ALERTA))
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
                     .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
 
             AvistamientoResponse respuesta = avistamientoService.registrar(peticion(), ID_USUARIO);
@@ -103,7 +103,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("La respuesta del autor no expone email ni teléfono (RNF-10)")
         void elAutorNoExponeDatosDeContacto() {
-            when(alertaRepository.findById(ID_ALERTA))
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
                     .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
 
             AvistamientoResponse respuesta = avistamientoService.registrar(peticion(), ID_USUARIO);
@@ -115,7 +115,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("La ubicación se guarda como Point con el orden (longitud, latitud) de JTS")
         void laUbicacionSeGuardaComoPoint() {
-            when(alertaRepository.findById(ID_ALERTA))
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
                     .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
 
             avistamientoService.registrar(peticion(), ID_USUARIO);
@@ -144,7 +144,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("Si la alerta no existe se rechaza con 404")
         void alertaInexistenteSeRechaza() {
-            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.empty());
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
                     .isInstanceOf(ResourceNotFoundException.class);
@@ -155,7 +155,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("Sobre una alerta ya cerrada no se admiten avistamientos")
         void alertaEncontradaSeRechaza() {
-            when(alertaRepository.findById(ID_ALERTA))
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
                     .thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
 
             assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
@@ -169,7 +169,7 @@ class AvistamientoServiceTest {
         @Test
         @DisplayName("Sobre una alerta eliminada tampoco")
         void alertaEliminadaSeRechaza() {
-            when(alertaRepository.findById(ID_ALERTA))
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
                     .thenReturn(Optional.of(alerta(EstadoAlerta.ELIMINADA)));
 
             assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))

@@ -2243,7 +2243,7 @@ el listado va paginado y filtra antes por estado.
 
 ### Lo que corrigió la revisión
 
-Una revisión del bloque terminado encontró cuatro problemas más, que se corrigieron antes de fusionarlo:
+Las revisiones del bloque terminado encontraron varios problemas más, que se corrigieron antes de fusionarlo:
 
 - **El dueño y el administrador podían pisarse.** Si el dueño editaba la alerta justo mientras el
   administrador la moderaba, el `PUT` leía `ACTIVA` antes de que la moderación se confirmara y, al
@@ -2252,6 +2252,14 @@ Una revisión del bloque terminado encontró cuatro problemas más, que se corri
   que la primera confirme y decide sobre el estado nuevo: el dueño recibe `400 ALERTA_NO_ACTIVA`, o la
   moderación se aplica encima de lo que hizo el dueño. No hizo falta migración, que sí la habría
   exigido un `@Version`.
+- **Un avistamiento podía colgar de una alerta ya terminada.** `POST /api/avistamientos` comprobaba
+  que la alerta seguía `ACTIVA` sin bloquearla, y una retirada o una moderación que confirmara entre
+  esa comprobación y el `INSERT` lo dejaba registrado sobre una alerta cerrada. Ahora lee la alerta
+  con `FOR SHARE`, un bloqueo **compartido**: los avistamientos de una misma alerta no se esperan
+  entre sí, pero sí esperan a una edición, retirada, cierre o moderación en curso, y al revés. El
+  exclusivo de las otras cuatro operaciones sale de Hibernate como `FOR NO KEY UPDATE`, que choca con
+  `FOR SHARE`; sin el bloqueo nuevo el avistamiento no esperaba en absoluto, porque la comprobación de
+  la clave ajena del `INSERT` (`FOR KEY SHARE`) no choca con `FOR NO KEY UPDATE`.
 - **El chat seguía enseñando la foto de una alerta retirada o moderada** (§7). Ahora la omite, con
   el mismo recorte que el detalle.
 - **`radio=NaN` se saltaba el tope de 50 km**, en el listado y en `/mapa`. Ahora `lat`, `lng` y
@@ -2282,7 +2290,7 @@ ella el primer `UPDATE` a `RETIRADA` fallaría en ejecución, y `ddl-auto=valida
 | El detalle trae todos los avistamientos visibles de la alerta, sin paginar | Una alerta recibe pocos; si alguna llegara a cientos habría que paginarlos dentro del detalle |
 | Con la ventana ampliada de RF-25 se rechazan más alertas que antes | Es el precio de cerrar los dos huecos; el `409` sigue llevando la alerta existente para redirigir al usuario |
 | Los animales siguen sin distinguir retirada por la protectora de retirada por el administrador | Fuera del alcance de este bloque; separarlo exigiría su propia migración y decidir qué pasa con los `RETIRADO` actuales, que ya no se pueden atribuir |
-| Dos operaciones sobre la misma alerta —del dueño o del administrador— se hacen una detrás de otra | El bloqueo dura lo que su transacción, milisegundos; y solo se bloquea esa fila, no la tabla |
+| Editar, retirar, cerrar y moderar la misma alerta se hacen una detrás de otra, y un avistamiento espera a cualquiera de ellas | El bloqueo dura lo que su transacción, milisegundos, y solo afecta a esa fila. Los avistamientos entre sí no se esperan: su bloqueo es compartido |
 | La foto de una alerta moderada se conserva si otra publicación o un perfil usan la misma | Borrarla dejaría sin imagen una publicación que nadie ha moderado. La alerta deja de apuntar a ella igualmente |
 | Las alertas que ya estaban `ELIMINADA` antes de este bloque conservan su foto | La foto solo se borra al pasar a `ELIMINADA`, y moderar otra vez una `ELIMINADA` no hace nada, a propósito: la moderación es idempotente y sin efectos. Ninguna base de datos real tenía alertas `ELIMINADA` con foto |
 | Si el autor pone la foto de una alerta en otra publicación o en su perfil justo mientras se modera esa alerta, la publicación nueva puede quedarse apuntando a una foto ya borrada | La comprobación de uso y el borrado no bloquean la fila de `FOTO`, y la de propiedad tampoco. Exige que el propio autor reutilice esa foto en los milisegundos de la moderación; cerrarlo obligaría a bloquear `FOTO` en cada publicación con foto. La misma carrera existe desde §21 al cambiar la foto de perfil |
