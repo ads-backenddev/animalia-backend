@@ -38,9 +38,16 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
     Page<Alerta> findAll(Specification<Alerta> filtros, Pageable paginacion);
 
     /**
-     * La alerta con su fila bloqueada hasta el final de la transacción
-     * (SELECT ... FOR UPDATE), para las operaciones que deciden según su estado
-     * y después lo escriben: editar, retirar, cerrar y moderar.
+     * La alerta con su fila bloqueada en exclusiva hasta el final de la
+     * transacción, para las operaciones que deciden según su estado y después lo
+     * escriben: editar, retirar, cerrar y moderar.
+     *
+     * En PostgreSQL, Hibernate lo emite como SELECT ... FOR NO KEY UPDATE, no
+     * FOR UPDATE, y la diferencia importa: choca con otro FOR NO KEY UPDATE y
+     * con el FOR SHARE de bloquearParaAvistar, pero no con el FOR KEY SHARE que
+     * toma PostgreSQL al comprobar una clave ajena. Por eso un INSERT de
+     * avistamiento no espera por sí solo a este bloqueo, y hace falta
+     * bloquearParaAvistar.
      *
      * Sin el bloqueo, dos de ellas a la vez leían el mismo estado y la última en
      * confirmar ganaba: un PUT del dueño que leyó ACTIVA antes de que el
@@ -72,7 +79,7 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
      *
      * Compartido y no exclusivo porque el avistamiento no escribe la alerta, solo
      * la lee. FOR SHARE es compatible consigo mismo —dos avistamientos sobre la
-     * misma alerta no se esperan entre sí— y choca con el FOR UPDATE de
+     * misma alerta no se esperan entre sí— y choca con el FOR NO KEY UPDATE de
      * bloquearParaModificar: un avistamiento espera a que termine una edición,
      * retirada, cierre o moderación en curso, y al revés.
      */

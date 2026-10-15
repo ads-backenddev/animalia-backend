@@ -2248,8 +2248,9 @@ Las revisiones del bloque terminado encontraron varios problemas más, que se co
 - **El dueño y el administrador podían pisarse.** Si el dueño editaba la alerta justo mientras el
   administrador la moderaba, el `PUT` leía `ACTIVA` antes de que la moderación se confirmara y, al
   confirmar él, escribía `ACTIVA` encima de `ELIMINADA`: la moderación se deshacía. Ahora editar,
-  retirar, cerrar y moderar leen la alerta con `SELECT … FOR UPDATE`. La segunda operación espera a
-  que la primera confirme y decide sobre el estado nuevo: el dueño recibe `400 ALERTA_NO_ACTIVA`, o la
+  retirar, cerrar y moderar leen la alerta con `SELECT … FOR NO KEY UPDATE`, el bloqueo exclusivo que
+  Hibernate emite para PostgreSQL. La segunda operación espera a que la primera confirme y decide
+  sobre el estado nuevo: el dueño recibe `400 ALERTA_NO_ACTIVA`, o la
   moderación se aplica encima de lo que hizo el dueño. No hizo falta migración, que sí la habría
   exigido un `@Version`.
   La propiedad se comprueba **antes** de bloquear, y sin bloqueo —el autor de una alerta no cambia
