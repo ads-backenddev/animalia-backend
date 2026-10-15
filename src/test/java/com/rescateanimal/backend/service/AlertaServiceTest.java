@@ -667,6 +667,21 @@ class AlertaServiceTest {
         }
 
         @Test
+        @DisplayName("Publicar tampoco devuelve el email ni el teléfono del autor (RNF-10)")
+        void publicarSinContactoDelAutor() {
+            Usuario autor = autor();
+            autor.setTelefono("600111222");
+            when(alertaRepository.buscarSimilar(anyString(), anyDouble(), anyDouble(), anyDouble(), any(), anyLong()))
+                    .thenReturn(Optional.empty());
+            when(usuarioRepository.findById(1L)).thenReturn(Optional.of(autor));
+            when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+
+            String publicada = JsonMapper.builder().build().writeValueAsString(alertaService.publicar(peticion(), 1L));
+
+            assertThat(publicada).contains("\"nombre\":\"Ana\"").doesNotContain("ana@test.es", "600111222");
+        }
+
+        @Test
         @DisplayName("Solo un id que nunca existió da 404")
         void inexistente() {
             when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());

@@ -133,20 +133,6 @@ class AlertaControllerTest {
         }
 
         @Test
-        @DisplayName("La respuesta del autor no expone email ni teléfono (RNF-10)")
-        void elAutorNoExponeDatosDeContacto() throws Exception {
-            when(alertaService.publicar(any(), any())).thenReturn(alertaResponse());
-
-            mockMvc.perform(post("/api/alertas")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content(cuerpoValido()))
-                    .andExpect(status().isCreated())
-                    .andExpect(jsonPath("$.autor.nombre").value("Ana"))
-                    .andExpect(jsonPath("$.autor.email").doesNotExist())
-                    .andExpect(jsonPath("$.autor.telefono").doesNotExist());
-        }
-
-        @Test
         @DisplayName("Sin especie -> 400 señalando el campo")
         void sinEspecieDevuelve400() throws Exception {
             mockMvc.perform(post("/api/alertas")
