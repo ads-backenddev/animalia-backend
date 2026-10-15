@@ -2252,6 +2252,11 @@ Las revisiones del bloque terminado encontraron varios problemas más, que se co
   que la primera confirme y decide sobre el estado nuevo: el dueño recibe `400 ALERTA_NO_ACTIVA`, o la
   moderación se aplica encima de lo que hizo el dueño. No hizo falta migración, que sí la habría
   exigido un `@Version`.
+  La propiedad se comprueba **antes** de bloquear, y sin bloqueo —el autor de una alerta no cambia
+  nunca—: si no, cualquier usuario podía bloquear una alerta ajena con un `PUT` o un `DELETE` y frenar
+  a su dueño y al administrador hasta recibir el `403`. El orden de errores sigue siendo `404`, `403`,
+  `400`. La comprobación lee solo el id del autor, no la alerta: una alerta ya cargada en la sesión
+  haría que la lectura bloqueada devolviera esa misma copia, con el estado anterior al bloqueo.
 - **Un avistamiento podía colgar de una alerta ya terminada.** `POST /api/avistamientos` comprobaba
   que la alerta seguía `ACTIVA` sin bloquearla, y una retirada o una moderación que confirmara entre
   esa comprobación y el `INSERT` lo dejaba registrado sobre una alerta cerrada. Ahora lee la alerta

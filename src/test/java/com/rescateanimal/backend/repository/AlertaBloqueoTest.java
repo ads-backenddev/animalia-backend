@@ -22,6 +22,7 @@ import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -177,6 +178,33 @@ class AlertaBloqueoTest {
 
         assertThat(moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
         assertThat(estado()).isEqualTo(EstadoAlerta.ELIMINADA);
+    }
+
+    @Test
+    @DisplayName("Quien no es el dueño recibe el 403 al momento: no espera ni bloquea la alerta")
+    void unTerceroNoEsperaNiBloquea() throws Exception {
+        CountDownLatch moderada = new CountDownLatch(1);
+        CountDownLatch confirmar = new CountDownLatch(1);
+
+        CompletableFuture<Void> admin = CompletableFuture.runAsync(() ->
+                new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+                    alertaService.retirarPorModeracion(alertaId, ADMIN);
+                    moderada.countDown();
+                    esperar(confirmar);
+                }), hilos);
+        assertThat(moderada.await(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
+
+        // La moderación sigue sin confirmar, con la fila bloqueada, y aun así el
+        // tercero tiene su respuesta sin esperarla.
+        CompletableFuture<Void> tercero = CompletableFuture.runAsync(() ->
+                alertaService.actualizar(alertaId, peticionDeEdicion(), testigo.getId()), hilos);
+        assertThatThrownBy(() -> tercero.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(AccessDeniedException.class);
+        assertThat(admin).as("la moderación sigue abierta").isNotDone();
+
+        confirmar.countDown();
+        admin.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
     }
 
     @Test

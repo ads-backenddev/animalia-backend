@@ -53,6 +53,19 @@ public interface AlertaRepository extends JpaRepository<Alerta, Long>, JpaSpecif
     Optional<Alerta> bloquearParaModificar(@Param("id") Long id);
 
     /**
+     * Quién publicó la alerta, sin cargarla ni bloquearla. Es la comprobación de
+     * propiedad previa a bloquearParaModificar.
+     *
+     * Devuelve solo el id, y no la entidad, a propósito: una entidad cargada
+     * aquí quedaría en el contexto de persistencia, y la consulta con bloqueo
+     * que viene después devolvería esa misma instancia con el estado leído
+     * ANTES de tener el bloqueo. Con un escalar, la alerta se carga por primera
+     * vez ya bloqueada.
+     */
+    @Query("SELECT a.usuario.id FROM Alerta a WHERE a.id = :id")
+    Optional<Long> buscarAutorId(@Param("id") Long id);
+
+    /**
      * La alerta con un bloqueo COMPARTIDO de su fila (SELECT ... FOR SHARE),
      * para registrar un avistamiento sobre ella: quien lo registra comprueba que
      * sigue ACTIVA y necesita que nadie la cambie hasta que confirme.

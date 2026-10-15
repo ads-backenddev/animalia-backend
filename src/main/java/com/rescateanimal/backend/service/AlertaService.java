@@ -578,18 +578,29 @@ public class AlertaService {
 
     /**
      * La alerta, si existe (404) y si es de este usuario (403), con su fila
-     * bloqueada hasta el commit: quien llama va a decidir según su estado y a
-     * escribirlo, y el administrador no debe poder moderarla entre medias (ver
-     * AlertaRepository.bloquearParaModificar).
+     * bloqueada hasta el commit: quien llama va a decidir según su estado (400)
+     * y a escribirlo, y el administrador no debe poder moderarla entre medias
+     * (ver AlertaRepository.bloquearParaModificar).
+     *
+     * LA PROPIEDAD SE COMPRUEBA ANTES DE BLOQUEAR, y sin bloqueo. Al revés,
+     * cualquier usuario autenticado podía bloquear una alerta ajena con un PUT o
+     * un DELETE y frenar a su dueño y al administrador hasta recibir el 403. El
+     * autor de una alerta no cambia nunca —ni la baja (RF-19) lo cambia—, así
+     * que comprobarlo sin bloqueo es seguro. El estado, en cambio, sí cambia, y
+     * se lee ya bloqueado: buscarAutorId no carga la entidad, para que la
+     * lectura bloqueada no devuelva una copia anterior al bloqueo.
      */
     private Alerta exigirAlertaPropia(Long alertaId, Long usuarioId, String mensajeSiAjena) {
-        Alerta alerta = alertaRepository.bloquearParaModificar(alertaId)
+        Long autorId = alertaRepository.buscarAutorId(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
-
-        if (!alerta.getUsuario().getId().equals(usuarioId)) {
+        if (!autorId.equals(usuarioId)) {
             throw new AccessDeniedException(mensajeSiAjena);
         }
-        return alerta;
+
+        // Las alertas no se borran, así que aquí sigue existiendo; el orElseThrow
+        // es solo para no confiar en ello.
+        return alertaRepository.bloquearParaModificar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
     }
 
     // ---------------------------------------------------------------------
