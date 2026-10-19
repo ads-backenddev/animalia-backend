@@ -36,8 +36,20 @@ build/
 .env
 .env.local
 *.env
+.env.*
 !.env.example
 src/main/resources/application-local.properties
+local.properties
+
+### Credenciales y claves: nunca en el repositorio ###
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+id_rsa*
+credentials*.json
+service-account*.json
 
 ### Logs y volcados ###
 *.log
