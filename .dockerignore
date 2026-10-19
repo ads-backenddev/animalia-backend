@@ -1,0 +1,16 @@
+# Lo que NO entra en el contexto de "docker build".
+#
+# El Dockerfile copia src/ entero, y src/main/resources/application-local.properties
+# —ignorado por git, con la contraseña local de la base de datos y el secreto JWT
+# de desarrollo— acababa dentro del jar de cualquier imagen construida en un
+# equipo de desarrollo. Una imagen construida desde el repositorio no lo llevaba,
+# pero una construida en local y subida a un registro sí.
+#
+# mvnw, .mvn, pom.xml, src/ y docker-entrypoint.sh tienen que seguir entrando:
+# los copia el Dockerfile.
+.env
+.env.*
+**/application-local.properties
+uploads/
+target/
+.git/
