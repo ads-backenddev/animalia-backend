@@ -1,16 +1,115 @@
 package com.rescateanimal.backend.config;
 
+import com.rescateanimal.backend.security.JwtAuthFilter;
+import com.rescateanimal.backend.security.LimiteIntentosAutenticacionFilter;
+import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Configuración de Spring Security.
+ * Configuración de Spring Security: API REST stateless autenticada con JWT.
  *
- * Pendiente de configurar en la siguiente fase:
- * - SecurityFilterChain stateless (SessionCreationPolicy.STATELESS, sin sesiones).
- * - Registro de JwtAuthFilter antes del filtro de autenticación por usuario/contraseña.
- * - PasswordEncoder con BCrypt (RNF-03).
- * - Reglas de autorización por ruta y @EnableMethodSecurity para @PreAuthorize.
+ * @EnableMethodSecurity habilita las anotaciones @PreAuthorize con las que se
+ * protegen por rol los endpoints, tal y como exige el CLAUDE.md del proyecto.
  */
 @Configuration
+@EnableMethodSecurity
+@RequiredArgsConstructor
 public class SecurityConfig {
+
+    private final JwtAuthFilter jwtAuthFilter;
+    private final LimiteIntentosAutenticacionFilter limiteIntentosFilter;
+
+    /**
+     * Coste de BCrypt. El valor por defecto de Spring es 10; se sube a 12, que es
+     * lo que recomienda hoy OWASP y multiplica por cuatro el trabajo de probar
+     * una contraseña (cada punto duplica el número de iteraciones).
+     *
+     * NO INVALIDA NINGUNA CONTRASEÑA YA GUARDADA: el coste con el que se calculó
+     * un hash viaja dentro del propio hash, así que BCrypt verifica igual de bien
+     * los antiguos de coste 10. Lo que sí ocurre es que esas cuentas siguen con
+     * el coste viejo hasta que su dueño cambie la contraseña; rehashearlas exige
+     * la contraseña en claro, que solo está disponible durante un login correcto.
+     * Reencriptar ahí es lo que haría un sistema maduro y queda anotado como
+     * pendiente en docs/api-rest.md.
+     */
+    private static final int COSTE_BCRYPT = 12;
+
+    /** BCrypt para el hash de las contraseñas (RNF-03). */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(COSTE_BCRYPT);
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+                // Sin CSRF: no hay sesiones ni cookies, la credencial viaja en una
+                // cabecera que un sitio de terceros no puede fijar.
+                .csrf(csrf -> csrf.disable())
+                .cors(Customizer.withDefaults())
+
+                // Ninguna sesión de servidor: cada petición se autentica con su token.
+                .sessionManagement(sesion ->
+                        sesion.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+
+                .authorizeHttpRequests(rutas -> rutas
+                        // El logout necesita el token que va a invalidar, así que exige
+                        // autenticación (RF-16). Va ANTES del comodín de /api/auth/**:
+                        // la primera regla que casa es la que manda.
+                        .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
+                        // Registro, login y recuperación de contraseña son públicos por
+                        // definición: son la puerta de entrada (RF-01, RF-13, RF-17).
+                        .requestMatchers("/api/auth/**").permitAll()
+                        // Sonda del healthcheck de Docker Compose (RNF-06).
+                        .requestMatchers("/actuator/health").permitAll()
+                        // El handshake del WebSocket no pasa por este filtro: los
+                        // navegadores no pueden poner la cabecera Authorization al
+                        // abrir la conexión, asi que el token viaja como parámetro.
+                        // Quien lo valida es JwtHandshakeInterceptor, que rechaza con
+                        // 401 la conexión sin token válido (docs/api-rest.md §13).
+                        // Esta ruta NO debe abrirse si aquel interceptor se retira.
+                        .requestMatchers("/ws/**").permitAll()
+                        // Las fotos subidas se sirven sin token: una etiqueta <img> no
+                        // puede mandar la cabecera Authorization. Solo GET; subirlas
+                        // (POST /api/fotos) sigue exigiendo autenticación.
+                        .requestMatchers(HttpMethod.GET, "/fotos/*").permitAll()
+                        .anyRequest().authenticated())
+
+                // Sin token válido se responde 401 seco, en vez del formulario de
+                // login o el Basic que Spring pondría por defecto.
+                .exceptionHandling(errores -> errores
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+
+                // El límite de intentos va ANTES de autenticar: su trabajo es que
+                // una petición de fuerza bruta no llegue a costar ni una consulta
+                // ni un BCrypt. Es un OncePerRequestFilter, así que la doble
+                // inscripción que Spring Boot hace de cualquier bean de tipo
+                // Filter no lo ejecuta dos veces ni cuenta el intento por
+                // duplicado; hay una prueba que lo fija.
+                //
+                // EL ORDEN DE ESTAS DOS LÍNEAS NO ES INTERCAMBIABLE. Anclar un
+                // filtro a una clase propia solo vale si esa clase ya se ha
+                // colocado: addFilterBefore apunta el orden de lo que inserta en un
+                // registro, y consultarlo antes de tiempo aborta el arranque con
+                // "The Filter class JwtAuthFilter does not have a registered order".
+                // Por eso JwtAuthFilter se sitúa primero respecto a una clase de
+                // Spring Security, que sí viene registrada de fábrica, y el límite
+                // de intentos se ancla después a él.
+                .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterBefore(limiteIntentosFilter, JwtAuthFilter.class);
+
+        return http.build();
+    }
 }

@@ -1,6 +1,13 @@
-# Entorno de desarrollo local: API + PostgreSQL con PostGIS.
-# Arranque:  docker compose up -d --build
-# Logs:      docker compose logs -f app
+# Base de datos de desarrollo local: PostgreSQL con PostGIS.
+#
+# La aplicacion NO se levanta aqui a proposito: durante el desarrollo se ejecuta
+# directamente desde IntelliJ con el perfil "local" (ver
+# src/main/resources/application-local.properties), que apunta a esta base de
+# datos en localhost:5432. El Dockerfile del repositorio se conserva para el
+# despliegue en Railway, no para el entorno local.
+#
+# Arranque:  docker compose up -d
+# Logs:      docker compose logs -f db
 # Parada:    docker compose down          (down -v borra tambien los datos)
 
 services:
@@ -11,16 +18,21 @@ services:
     image: postgis/postgis:16-3.4
     container_name: rescate-animal-db
     environment:
+      # Estas variables SOLO se aplican al inicializar el volumen por primera
+      # vez. Si cambias usuario o contrasena despues, hace falta un
+      # "docker compose down -v" para que tengan efecto (borra los datos).
       POSTGRES_DB: ${DB_NAME:-rescate_animal}
       POSTGRES_USER: ${DB_USER:-rescate}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-rescate}
     ports:
+      # Si el 5432 ya estuviera ocupado, cambia DB_PORT en el .env y ajusta
+      # tambien spring.datasource.url en application-local.properties.
       - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      # La app espera a que la base de datos acepte conexiones, no solo a que
-      # el contenedor este arrancado.
+      # Comprueba que la base de datos acepta conexiones, no solo que el
+      # contenedor este arrancado.
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-rescate} -d ${DB_NAME:-rescate_animal}"]
       interval: 10s
       timeout: 5s
@@ -28,30 +40,24 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: rescate-animal-api
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      # El host es el nombre del servicio, no localhost.
-      DB_URL: jdbc:postgresql://db:5432/${DB_NAME:-rescate_animal}
-      DB_USER: ${DB_USER:-rescate}
-      DB_PASSWORD: ${DB_PASSWORD:-rescate}
-      JWT_SECRET: ${JWT_SECRET:-cambiar-este-secreto-solo-valido-para-desarrollo-local-1234567890}
-      JPA_DDL_AUTO: ${JPA_DDL_AUTO:-update}
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-default}
+  mailpit:
+    # Servidor SMTP de pruebas: acepta cualquier correo y en lugar de entregarlo
+    # lo muestra en una bandeja web. Sirve para comprobar a mano que el flujo de
+    # recuperacion de contrasena (RF-17) genera el email y el enlace correctos,
+    # sin mandar nada a una direccion real.
+    image: axllent/mailpit:latest
+    container_name: rescate-animal-mailpit
     ports:
-      - "${SERVER_PORT:-8080}:8080"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
+      # SMTP: coincide con MAIL_PORT del .env y con el default de la aplicacion.
+      - "${MAIL_PORT:-1025}:1025"
+      # Bandeja de entrada web: http://localhost:8025
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    environment:
+      MP_MAX_MESSAGES: 500
+      # Sin autenticacion ni TLS: es un contenedor local de desarrollo, y asi
+      # coincide con spring.mail.properties.mail.smtp.auth=false.
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
     restart: unless-stopped
 
 volumes:

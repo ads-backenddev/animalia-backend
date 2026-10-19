@@ -9,6 +9,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -19,7 +20,7 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.locationtech.jts.geom.Point;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Alerta de mascota perdida publicada por un usuario (RF-03).
@@ -29,7 +30,19 @@ import java.time.LocalDateTime;
  * alertas duplicadas en un radio de 500 m en las últimas 24 h (RF-25).
  */
 @Entity
-@Table(name = "alerta")
+@Table(name = "alerta", indexes = {
+        // Las dos consultas del mapa filtran por estado; PostgreSQL no indexa
+        // las claves ajenas por si solo, asi que usuario_id tambien necesita el
+        // suyo para /mis-alertas.
+        //
+        // Aqui NO hay indice de especie, y no es un olvido: la deteccion de
+        // duplicados (RF-25) compara lower(especie), y a eso solo responde un
+        // indice funcional sobre lower(especie), que @Index no sabe declarar
+        // —solo genera B-tree sobre columnas en crudo—. Vive en la migracion
+        // V4, junto a los GiST, por el mismo motivo que ellos.
+        @Index(name = "idx_alerta_estado", columnList = "estado"),
+        @Index(name = "idx_alerta_usuario", columnList = "usuario_id")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -54,7 +67,7 @@ public class Alerta {
     private String especie;
 
     @Column(name = "fecha_avistamiento")
-    private LocalDateTime fechaAvistamiento;
+    private Instant fechaAvistamiento;
 
     /** Último lugar donde fue vista la mascota. */
     @Column(name = "ultima_ubicacion", columnDefinition = "geometry(Point,4326)")
@@ -70,5 +83,5 @@ public class Alerta {
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

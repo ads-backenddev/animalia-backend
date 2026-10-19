@@ -18,8 +18,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Datos de organización de un usuario con rol PROTECTORA (RF-01, RF-10).
@@ -48,7 +47,16 @@ public class Protectora {
     @Column(length = 250)
     private String direccion;
 
-    /** Zona de actuación, usada para contactar con la protectora local (RF-06). */
+    /**
+     * Zona de actuación: comarca o ciudad, no una dirección.
+     *
+     * Es el filtro {@code zona} del directorio de RF-06, que es donde un
+     * ciudadano encuentra a la protectora de su localidad. Por ser una zona y no
+     * un domicilio, es de los pocos datos de esta tabla que la baja de cuenta NO
+     * anonimiza aunque detrás haya una persona física: no identifica a nadie y es
+     * lo que permite que el histórico siga diciendo dónde operaba quien publicó
+     * cada animal (RF-19, V12).
+     */
     @Column(name = "zona_geografica", length = 150)
     private String zonaGeografica;
 
@@ -57,11 +65,46 @@ public class Protectora {
     @Column(nullable = false, length = 20)
     private EstadoProtectora estado;
 
-    /** Media de las valoraciones recibidas, de 1 a 5 estrellas (RF-23). */
-    @Column(name = "valoracion_media", precision = 3, scale = 2)
-    private BigDecimal valoracionMedia;
+    /**
+     * Si detrás de la protectora hay una persona particular y no una entidad.
+     *
+     * LO DECLARA ELLA MISMA AL REGISTRARSE, y cambia qué pasa con estos datos
+     * cuando su cuenta se da de baja (RF-19). En España es habitual que una
+     * protectora pequeña sea alguien que rescata por su cuenta, sin estructura
+     * legal, y que ponga su propio nombre como "organización" y su domicilio
+     * particular como "dirección". Para esa persona, esas dos columnas son datos
+     * personales tan identificables como su teléfono, y una baja que no los
+     * tocara no borraría nada de lo que la identifica.
+     *
+     * Cuando es false —una asociación registrada— el nombre y la dirección son
+     * datos de una entidad, no de una persona, y se conservan: son los que
+     * explican de dónde salió cada animal publicado.
+     *
+     * NO SE PUEDE DEDUCIR, y por eso se pregunta. Nada en un nombre distingue con
+     * fiabilidad "Huellas de Getafe" de "María Gómez Ruiz", y equivocarse tiene
+     * coste en las dos direcciones: borrar de más deja el histórico sin
+     * procedencia, borrar de menos deja expuesta a una persona.
+     *
+     * NACE EN false, igual que el DEFAULT de la columna. El valor inicial está
+     * aquí y no solo en la base de datos porque una Protectora recién construida
+     * tiene que ser válida antes de guardarse: sin él, cualquier código que
+     * creara una sin acordarse del campo reventaría contra el NOT NULL en el
+     * momento del INSERT, que es tarde y lejos de donde está el error. Y el valor
+     * seguro es este: entre dejar un dato de más y borrar uno que hacía falta,
+     * se deja el de más.
+     */
+    @Column(name = "es_persona_fisica", nullable = false)
+    private Boolean esPersonaFisica = false;
+
+    // NO HAY CAMPO valoracionMedia, y su ausencia es una decisión, no un olvido.
+    // Existió como columna derivada y nadie la mantenía: ningún código la
+    // escribía, así que era nula para todas las protectoras y lo habría seguido
+    // siendo mientras se acumulaban valoraciones reales debajo. La media se
+    // calcula donde se lee, con AVG y COUNT sobre VALORACION (ver
+    // ValoracionService), de modo que no puede quedar desfasada. La columna se
+    // eliminó en la migración V9.
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

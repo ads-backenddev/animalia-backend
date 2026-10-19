@@ -1,0 +1,27 @@
+-- ---------------------------------------------------------------------------
+-- V10 - Indice de VALORACION por protectora (RF-23)
+--
+-- LO PIDE UN CAMBIO DE ESTE MISMO BLOQUE. Al eliminar PROTECTORA.valoracion_media
+-- en V9, la media dejo de leerse de una columna y pasa a calcularse con AVG y
+-- COUNT sobre VALORACION cada vez que se lee. Eso es lo correcto —la columna
+-- guardada estaba siempre desfasada porque nadie la mantenia— pero mueve el coste
+-- a la lectura, y la lectura no es rara: ocurre en cada GET /api/adopcion/{id},
+-- que es la pantalla que un ciudadano abre al mirar un animal.
+--
+-- EL INDICE UNICO DE V9 NO SIRVE PARA ESTO, y por eso hace falta otro. Aquel es
+-- (usuario_id, protectora_id), y un B-tree compuesto solo se puede recorrer por
+-- un prefijo de sus columnas: sirve para "las valoraciones de este usuario" y
+-- para el par completo, pero no para "las valoraciones de esta protectora", que
+-- filtra unicamente por la segunda. Sin este indice, cada vista de detalle de un
+-- animal provoca un recorrido secuencial de VALORACION.
+--
+-- No lo detecta ninguna prueba: la suite corre con un punado de filas, donde un
+-- recorrido secuencial es mas rapido que cualquier indice. Es justo el tipo de
+-- regresion que solo aparece con volumen.
+--
+-- La clave ajena valoracion.protectora_id NO crea indice por si sola: PostgreSQL
+-- indexa automaticamente la clave primaria y las restricciones UNIQUE, pero nunca
+-- el lado que referencia de una clave ajena.
+-- ---------------------------------------------------------------------------
+
+CREATE INDEX idx_valoracion_protectora ON valoracion (protectora_id);

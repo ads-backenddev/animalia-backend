@@ -2,6 +2,7 @@ package com.rescateanimal.backend.model;
 
 import com.rescateanimal.backend.model.enums.EstadoReporte;
 import com.rescateanimal.backend.model.enums.MotivoReporte;
+import com.rescateanimal.backend.model.enums.TipoContenido;
 import com.rescateanimal.backend.model.enums.TipoObjetivo;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -20,7 +21,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Reporte de una publicación o de un usuario por incumplir las normas (RF-26).
@@ -54,6 +55,15 @@ public class Reporte {
     @Column(name = "objetivo_id", nullable = false)
     private Long objetivoId;
 
+    /**
+     * Discriminador de la tabla a la que apunta objetivoId cuando tipoObjetivo es
+     * PUBLICACION, ya que hay tres tipos de publicación y el id solo es único
+     * dentro de cada tabla. Nulo cuando tipoObjetivo es USUARIO.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "tipo_contenido", length = 20)
+    private TipoContenido tipoContenido;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
     private MotivoReporte motivo;
@@ -64,5 +74,5 @@ public class Reporte {
 
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

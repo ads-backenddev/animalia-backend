@@ -15,7 +15,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Usuario registrado en la plataforma (RF-01, RF-02).
@@ -37,7 +37,17 @@ public class Usuario {
     @Column(nullable = false, length = 100)
     private String nombre;
 
-    @Column(nullable = false, unique = true, length = 150)
+    /**
+     * Identifica la cuenta y es unico SIN distinguir mayusculas.
+     *
+     * No lleva unique = true, y no es un descuido: @Column solo sabe declarar
+     * una unicidad sobre la columna en crudo, y esa consideraria
+     * "Ana@Test.es" y "ana@test.es" dos cuentas distintas, que es justo lo que
+     * la aplicacion no admite —AuthService normaliza a minusculas antes de
+     * registrar y antes de buscar—. La garantia la da el indice unico funcional
+     * uk_usuario_email_lower sobre lower(email), creado en la migracion V5.
+     */
+    @Column(nullable = false, length = 150)
     private String email;
 
     /** Hash BCrypt de la contraseña, nunca la contraseña en claro (RNF-03). */
@@ -66,7 +76,19 @@ public class Usuario {
     @Column(nullable = false)
     private Boolean activo;
 
+    /**
+     * Momento del último cambio de contraseña (RF-17).
+     *
+     * Actúa como corte de validez de los tokens: cualquier JWT emitido antes de
+     * esta marca se rechaza. Así, restablecer la contraseña cierra de inmediato
+     * todas las sesiones abiertas —el caso de uso real de RF-17 es una cuenta
+     * comprometida— y un enlace de recuperación ya utilizado no vuelve a servir
+     * aunque la aplicación se reinicie.
+     */
+    @Column(name = "password_changed_at")
+    private Instant passwordChangedAt;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

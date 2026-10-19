@@ -20,13 +20,18 @@ RUN ./mvnw -B clean package -DskipTests
 FROM eclipse-temurin:17-jre-alpine
 WORKDIR /app
 
-# Usuario sin privilegios: la aplicacion no necesita ser root.
-RUN addgroup -S spring && adduser -S spring -G spring
+# Usuario sin privilegios: la aplicacion no necesita ser root. su-exec es para
+# soltar root en la entrada (docker-entrypoint.sh), no para la aplicacion.
+RUN apk add --no-cache su-exec && addgroup -S spring && adduser -S spring -G spring
 
 COPY --from=build /build/target/*.jar app.jar
 RUN chown spring:spring app.jar
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 
-USER spring
+# Sin "USER spring": el contenedor arranca como root SOLO para preparar la
+# carpeta de fotos del volumen, que Railway monta como root, y la entrada
+# ejecuta java como "spring". Ver docker-entrypoint.sh.
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "/app/app.jar"]
+ENTRYPOINT ["docker-entrypoint.sh"]

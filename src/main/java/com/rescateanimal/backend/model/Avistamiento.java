@@ -1,11 +1,15 @@
 package com.rescateanimal.backend.model;
 
+import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -16,14 +20,21 @@ import lombok.Setter;
 import org.hibernate.annotations.CreationTimestamp;
 import org.locationtech.jts.geom.Point;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Avistamiento de un animal registrado por un usuario sobre una alerta
  * existente (RF-21). Alimenta el feed de swipe y el sistema de match (RF-08).
  */
 @Entity
-@Table(name = "avistamiento")
+@Table(name = "avistamiento", indexes = {
+        // El feed filtra por el autor (para excluir los propios) y ordena por
+        // fecha; el detalle de una alerta los busca por alerta_id. PostgreSQL no
+        // indexa las claves ajenas por su cuenta.
+        @Index(name = "idx_avistamiento_alerta", columnList = "alerta_id"),
+        @Index(name = "idx_avistamiento_usuario", columnList = "usuario_id"),
+        @Index(name = "idx_avistamiento_created_at", columnList = "created_at")
+})
 @Getter
 @Setter
 @NoArgsConstructor
@@ -52,7 +63,17 @@ public class Avistamiento {
     @Column(columnDefinition = "geometry(Point,4326)")
     private Point ubicacion;
 
+    /**
+     * Pasa a ELIMINADO cuando el administrador lo retira por incumplir las
+     * normas (RF-11). La fila se conserva: borrarla dejaría huérfanos sus
+     * matches y haría desaparecer chats en curso. El porqué completo está en el
+     * javadoc de EstadoAvistamiento.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private EstadoAvistamiento estado;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

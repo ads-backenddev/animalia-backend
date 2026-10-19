@@ -74,6 +74,49 @@
 			<scope>runtime</scope>
 		</dependency>
 		<!--
+			Flyway: migraciones versionadas del esquema.
+
+			Por qué se añade. Hasta ahora el esquema lo mantenía
+			hibernate ddl-auto=update, que solo sabe AÑADIR: crea tablas,
+			columnas e índices que falten, pero nunca cambia el tipo de una
+			columna existente ni elimina nada, y lo hace en silencio. Varios
+			cambios de este bloque —pasar los timestamp a timestamptz, cambiar
+			un CHECK de estado, sustituir el UNIQUE de email por uno
+			funcional— habrían sido ignorados sin un solo aviso, dejando el
+			código y la base de datos diciendo cosas distintas. Con
+			migraciones el cambio es explícito y ddl-auto pasa a "validate",
+			que no toca el esquema pero sí falla al arrancar si no coincide
+			con las entidades.
+
+			Son tres artefactos y no uno, y merece la pena saber por qué:
+
+			- flyway-core: el motor.
+			- flyway-database-postgresql: desde Flyway 10 el soporte de cada
+			  motor vive en su propio módulo; sin él, el core no reconoce la
+			  URL jdbc:postgresql.
+			- spring-boot-flyway: la autoconfiguración. Spring Boot 4 troceó
+			  spring-boot-autoconfigure en un módulo por tecnología
+			  (spring-boot-jpa, spring-boot-jdbc, spring-boot-mail...), así
+			  que tener Flyway en el classpath ya NO basta para que Spring lo
+			  arranque. Sin este módulo la aplicación levanta con normalidad y
+			  las migraciones sencillamente no se ejecutan, sin un solo aviso.
+
+			Las versiones las gestiona el BOM de Spring Boot.
+		-->
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.flywaydb</groupId>
+			<artifactId>flyway-database-postgresql</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-flyway</artifactId>
+		</dependency>
+		<!--
 			Hibernate Spatial: soporte de tipos geométricos de PostGIS para los campos
 			Point de ALERTA y AVISTAMIENTO (RF-04 mapa en tiempo real, RF-25 detección
 			de duplicados en radio de 500 m). Arrastra org.locationtech.jts:jts-core.

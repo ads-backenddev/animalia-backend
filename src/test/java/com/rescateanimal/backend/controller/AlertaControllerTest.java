@@ -1,0 +1,491 @@
+package com.rescateanimal.backend.controller;
+
+import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
+import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
+import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
+import com.rescateanimal.backend.dto.response.AlertaResponse;
+import com.rescateanimal.backend.dto.response.AutorResponse;
+import com.rescateanimal.backend.dto.response.AvistamientoResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
+import com.rescateanimal.backend.dto.response.UbicacionResponse;
+import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.ParametrosInvalidosException;
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
+import com.rescateanimal.backend.model.enums.EstadoAlerta;
+import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.security.JwtService;
+import com.rescateanimal.backend.security.UserDetailsServiceImpl;
+import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.AlertaService;
+import com.rescateanimal.backend.service.ControlIntentosService;
+import com.rescateanimal.backend.service.TokenRevocadoService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.http.MediaType;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.security.test.context.TestSecurityContextHolder;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Pruebas del contrato HTTP de /api/alertas: que cada situación devuelve el
+ * código documentado en docs/api-rest.md §3.
+ *
+ * Igual que en AuthControllerTest, se prueba el controller junto a
+ * GlobalExceptionHandler con el service simulado: la lógica de negocio (radio,
+ * ventana temporal, geometría) se verifica en AlertaServiceTest.
+ *
+ * Los filtros de seguridad se desactivan porque las reglas de acceso son de
+ * SecurityConfig; el usuario autenticado se pone directamente en el contexto
+ * para que @AuthenticationPrincipal lo resuelva.
+ */
+@WebMvcTest(AlertaController.class)
+@AutoConfigureMockMvc(addFilters = false)
+class AlertaControllerTest {
+
+    private static final Long ID_USUARIO = 7L;
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockitoBean
+    private AlertaService alertaService;
+    @MockitoBean
+    private JwtService jwtService;
+    @MockitoBean
+    private UserDetailsServiceImpl userDetailsService;
+    @MockitoBean
+    private TokenRevocadoService tokenRevocadoService;
+    @MockitoBean
+    private ControlIntentosService controlIntentosService;
+
+    @BeforeEach
+    void autenticarUsuario() {
+        UsuarioPrincipal principal = new UsuarioPrincipal(
+                ID_USUARIO, "ana@test.es", "$2a$10$hash", Rol.CIUDADANO, true, null);
+        TestSecurityContextHolder.setAuthentication(new UsernamePasswordAuthenticationToken(
+                principal, null, principal.getAuthorities()));
+    }
+
+    @AfterEach
+    void limpiarContexto() {
+        TestSecurityContextHolder.clearContext();
+    }
+
+    @Nested
+    @DisplayName("POST /api/alertas")
+    class Publicacion {
+
+        @Test
+        @DisplayName("Alerta válida -> 201 con Location y el recurso creado")
+        void alertaValidaDevuelve201() throws Exception {
+            when(alertaService.publicar(any(), eq(ID_USUARIO))).thenReturn(alertaResponse());
+
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpoValido()))
+                    .andExpect(status().isCreated())
+                    .andExpect(header().string("Location", "http://localhost/api/alertas/42"))
+                    .andExpect(jsonPath("$.id").value(42))
+                    .andExpect(jsonPath("$.especie").value("perro"))
+                    .andExpect(jsonPath("$.estado").value("ACTIVA"))
+                    .andExpect(jsonPath("$.ubicacion.latitud").value(40.4168))
+                    .andExpect(jsonPath("$.ubicacion.longitud").value(-3.7038));
+        }
+
+        @Test
+        @DisplayName("La alerta se publica a nombre del usuario autenticado, no del que venga en el body")
+        void usaElUsuarioDelToken() throws Exception {
+            when(alertaService.publicar(any(), any())).thenReturn(alertaResponse());
+
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpoValido()))
+                    .andExpect(status().isCreated());
+
+            verify(alertaService).publicar(any(), eq(ID_USUARIO));
+        }
+
+        @Test
+        @DisplayName("Sin especie -> 400 señalando el campo")
+        void sinEspecieDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpo(null, Instant.now().minus(2, ChronoUnit.HOURS), "40.4168", "-3.7038")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("VALIDACION"))
+                    .andExpect(jsonPath("$.errores.especie").exists());
+        }
+
+        @Test
+        @DisplayName("Sin descripción -> 400: el contrato la exige")
+        void sinDescripcionDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"especie":"perro","fechaAvistamiento":"%s",
+                                     "ubicacion":{"latitud":40.4168,"longitud":-3.7038}}
+                                    """.formatted(Instant.now().minus(2, ChronoUnit.HOURS))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errores.descripcion").exists());
+        }
+
+        @Test
+        @DisplayName("Latitud fuera de rango -> 400 señalando el campo anidado")
+        void latitudFueraDeRangoDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpo("perro", Instant.now().minus(2, ChronoUnit.HOURS), "120.0", "-3.7038")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("VALIDACION"))
+                    .andExpect(jsonPath("$.errores['ubicacion.latitud']").exists());
+        }
+
+        @Test
+        @DisplayName("Fecha de avistamiento futura -> 400")
+        void fechaFuturaDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpo("perro", Instant.now().plus(1, ChronoUnit.DAYS), "40.4168", "-3.7038")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errores.fechaAvistamiento").exists());
+        }
+
+        @Test
+        @DisplayName("Alerta duplicada -> 409 con la alerta existente en el cuerpo (RF-25)")
+        void alertaDuplicadaDevuelve409ConLaExistente() throws Exception {
+            when(alertaService.publicar(any(), any())).thenThrow(new AlertaDuplicadaException(
+                    "Ya hay una alerta activa de perro a 120 m publicada en las últimas 24 horas",
+                    AlertaDuplicadaResponse.builder()
+                            .id(11L).especie("perro").distanciaMetros(120L).build()));
+
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpoValido()))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.codigo").value("ALERTA_DUPLICADA"))
+                    .andExpect(jsonPath("$.alertaExistente.id").value(11))
+                    .andExpect(jsonPath("$.alertaExistente.especie").value("perro"))
+                    .andExpect(jsonPath("$.alertaExistente.distanciaMetros").value(120));
+        }
+
+        @Test
+        @DisplayName("JSON malformado -> 400, no 500")
+        void jsonMalformadoDevuelve400() throws Exception {
+            mockMvc.perform(post("/api/alertas")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{esto no es json"))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Nested
+    @DisplayName("Listados")
+    class Listados {
+
+        @Test
+        @DisplayName("GET /mapa sin filtro -> 200 con los marcadores")
+        void mapaDevuelve200() throws Exception {
+            when(alertaService.listarParaMapa(null, null, null))
+                    .thenReturn(List.of(AlertaMapaResponse.builder()
+                            .id(42L)
+                            .especie("perro")
+                            .ubicacion(new UbicacionResponse(40.4168, -3.7038))
+                            .fechaAvistamiento(Instant.now().minus(2, ChronoUnit.HOURS))
+                            .estado(EstadoAlerta.ACTIVA)
+                            .build()));
+
+            mockMvc.perform(get("/api/alertas/mapa"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(1)))
+                    .andExpect(jsonPath("$[0].id").value(42))
+                    .andExpect(jsonPath("$[0].ubicacion.longitud").value(-3.7038));
+        }
+
+        @Test
+        @DisplayName("GET /mapa?lat&lng&radio -> 200 y el filtro llega al service")
+        void mapaConAreaDevuelve200() throws Exception {
+            when(alertaService.listarParaMapa(40.4168, -3.7038, 2000.0)).thenReturn(List.of());
+
+            mockMvc.perform(get("/api/alertas/mapa")
+                            .param("lat", "40.4168")
+                            .param("lng", "-3.7038")
+                            .param("radio", "2000"))
+                    .andExpect(status().isOk());
+
+            verify(alertaService).listarParaMapa(40.4168, -3.7038, 2000.0);
+        }
+
+        @Test
+        @DisplayName("GET /mapa con un filtro de área incompleto -> 400")
+        void mapaConAreaIncompletaDevuelve400() throws Exception {
+            when(alertaService.listarParaMapa(any(), any(), any()))
+                    .thenThrow(new ParametrosInvalidosException(
+                            "Los parámetros lat, lng y radio deben indicarse los tres o ninguno"));
+
+            mockMvc.perform(get("/api/alertas/mapa").param("lat", "40.4168").param("lng", "-3.7038"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /mapa con un lat que no es un número -> 400, no 500")
+        void mapaConLatNoNumericaDevuelve400() throws Exception {
+            mockMvc.perform(get("/api/alertas/mapa")
+                            .param("lat", "norte").param("lng", "-3.7038").param("radio", "2000"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas -> 200 paginado, y los filtros llegan al service")
+        void listadoPaginado() throws Exception {
+            when(alertaService.listar(eq("perro"), eq(EstadoAlerta.ENCONTRADA), eq(40.4), eq(-3.7), eq(5000.0), any()))
+                    .thenReturn(PaginaResponse.<AlertaResponse>builder()
+                            .content(List.of(alertaResponse())).page(0).size(20)
+                            .totalElements(1).totalPages(1).last(true).build());
+
+            mockMvc.perform(get("/api/alertas")
+                            .param("especie", "perro").param("estado", "ENCONTRADA")
+                            .param("lat", "40.4").param("lng", "-3.7").param("radio", "5000"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content[0].id").value(42))
+                    .andExpect(jsonPath("$.totalElements").value(1));
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas sin filtros pasa nulos: el estado por defecto lo decide el service")
+        void listadoSinFiltros() throws Exception {
+            when(alertaService.listar(any(), any(), any(), any(), any(), any()))
+                    .thenReturn(PaginaResponse.<AlertaResponse>builder().content(List.of()).build());
+
+            mockMvc.perform(get("/api/alertas")).andExpect(status().isOk());
+
+            verify(alertaService).listar(eq(null), eq(null), eq(null), eq(null), eq(null), any());
+        }
+
+        @Test
+        @DisplayName("GET /api/alertas?estado=PERDIDA -> 400, no 500")
+        void listadoConEstadoInventado() throws Exception {
+            mockMvc.perform(get("/api/alertas").param("estado", "PERDIDA"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("PARAMETRO_INVALIDO"));
+        }
+
+        @Test
+        @DisplayName("GET /{id} -> 200 con los avistamientos")
+        void detalle() throws Exception {
+            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+                    .id(42L).especie("perro").estado(EstadoAlerta.ACTIVA)
+                    .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
+                    .avistamientos(List.of(AvistamientoResponse.builder().id(70L).alertaId(42L)
+                            .autor(AutorResponse.builder().id(8L).nombre("Luis").build()).build()))
+                    .build());
+
+            mockMvc.perform(get("/api/alertas/42"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.estado").value("ACTIVA"))
+                    .andExpect(jsonPath("$.avistamientos[0].id").value(70));
+        }
+
+        @Test
+        @DisplayName("GET /{id} de una alerta retirada -> 200 con su estado, no 404")
+        void detalleDeRetirada() throws Exception {
+            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+                    .id(42L).especie("perro").estado(EstadoAlerta.ELIMINADA).avistamientos(List.of()).build());
+
+            mockMvc.perform(get("/api/alertas/42"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.estado").value("ELIMINADA"))
+                    // El contrato (§4) dice que el resto "llega a null": la clave está, vacía.
+                    // Qué campos se vacían lo decide el service y se prueba en AlertaServiceTest.
+                    .andExpect(jsonPath("$", hasKey("descripcion")))
+                    .andExpect(jsonPath("$.descripcion").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("GET /{id} de un id que nunca existió -> 404 NO_ENCONTRADO")
+        void detalleInexistente() throws Exception {
+            when(alertaService.detalle(999L)).thenThrow(new ResourceNotFoundException("La alerta no existe"));
+
+            mockMvc.perform(get("/api/alertas/999"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
+        }
+
+        @Test
+        @DisplayName("PUT /{id} válido -> 200, editada a nombre del usuario autenticado")
+        void editar() throws Exception {
+            when(alertaService.actualizar(eq(42L), any(), eq(ID_USUARIO))).thenReturn(alertaResponse());
+
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON).content(cuerpoValido()))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.id").value(42));
+
+            verify(alertaService).actualizar(eq(42L), any(), eq(ID_USUARIO));
+        }
+
+        @Test
+        @DisplayName("PUT /{id} sin especie -> 400 con las mismas reglas que la publicación")
+        void editarSinEspecie() throws Exception {
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON)
+                            .content(cuerpo(null, Instant.now().minus(1, ChronoUnit.HOURS), "40.4", "-3.7")))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errores.especie").exists());
+        }
+
+        @Test
+        @DisplayName("PUT /{id} que la deja duplicada de otra -> 409 con la alerta existente")
+        void editarADuplicada() throws Exception {
+            when(alertaService.actualizar(eq(42L), any(), eq(ID_USUARIO)))
+                    .thenThrow(new AlertaDuplicadaException("Ya existe una alerta similar",
+                            AlertaDuplicadaResponse.builder().id(7L).especie("perro").distanciaMetros(120L).build()));
+
+            mockMvc.perform(put("/api/alertas/42").contentType(MediaType.APPLICATION_JSON).content(cuerpoValido()))
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.alertaExistente.id").value(7));
+        }
+
+        @Test
+        @DisplayName("DELETE /{id} -> 204, retirada a nombre del usuario autenticado")
+        void retirar() throws Exception {
+            mockMvc.perform(delete("/api/alertas/42")).andExpect(status().isNoContent());
+
+            verify(alertaService).retirar(42L, ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("DELETE /{id} de una alerta ajena -> 403")
+        void retirarAjena() throws Exception {
+            doThrow(new AccessDeniedException("Solo quien publicó la alerta puede retirarla"))
+                    .when(alertaService).retirar(42L, ID_USUARIO);
+
+            mockMvc.perform(delete("/api/alertas/42")).andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("GET /mis-alertas -> 200 y consulta solo las del usuario autenticado")
+        void misAlertasDevuelve200DelUsuarioAutenticado() throws Exception {
+            when(alertaService.listarMisAlertas(ID_USUARIO)).thenReturn(List.of(alertaResponse()));
+
+            mockMvc.perform(get("/api/alertas/mis-alertas"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].id").value(42));
+
+            verify(alertaService).listarMisAlertas(ID_USUARIO);
+        }
+    }
+
+    @Nested
+    @DisplayName("PUT /api/alertas/{id}/cerrar")
+    class Cierre {
+
+        @Test
+        @DisplayName("Cierre por su autor -> 200 con la alerta ya ENCONTRADA")
+        void cierreDevuelve200() throws Exception {
+            AlertaResponse cerrada = alertaResponse();
+            cerrada.setEstado(EstadoAlerta.ENCONTRADA);
+            when(alertaService.cerrar(42L, ID_USUARIO)).thenReturn(cerrada);
+
+            mockMvc.perform(put("/api/alertas/42/cerrar"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.estado").value("ENCONTRADA"));
+        }
+
+        @Test
+        @DisplayName("Cerrar la alerta de otro -> 403")
+        void cerrarAlertaAjenaDevuelve403() throws Exception {
+            when(alertaService.cerrar(42L, ID_USUARIO))
+                    .thenThrow(new AccessDeniedException("No es tu alerta"));
+
+            mockMvc.perform(put("/api/alertas/42/cerrar"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.codigo").value("ACCESO_DENEGADO"));
+        }
+
+        @Test
+        @DisplayName("Cerrar una alerta inexistente -> 404")
+        void cerrarAlertaInexistenteDevuelve404() throws Exception {
+            when(alertaService.cerrar(999L, ID_USUARIO))
+                    .thenThrow(new ResourceNotFoundException("La alerta 999 no existe"));
+
+            mockMvc.perform(put("/api/alertas/999/cerrar"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
+        }
+
+        @Test
+        @DisplayName("Identificador no numérico -> 400, no 500")
+        void idNoNumericoDevuelve400() throws Exception {
+            mockMvc.perform(put("/api/alertas/abc/cerrar"))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    private static String cuerpoValido() {
+        return cuerpo("perro", Instant.now().minus(2, ChronoUnit.HOURS), "40.4168", "-3.7038");
+    }
+
+    /**
+     * La fecha se calcula respecto al momento de la prueba, no se fija literal:
+     * @PastOrPresent haría fallar la prueba con el paso del tiempo.
+     *
+     * Se interpola el Instant tal cual: su toString() ya es el ISO-8601 con "Z"
+     * que espera Jackson, que es también el formato en el que el cliente debe
+     * mandar la fecha desde que fechaAvistamiento dejó de ser hora de pared.
+     */
+    private static String cuerpo(String especie, Instant fecha, String latitud, String longitud) {
+        return """
+                {
+                  "descripcion": "Se escapó por la puerta del parque",
+                  "especie": %s,
+                  "fechaAvistamiento": "%s",
+                  "ubicacion": {"latitud": %s, "longitud": %s},
+                  "radioBusqueda": 1000
+                }
+                """.formatted(
+                especie == null ? "null" : "\"" + especie + "\"",
+                fecha,
+                latitud, longitud);
+    }
+
+    private static AlertaResponse alertaResponse() {
+        return AlertaResponse.builder()
+                .id(42L)
+                .descripcion("Se escapó por la puerta del parque")
+                .especie("perro")
+                .fechaAvistamiento(Instant.now().minus(2, ChronoUnit.HOURS))
+                .ubicacion(new UbicacionResponse(40.4168, -3.7038))
+                .radioBusqueda(1000)
+                .estado(EstadoAlerta.ACTIVA)
+                .createdAt(Instant.now())
+                .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
+                .build();
+    }
+}
