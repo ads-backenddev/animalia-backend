@@ -64,6 +64,77 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
                                                 Pageable pageable);
 
     /**
+     * Avistamientos de UNA alerta que su dueño todavía no ha revisado, para su
+     * feed de swipe.
+     *
+     * Tres filtros, cada uno por su motivo:
+     * - el avistamiento debe estar VISIBLE, por lo mismo que en el feed global:
+     *   uno retirado por el administrador (RF-11) no se ofrece, y cualquier
+     *   estado que se añada nace fuera;
+     * - se excluyen los que registró el propio dueño, porque no hay nada que
+     *   reconocer en lo que uno mismo vio;
+     * - y se excluye lo que el dueño ya deslizó, en cualquiera de los dos
+     *   sentidos. Lo que deslicen otros no cuenta: revisar es cosa del dueño.
+     *
+     * El estado de la alerta no se filtra aquí: quien llama ya la ha leído para
+     * comprobar que es del usuario y que sigue ACTIVA.
+     *
+     * Más recientes primero, con el id como desempate para que dos del mismo
+     * instante no cambien de orden entre llamadas. El autor viene con JOIN FETCH
+     * porque cada tarjeta lo enseña; la alerta no hace falta, ya está cargada.
+     */
+    @Query("""
+            SELECT a FROM Avistamiento a
+            JOIN FETCH a.usuario u
+            WHERE a.alerta.id = :alertaId
+              AND a.estado = :estadoVisible
+              AND u.id <> :duenoId
+              AND NOT EXISTS (
+                    SELECT 1 FROM MatchRegistro m
+                    WHERE m.usuario.id = :duenoId
+                      AND m.tipoPublicacion = :tipoPublicacion
+                      AND m.publicacionId = a.id)
+            ORDER BY a.createdAt DESC, a.id DESC
+            """)
+    List<Avistamiento> buscarPendientesDeRevisar(@Param("alertaId") Long alertaId,
+                                                 @Param("duenoId") Long duenoId,
+                                                 @Param("estadoVisible") EstadoAvistamiento estadoVisible,
+                                                 @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
+                                                 Pageable pageable);
+
+    /**
+     * Distancia en metros entre cada avistamiento y la última ubicación de su
+     * alerta, para las tarjetas del feed.
+     *
+     * Consulta aparte, y nativa, porque JPQL no puede escribir el CAST a
+     * geography, y sin él ST_Distance mediría en grados. Es la misma medida que
+     * AlertaRepository.buscarSimilar. Recibe una colección para resolver la
+     * tanda entera de una vez y no una consulta por tarjeta.
+     *
+     * Los avistamientos sin ubicación, o de una alerta sin ella, no salen: quien
+     * llama los busca en un mapa y no encontrarlos significa "sin distancia".
+     */
+    @Query(value = """
+            SELECT av.id AS avistamientoId,
+                   ST_Distance(
+                       CAST(av.ubicacion AS geography),
+                       CAST(al.ultima_ubicacion AS geography)) AS metros
+            FROM avistamiento av
+            JOIN alerta al ON al.id = av.alerta_id
+            WHERE av.id IN (:ids)
+              AND av.ubicacion IS NOT NULL
+              AND al.ultima_ubicacion IS NOT NULL
+            """, nativeQuery = true)
+    List<DistanciaALaAlerta> distanciasALaAlerta(@Param("ids") Collection<Long> ids);
+
+    /** Una fila de distanciasALaAlerta. */
+    interface DistanciaALaAlerta {
+        Long getAvistamientoId();
+
+        Double getMetros();
+    }
+
+    /**
      * Avistamientos con su autor y su alerta ya cargados, buscados por id.
      *
      * Lo usa el chat (RF-12): el otro participante de una conversación es el

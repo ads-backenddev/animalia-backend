@@ -22,6 +22,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
@@ -33,6 +35,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 
 import java.util.List;
 import java.util.Optional;
@@ -215,7 +218,102 @@ class AvistamientoServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Feed de una alerta, para su dueño")
+    class FeedDeLaAlerta {
+
+        private static final Long ID_DUENO = 99L;
+
+        @Test
+        @DisplayName("Pide los VISIBLE de esa alerta, sin lo que el dueño ya revisó, en tandas acotadas")
+        void pideLosFiltrosCorrectos() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+
+            avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO);
+
+            verify(avistamientoRepository).buscarPendientesDeRevisar(
+                    ID_ALERTA, ID_DUENO, EstadoAvistamiento.VISIBLE, TipoPublicacion.AVISTAMIENTO,
+                    PageRequest.of(0, TAMANYO_FEED));
+        }
+
+        @Test
+        @DisplayName("Cada tarjeta lleva su distancia a la alerta en metros redondeados, y null si no hay")
+        void distancia() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+            Avistamiento conUbicacion = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            Avistamiento sinUbicacion = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            sinUbicacion.setId(78L);
+            sinUbicacion.setUbicacion(null);
+            when(avistamientoRepository.buscarPendientesDeRevisar(any(), any(), any(), any(), any(Pageable.class)))
+                    .thenReturn(List.of(conUbicacion, sinUbicacion));
+            when(avistamientoRepository.distanciasALaAlerta(List.of(77L, 78L)))
+                    .thenReturn(List.of(filaDeDistancia(77L, 299.6)));
+
+            List<AvistamientoFeedResponse> feed = avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO);
+
+            assertThat(feed).extracting(AvistamientoFeedResponse::getId).containsExactly(77L, 78L);
+            assertThat(feed.get(0).getDistanciaMetros()).isEqualTo(300L);
+            assertThat(feed.get(1).getDistanciaMetros()).isNull();
+        }
+
+        @Test
+        @DisplayName("Sin tarjetas no se consultan distancias")
+        void sinTarjetasNoHayConsultaDeDistancias() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+
+            assertThat(avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO)).isEmpty();
+
+            verify(avistamientoRepository, never()).distanciasALaAlerta(any());
+        }
+
+        @Test
+        @DisplayName("Alerta inexistente -> 404")
+        void alertaInexistente() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("Alerta ajena -> 403, también si además está cerrada: el permiso va antes que el estado")
+        void alertaAjena() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
+
+            assertThatThrownBy(() -> avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_USUARIO))
+                    .isInstanceOf(AccessDeniedException.class);
+
+            verify(avistamientoRepository, never()).buscarPendientesDeRevisar(any(), any(), any(), any(), any());
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @DisplayName("Alerta propia que ya no está ACTIVA -> 400 ALERTA_NO_ACTIVA")
+        @EnumSource(value = EstadoAlerta.class, names = {"ENCONTRADA", "RETIRADA", "ELIMINADA"})
+        void alertaNoActiva(EstadoAlerta estado) {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(estado)));
+
+            assertThatThrownBy(() -> avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ALERTA_NO_ACTIVA"));
+        }
+    }
+
     // ---------------------------------------------------------------------
+
+    private static AvistamientoRepository.DistanciaALaAlerta filaDeDistancia(Long avistamientoId, double metros) {
+        return new AvistamientoRepository.DistanciaALaAlerta() {
+            @Override
+            public Long getAvistamientoId() {
+                return avistamientoId;
+            }
+
+            @Override
+            public Double getMetros() {
+                return metros;
+            }
+        };
+    }
 
     private static CrearAvistamientoRequest peticion() {
         return new CrearAvistamientoRequest(ID_ALERTA, "Lo he visto en el parque",

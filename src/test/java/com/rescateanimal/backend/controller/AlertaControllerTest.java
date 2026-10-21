@@ -5,10 +5,12 @@ import com.rescateanimal.backend.dto.response.AlertaDuplicadaResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
 import com.rescateanimal.backend.dto.response.AutorResponse;
+import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.AlertaDuplicadaException;
+import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ParametrosInvalidosException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
@@ -17,6 +19,7 @@ import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AlertaService;
+import com.rescateanimal.backend.service.AvistamientoService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.AfterEach;
@@ -76,6 +79,8 @@ class AlertaControllerTest {
 
     @MockitoBean
     private AlertaService alertaService;
+    @MockitoBean
+    private AvistamientoService avistamientoService;
     @MockitoBean
     private JwtService jwtService;
     @MockitoBean
@@ -445,6 +450,58 @@ class AlertaControllerTest {
         void idNoNumericoDevuelve400() throws Exception {
             mockMvc.perform(put("/api/alertas/abc/cerrar"))
                     .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Nested
+    @DisplayName("GET /api/alertas/{id}/avistamientos/feed")
+    class FeedDelDueno {
+
+        @Test
+        @DisplayName("El dueño recibe sus tarjetas, con la distancia a la alerta")
+        void feedDevuelve200() throws Exception {
+            when(avistamientoService.feedDeLaAlerta(42L, ID_USUARIO)).thenReturn(List.of(
+                    AvistamientoFeedResponse.builder().id(77L).alertaId(42L).distanciaMetros(300L).build(),
+                    AvistamientoFeedResponse.builder().id(78L).alertaId(42L).build()));
+
+            mockMvc.perform(get("/api/alertas/42/avistamientos/feed"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$[0].id").value(77))
+                    .andExpect(jsonPath("$[0].distanciaMetros").value(300))
+                    .andExpect(jsonPath("$[1].distanciaMetros").value(nullValue()));
+        }
+
+        @Test
+        @DisplayName("Alerta ajena -> 403 ACCESO_DENEGADO")
+        void alertaAjenaDevuelve403() throws Exception {
+            when(avistamientoService.feedDeLaAlerta(42L, ID_USUARIO))
+                    .thenThrow(new AccessDeniedException("No es tu alerta"));
+
+            mockMvc.perform(get("/api/alertas/42/avistamientos/feed"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.codigo").value("ACCESO_DENEGADO"));
+        }
+
+        @Test
+        @DisplayName("Alerta inexistente -> 404 NO_ENCONTRADO")
+        void alertaInexistenteDevuelve404() throws Exception {
+            when(avistamientoService.feedDeLaAlerta(999L, ID_USUARIO))
+                    .thenThrow(new ResourceNotFoundException("La alerta no existe"));
+
+            mockMvc.perform(get("/api/alertas/999/avistamientos/feed"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
+        }
+
+        @Test
+        @DisplayName("Alerta que ya no está activa -> 400 ALERTA_NO_ACTIVA")
+        void alertaNoActivaDevuelve400() throws Exception {
+            when(avistamientoService.feedDeLaAlerta(42L, ID_USUARIO))
+                    .thenThrow(new OperacionNoPermitidaException("ALERTA_NO_ACTIVA", "Ya no está activa"));
+
+            mockMvc.perform(get("/api/alertas/42/avistamientos/feed"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("ALERTA_NO_ACTIVA"));
         }
     }
 

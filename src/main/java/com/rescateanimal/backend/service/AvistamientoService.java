@@ -24,10 +24,13 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Lógica de registro de avistamientos y del feed de swipe (RF-15, RF-21).
@@ -129,14 +132,66 @@ public class AvistamientoService {
      */
     @Transactional(readOnly = true)
     public List<AvistamientoFeedResponse> feed(Long usuarioId) {
-        return avistamientoRepository.buscarCandidatosParaFeed(
-                        usuarioId,
-                        EstadoAvistamiento.VISIBLE,
-                        EstadoAlerta.ACTIVA,
-                        TipoPublicacion.AVISTAMIENTO,
-                        PageRequest.of(0, tamanyoFeed))
-                .stream()
-                .map(this::aFeedResponse)
+        return aTarjetas(avistamientoRepository.buscarCandidatosParaFeed(
+                usuarioId,
+                EstadoAvistamiento.VISIBLE,
+                EstadoAlerta.ACTIVA,
+                TipoPublicacion.AVISTAMIENTO,
+                PageRequest.of(0, tamanyoFeed)));
+    }
+
+    /**
+     * Avistamientos de una alerta que su dueño todavía no ha revisado
+     * (GET /api/alertas/{id}/avistamientos/feed).
+     *
+     * EL FEED ES DEL DUEÑO. Él es quien puede reconocer a su animal en la foto,
+     * y quien abre el chat con el testigo si lo reconoce; nadie más hace match
+     * sobre los avistamientos de una alerta ajena (ver MatchService).
+     *
+     * Las comprobaciones van en el orden de siempre: 404 si la alerta no
+     * existe, 403 si no es suya y 400 si ya no está ACTIVA —sobre un animal que
+     * ya apareció no hay nada que revisar—. Solo lee, así que no bloquea la
+     * alerta: si se cierra mientras tanto, el match sobre la tarjeta es lo que
+     * lo rechaza.
+     *
+     * MÁS RECIENTES PRIMERO, no por cercanía. Lo que el dueño quiere saber es
+     * dónde está el animal ahora, y eso lo dice el último avistamiento. La
+     * última ubicación de la alerta no se mueve con los avistamientos —es dónde
+     * se perdió—, así que ordenar por cercanía a ella dejaría al final justo los
+     * avistamientos que muestran que se ha alejado. La distancia viaja en cada
+     * tarjeta como información, sin decidir el orden.
+     */
+    @Transactional(readOnly = true)
+    public List<AvistamientoFeedResponse> feedDeLaAlerta(Long alertaId, Long usuarioId) {
+        Alerta alerta = alertaRepository.findById(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
+        if (!alerta.getUsuario().getId().equals(usuarioId)) {
+            throw new AccessDeniedException("Solo quien publicó la alerta puede revisar sus avistamientos");
+        }
+        if (alerta.getEstado() != EstadoAlerta.ACTIVA) {
+            throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
+                    "La alerta ya no está activa: no hay avistamientos que revisar");
+        }
+
+        return aTarjetas(avistamientoRepository.buscarPendientesDeRevisar(
+                alertaId,
+                usuarioId,
+                EstadoAvistamiento.VISIBLE,
+                TipoPublicacion.AVISTAMIENTO,
+                PageRequest.of(0, tamanyoFeed)));
+    }
+
+    /** Las tarjetas de una tanda, con su distancia resuelta en una sola consulta. */
+    private List<AvistamientoFeedResponse> aTarjetas(List<Avistamiento> avistamientos) {
+        if (avistamientos.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, Long> distancias = new HashMap<>();
+        avistamientoRepository.distanciasALaAlerta(avistamientos.stream().map(Avistamiento::getId).toList())
+                .forEach(fila -> distancias.put(fila.getAvistamientoId(), Math.round(fila.getMetros())));
+
+        return avistamientos.stream()
+                .map(avistamiento -> aFeedResponse(avistamiento, distancias.get(avistamiento.getId())))
                 .toList();
     }
 
@@ -187,7 +242,7 @@ public class AvistamientoService {
                 .build();
     }
 
-    private AvistamientoFeedResponse aFeedResponse(Avistamiento avistamiento) {
+    private AvistamientoFeedResponse aFeedResponse(Avistamiento avistamiento, Long distanciaMetros) {
         Alerta alerta = avistamiento.getAlerta();
         return AvistamientoFeedResponse.builder()
                 .id(avistamiento.getId())
@@ -199,6 +254,7 @@ public class AvistamientoService {
                 .alertaId(alerta.getId())
                 .alertaEspecie(alerta.getEspecie())
                 .alertaFotoUrl(alerta.getFotoUrl())
+                .distanciaMetros(distanciaMetros)
                 .build();
     }
 
