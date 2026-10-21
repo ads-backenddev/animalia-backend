@@ -3,6 +3,7 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionPropiaException;
@@ -21,6 +22,7 @@ import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -76,9 +78,15 @@ class MatchServiceTest {
      */
     private static final ZoneId ZONA_CUOTA = ZoneId.of("Europe/Madrid");
 
+    /**
+     * Quien desliza. En los avistamientos es además el DUEÑO DE LA ALERTA: es
+     * el único que puede deslizarlos.
+     */
     private static final Long ID_USUARIO = 7L;
     private static final Long ID_AUTOR_AVISTAMIENTO = 8L;
-    private static final Long ID_DUENYO_ALERTA = 9L;
+    /** Alguien sin relación con la alerta: recibe ALERTA_AJENA. */
+    private static final Long ID_AJENO = 9L;
+    private static final Long ID_ALERTA = 55L;
     private static final Long ID_AVISTAMIENTO = 33L;
 
     /** Cuenta de la protectora dueña del animal: el otro extremo en adopción. */
@@ -103,6 +111,8 @@ class MatchServiceTest {
     @Mock
     private AnimalAdopcionRepository animalAdopcionRepository;
     @Mock
+    private AlertaRepository alertaRepository;
+    @Mock
     private UsuarioRepository usuarioRepository;
     @Mock
     private NotificacionService notificacionService;
@@ -112,11 +122,15 @@ class MatchServiceTest {
     @BeforeEach
     void prepararServicio() {
         matchService = new MatchService(matchRegistroRepository, limiteMatchDiarioRepository,
-                chatRepository, avistamientoRepository, animalAdopcionRepository, usuarioRepository,
-                notificacionService,
+                chatRepository, avistamientoRepository, animalAdopcionRepository, alertaRepository,
+                usuarioRepository, notificacionService,
                 LIMITE_DIARIO);
 
         when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(avistamiento()));
+        // La alerta del avistamiento es de quien desliza, y sigue ACTIVA.
+        when(alertaRepository.buscarAutorId(ID_ALERTA)).thenReturn(Optional.of(ID_USUARIO));
+        when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario(ID_USUARIO)));
         when(matchRegistroRepository.save(any(MatchRegistro.class))).thenAnswer(i -> {
             MatchRegistro m = i.getArgument(0);
@@ -153,7 +167,7 @@ class MatchServiceTest {
 
             // El destinatario es el autor del avistamiento, no el dueño de la
             // alerta: son los dos extremos del chat que abre el match, y el
-            // dueño de la alerta es normalmente quien acaba de deslizar.
+            // dueño de la alerta es siempre quien acaba de deslizar.
             verify(notificacionService).notificarNuevoMatch(
                     argThatTieneId(ID_AUTOR_AVISTAMIENTO), org.mockito.ArgumentMatchers.eq(100L),
                     org.mockito.ArgumentMatchers.eq(ID_USUARIO));
@@ -181,6 +195,74 @@ class MatchServiceTest {
                     .crearContadorSiNoExiste(ID_USUARIO, LocalDate.now(ZONA_CUOTA));
             verify(limiteMatchDiarioRepository)
                     .incrementarSiHayCupo(ID_USUARIO, LocalDate.now(ZONA_CUOTA), LIMITE_DIARIO);
+        }
+    }
+
+    @Nested
+    @DisplayName("Avistamientos: solo los desliza el dueño de la alerta")
+    class SoloElDueno {
+
+        @Test
+        @DisplayName("Un desconocido no hace match -> 403 ALERTA_AJENA, sin registro, cuota ni bloqueo")
+        void unDesconocidoNoHaceMatch() {
+            when(usuarioRepository.findById(ID_AJENO)).thenReturn(Optional.of(usuario(ID_AJENO)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AJENO))
+                    .isInstanceOf(AlertaAjenaException.class);
+
+            verify(matchRegistroRepository, never()).save(any());
+            verifyNoInteractions(chatRepository, notificacionService, limiteMatchDiarioRepository);
+            // Comprobar la propiedad no bloquea: un desconocido no frena al dueño.
+            verify(alertaRepository, never()).bloquearParaAvistar(any());
+        }
+
+        @Test
+        @DisplayName("Tampoco descarta: el feed es del dueño en los dos sentidos")
+        void unDesconocidoTampocoDescarta() {
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_AJENO))
+                    .isInstanceOf(AlertaAjenaException.class);
+
+            verify(matchRegistroRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("El testigo no desliza su avistamiento en una alerta ajena: ALERTA_AJENA, no PUBLICACION_PROPIA")
+        void elTestigoRecibeAlertaAjena() {
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AUTOR_AVISTAMIENTO))
+                    .isInstanceOf(AlertaAjenaException.class);
+        }
+
+        @Test
+        @DisplayName("El permiso va antes que el estado: alerta cerrada y avistamiento retirado siguen dando 403")
+        void elPermisoVaAntesQueElEstado() {
+            Avistamiento retirado = avistamiento();
+            retirado.setEstado(EstadoAvistamiento.ELIMINADO);
+            when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
+            cerrarLaAlerta();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AJENO))
+                    .isInstanceOf(AlertaAjenaException.class);
+        }
+
+        @Test
+        @DisplayName("Al dueño se le bloquea la alerta en modo compartido, y su estado se lee de esa lectura")
+        void elEstadoSeLeeConBloqueo() {
+            matchService.deslizar(peticion(true), ID_USUARIO);
+
+            verify(alertaRepository).bloquearParaAvistar(ID_ALERTA);
+            verify(alertaRepository, never()).bloquearParaModificar(any());
+        }
+
+        @Test
+        @DisplayName("Si la lectura bloqueada ve la alerta cerrada, se rechaza aunque la asociación diga ACTIVA")
+        void mandaLaLecturaBloqueada() {
+            // avistamiento() lleva su alerta ACTIVA; solo la lectura bloqueada la ve cerrada.
+            cerrarLaAlerta();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ALERTA_NO_ACTIVA"));
         }
     }
 
@@ -332,9 +414,12 @@ class MatchServiceTest {
         }
 
         @Test
-        @DisplayName("Nadie desliza su propia publicación: abriría un chat consigo mismo")
+        @DisplayName("El dueño no desliza un avistamiento que registró él: abriría un chat consigo mismo")
         void noSePuedeDeslizarLoPropio() {
-            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AUTOR_AVISTAMIENTO))
+            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(avistamientoDe(ID_USUARIO)));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
                     .isInstanceOf(PublicacionPropiaException.class);
 
             verify(matchRegistroRepository, never()).save(any());
@@ -343,8 +428,7 @@ class MatchServiceTest {
         @Test
         @DisplayName("Sobre una alerta ya cerrada no se desliza: el animal apareció")
         void noSeDeslizaSobreUnaAlertaCerrada() {
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
-                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+            cerrarLaAlerta();
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
                     .isInstanceOf(OperacionNoPermitidaException.class)
@@ -360,8 +444,7 @@ class MatchServiceTest {
         @Test
         @DisplayName("La alerta cerrada se comprueba antes de gastar cuota")
         void laAlertaCerradaNoGastaCuota() {
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
-                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+            cerrarLaAlerta();
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
                     .isInstanceOf(OperacionNoPermitidaException.class);
@@ -375,8 +458,7 @@ class MatchServiceTest {
             // Se bloquean los dos sentidos, igual que con la publicación propia:
             // la tarjeta está muerta y el 400 le dice al cliente que refresque el
             // feed, en vez de aceptar en silencio un descarte que ya no aporta nada.
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
-                    .thenReturn(Optional.of(avistamiento(EstadoAlerta.ENCONTRADA)));
+            cerrarLaAlerta();
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO))
                     .isInstanceOf(OperacionNoPermitidaException.class);
@@ -411,6 +493,8 @@ class MatchServiceTest {
             verify(chatRepository).save(any());
             verify(notificacionService)
                     .notificarNuevoMatch(argThatTieneId(ID_CUENTA_PROTECTORA), any(), any());
+            // La regla del dueño es de los avistamientos: la adopción no mira alertas.
+            verifyNoInteractions(alertaRepository);
         }
 
         @Test
@@ -596,22 +680,37 @@ class MatchServiceTest {
         return animal;
     }
 
+    /** Un avistamiento del testigo sobre la alerta de quien desliza. */
     private static Avistamiento avistamiento() {
-        return avistamiento(EstadoAlerta.ACTIVA);
+        return avistamientoDe(ID_AUTOR_AVISTAMIENTO);
     }
 
-    private static Avistamiento avistamiento(EstadoAlerta estadoDeLaAlerta) {
-        Alerta alerta = new Alerta();
-        alerta.setId(55L);
-        alerta.setEstado(estadoDeLaAlerta);
-        alerta.setUsuario(usuario(ID_DUENYO_ALERTA));
-
+    /**
+     * La alerta asociada lleva siempre ACTIVA a propósito: el estado que cuenta
+     * es el de la lectura bloqueada (bloquearParaAvistar), y una prueba que
+     * cierre la alerta solo ahí comprueba que no se mira la asociación.
+     */
+    private static Avistamiento avistamientoDe(Long autorId) {
         Avistamiento avistamiento = new Avistamiento();
         avistamiento.setId(ID_AVISTAMIENTO);
-        avistamiento.setAlerta(alerta);
-        avistamiento.setUsuario(usuario(ID_AUTOR_AVISTAMIENTO));
+        avistamiento.setAlerta(alerta(EstadoAlerta.ACTIVA));
+        avistamiento.setUsuario(usuario(autorId));
         avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
         return avistamiento;
+    }
+
+    private static Alerta alerta(EstadoAlerta estado) {
+        Alerta alerta = new Alerta();
+        alerta.setId(ID_ALERTA);
+        alerta.setEstado(estado);
+        alerta.setUsuario(usuario(ID_USUARIO));
+        return alerta;
+    }
+
+    /** La alerta se ha cerrado: así lo ve la lectura bloqueada. */
+    private void cerrarLaAlerta() {
+        when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                .thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
     }
 
     private static Usuario usuario(Long id) {

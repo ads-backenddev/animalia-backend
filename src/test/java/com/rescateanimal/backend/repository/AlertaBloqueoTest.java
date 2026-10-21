@@ -2,16 +2,21 @@ package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
+import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
+import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.service.AlertaService;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 import com.rescateanimal.backend.service.AvistamientoService;
+import com.rescateanimal.backend.service.MatchService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,8 +48,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Las carreras sobre una misma alerta —el dueño, el administrador y quien
- * registra un avistamiento—, con transacciones de verdad en PostgreSQL.
+ * Las carreras sobre una misma alerta —el dueño, el administrador, quien
+ * registra un avistamiento y el dueño que desliza uno—, con transacciones de
+ * verdad en PostgreSQL.
  *
  * Una operación se queda a medias con su transacción abierta (retener), y la
  * otra se lanza en otro hilo. La prueba espera a ver que la segunda está
@@ -83,6 +89,8 @@ class AlertaBloqueoTest {
     private UsuarioRepository usuarioRepository;
     @Autowired
     private AvistamientoService avistamientoService;
+    @Autowired
+    private MatchService matchService;
     @Autowired
     private FotoRepository fotoRepository;
     @Autowired
@@ -138,6 +146,13 @@ class AlertaBloqueoTest {
             }
         }
         hilos.shutdownNow();
+        // Lo que dejen los swipes, también si una prueba falla con el match ya
+        // hecho. Por usuario, y son los dos de esta prueba.
+        jdbc.update("DELETE FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id IN (?, ?))", duenyo.getId(), testigo.getId());
+        jdbc.update("DELETE FROM match_registro WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
+        jdbc.update("DELETE FROM notificacion WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
+        jdbc.update("DELETE FROM limite_match_diario WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
         // Directo por alerta_id: la tabla es de la base de datos compartida, y
         // cargarla entera para filtrar en memoria crece con todo lo que haya.
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
@@ -246,7 +261,60 @@ class AlertaBloqueoTest {
         assertThat(avistamientos()).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("Un match del dueño durante el cierre espera, ve la ENCONTRADA y no abre chat")
+    void matchDuranteElCierre() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida cierre = retener(() -> alertaService.cerrar(alertaId, duenyo.getId()));
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(cierre);
+        assertThat(match).as("el match espera al cierre").isNotDone();
+
+        cierre.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(deslizamientos()).as("ni registro ni chat sobre una alerta cerrada").isZero();
+    }
+
+    @Test
+    @DisplayName("Quien no es el dueño recibe ALERTA_AJENA al momento: su swipe no espera ni bloquea")
+    void unSwipeAjenoNoEspera() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida moderacion = retener(() -> alertaService.retirarPorModeracion(alertaId, ADMIN));
+
+        CompletableFuture<MatchResponse> ajeno = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), testigo.getId()), hilos);
+        assertThatThrownBy(() -> ajeno.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(AlertaAjenaException.class);
+        assertThat(moderacion.transaccion).as("la moderación sigue abierta").isNotDone();
+
+        moderacion.confirmar();
+    }
+
     // ---------------------------------------------------------------------
+
+    private static CrearMatchRequest swipeA(long avistamientoId) {
+        return new CrearMatchRequest(avistamientoId, TipoPublicacion.AVISTAMIENTO, true);
+    }
+
+    private long idDelAvistamiento() {
+        Long id = jdbc.queryForObject("SELECT id FROM avistamiento WHERE alerta_id = ?", Long.class, alertaId);
+        return id == null ? 0 : id;
+    }
+
+    private int deslizamientos() {
+        Integer total = jdbc.queryForObject("SELECT count(*) FROM match_registro WHERE tipo_publicacion = "
+                + "'AVISTAMIENTO' AND publicacion_id IN (SELECT id FROM avistamiento WHERE alerta_id = ?)",
+                Integer.class, alertaId);
+        return total == null ? 0 : total;
+    }
 
     /** Una operación que ya tiene la fila y no confirma hasta que se le dice. */
     private static final class Retenida {

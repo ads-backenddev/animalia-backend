@@ -98,7 +98,10 @@ class MatchFlujoCompletoTest {
     private final HttpClient http = HttpClient.newHttpClient();
 
     private String sufijo;
-    /** duenyo: publica la alerta. testigo: registra avistamientos. curioso: desliza. */
+    /**
+     * duenyo: publica la alerta y desliza sus avistamientos. testigo: los
+     * registra. curioso: un desconocido, que no puede deslizarlos.
+     */
     private String tokenDuenyo;
     private String tokenTestigo;
     private String tokenCurioso;
@@ -129,7 +132,7 @@ class MatchFlujoCompletoTest {
         alertaId = numero(alerta.body(), "$.id");
 
         // Tres avistamientos del testigo sobre esa alerta: dos para agotar la
-        // cuota del curioso y uno más para chocar contra el límite.
+        // cuota del dueño y uno más para chocar contra el límite.
         for (int i = 0; i < 3; i++) {
             HttpResponse<String> avistamiento = enviar("POST", "/api/avistamientos", tokenTestigo, """
                     {"alertaId":%d,"descripcion":"Lo he visto en el parque %d",
@@ -165,19 +168,31 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
-    @DisplayName("Feed, match con chat y notificación, doble swipe, descarte y límite diario")
+    @DisplayName("El dueño revisa su feed: match con chat y aviso al testigo, doble swipe, descarte y límite")
     void recorridoCompletoDelSwipe() throws Exception {
         long primero = avistamientos.get(0);
         long segundo = avistamientos.get(1);
         long tercero = avistamientos.get(2);
 
-        // 1. El curioso ve los tres candidatos; el testigo no ve los suyos.
-        assertThat(idsDelFeed(tokenCurioso)).contains(primero, segundo, tercero);
-        assertThat(idsDelFeed(tokenTestigo)).doesNotContain(primero, segundo, tercero);
+        // 1. El dueño ve los tres en el feed de su alerta; nadie más tiene ese feed.
+        assertThat(idsDelFeed(tokenDuenyo)).contains(primero, segundo, tercero);
+        assertThat(feed(tokenCurioso).statusCode()).isEqualTo(403);
+        assertThat(feed(tokenTestigo).statusCode()).isEqualTo(403);
 
-        // 2. Match: 201, chat abierto y notificación para quien registró el
+        // 2. Un desconocido no hace match ni descarta, ni deja rastro.
+        for (boolean interesado : new boolean[]{true, false}) {
+            HttpResponse<String> ajeno = deslizar(tokenCurioso, primero, interesado);
+            assertThat(ajeno.statusCode()).isEqualTo(403);
+            assertThat(JsonPath.<String>read(ajeno.body(), "$.codigo")).isEqualTo("ALERTA_AJENA");
+        }
+        assertThat(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                idCurioso, primero, com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO))
+                .isFalse();
+        assertThat(notificacionesDeMatch(idTestigo)).isEmpty();
+
+        // 3. Match del dueño: 201, chat abierto y aviso para quien registró el
         //    avistamiento, que es el otro extremo del chat recién abierto.
-        HttpResponse<String> match = deslizar(tokenCurioso, primero, true);
+        HttpResponse<String> match = deslizar(tokenDuenyo, primero, true);
         assertThat(match.statusCode()).isEqualTo(201);
         long chatId = numero(match.body(), "$.chatId");
         assertThat(JsonPath.<Boolean>read(match.body(), "$.interesado")).isTrue();
@@ -187,26 +202,26 @@ class MatchFlujoCompletoTest {
         assertThat(avisos).hasSize(1);
         assertThat(avisos.get(0).getLeida()).isFalse();
 
-        // Y el dueño de la alerta no recibe nada: no es parte de este chat.
+        // Y el dueño no recibe nada: es quien acaba de deslizar.
         assertThat(notificacionesDeMatch(idDuenyo)).isEmpty();
 
-        // 3. El mismo swipe otra vez choca con la restricción única.
-        assertThat(deslizar(tokenCurioso, primero, true).statusCode()).isEqualTo(409);
+        // 4. El mismo swipe otra vez choca con la restricción única.
+        assertThat(deslizar(tokenDuenyo, primero, true).statusCode()).isEqualTo(409);
 
-        // 4. Y ya no vuelve a aparecer en el feed.
-        assertThat(idsDelFeed(tokenCurioso)).doesNotContain(primero).contains(segundo, tercero);
+        // 5. Y ya no vuelve a aparecer en el feed.
+        assertThat(idsDelFeed(tokenDuenyo)).doesNotContain(primero).contains(segundo, tercero);
 
-        // 5. El contador va por uno de dos.
-        HttpResponse<String> limite = enviar("GET", "/api/matches/limite", tokenCurioso, null);
+        // 6. El contador va por uno de dos.
+        HttpResponse<String> limite = enviar("GET", "/api/matches/limite", tokenDuenyo, null);
         assertThat(numero(limite.body(), "$.consumidos")).isEqualTo(1);
         assertThat(numero(limite.body(), "$.restantes")).isEqualTo(LIMITE - 1);
         assertThat(numero(limite.body(), "$.limiteDiario")).isEqualTo(LIMITE);
 
-        // 6. Segundo match: cuota agotada.
-        assertThat(deslizar(tokenCurioso, segundo, true).statusCode()).isEqualTo(201);
+        // 7. Segundo match: cuota agotada.
+        assertThat(deslizar(tokenDuenyo, segundo, true).statusCode()).isEqualTo(201);
 
-        // 7. El tercero choca con el límite diario, con el cuerpo que pide RF-24.
-        HttpResponse<String> pasado = deslizar(tokenCurioso, tercero, true);
+        // 8. El tercero choca con el límite diario, con el cuerpo que pide RF-24.
+        HttpResponse<String> pasado = deslizar(tokenDuenyo, tercero, true);
         assertThat(pasado.statusCode()).isEqualTo(429);
         assertThat(JsonPath.<String>read(pasado.body(), "$.codigo")).isEqualTo("LIMITE_MATCHES_ALCANZADO");
         assertThat(JsonPath.<String>read(pasado.body(), "$.mensaje")).contains("mañana");
@@ -217,23 +232,23 @@ class MatchFlujoCompletoTest {
         // El rechazo no dejó rastro: ni registro ni cuota de más.
         assertThat(matchRegistroRepository
                 .existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
-                        idCurioso, tercero, com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO))
+                        idDuenyo, tercero, com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO))
                 .isFalse();
-        assertThat(numero(enviar("GET", "/api/matches/limite", tokenCurioso, null).body(), "$.consumidos"))
+        assertThat(numero(enviar("GET", "/api/matches/limite", tokenDuenyo, null).body(), "$.consumidos"))
                 .isEqualTo(LIMITE);
 
-        // 8. Con la cuota agotada, un descarte sigue funcionando y no la toca.
-        HttpResponse<String> descarte = deslizar(tokenCurioso, tercero, false);
+        // 9. Con la cuota agotada, un descarte sigue funcionando y no la toca.
+        HttpResponse<String> descarte = deslizar(tokenDuenyo, tercero, false);
         assertThat(descarte.statusCode()).isEqualTo(201);
         assertThat(JsonPath.<Object>read(descarte.body(), "$")).asString().doesNotContain("chatId");
-        assertThat(numero(enviar("GET", "/api/matches/limite", tokenCurioso, null).body(), "$.consumidos"))
+        assertThat(numero(enviar("GET", "/api/matches/limite", tokenDuenyo, null).body(), "$.consumidos"))
                 .isEqualTo(LIMITE);
 
-        // 9. El feed queda vacío: los tres están deslizados.
-        assertThat(idsDelFeed(tokenCurioso)).doesNotContain(primero, segundo, tercero);
+        // 10. El feed queda vacío: los tres están revisados.
+        assertThat(idsDelFeed(tokenDuenyo)).doesNotContain(primero, segundo, tercero);
 
-        // 10. Y /mios lista solo los dos matches, no el descarte.
-        HttpResponse<String> mios = enviar("GET", "/api/matches/mios", tokenCurioso, null);
+        // 11. Y /mios lista solo los dos matches, no el descarte.
+        HttpResponse<String> mios = enviar("GET", "/api/matches/mios", tokenDuenyo, null);
         assertThat(JsonPath.<List<Object>>read(mios.body(), "$")).hasSize(2);
         assertThat(JsonPath.<List<Object>>read(mios.body(), "$[?(@.chatId)]")).hasSize(2);
     }
@@ -241,8 +256,20 @@ class MatchFlujoCompletoTest {
     @Test
     @DisplayName("Nadie desliza lo suyo, y una alerta cerrada no admite ni avistamientos ni swipes")
     void rechazosDeDominio() throws Exception {
-        // El testigo intentando deslizar su propio avistamiento.
-        HttpResponse<String> propio = deslizar(tokenTestigo, avistamientos.get(0), true);
+        // El testigo intentando deslizar su propio avistamiento: la alerta no es
+        // suya, y eso es lo primero que se le dice.
+        HttpResponse<String> delTestigo = deslizar(tokenTestigo, avistamientos.get(0), true);
+        assertThat(delTestigo.statusCode()).isEqualTo(403);
+        assertThat(JsonPath.<String>read(delTestigo.body(), "$.codigo")).isEqualTo("ALERTA_AJENA");
+
+        // El dueño intentando deslizar un avistamiento que registró él mismo.
+        HttpResponse<String> suyo = enviar("POST", "/api/avistamientos", tokenDuenyo, """
+                {"alertaId":%d,"descripcion":"La vi yo desde el balcón","fotoUrl":"%s",
+                 "ubicacion":{"latitud":40.4170,"longitud":-3.7040}}
+                """.formatted(alertaId, FotosDePrueba.subir(http, puerto, tokenDuenyo)));
+        assertThat(suyo.statusCode()).isEqualTo(201);
+        avistamientos.add(numero(suyo.body(), "$.id"));
+        HttpResponse<String> propio = deslizar(tokenDuenyo, numero(suyo.body(), "$.id"), true);
         assertThat(propio.statusCode()).isEqualTo(403);
         assertThat(JsonPath.<String>read(propio.body(), "$.codigo")).isEqualTo("PUBLICACION_PROPIA");
 
@@ -266,26 +293,29 @@ class MatchFlujoCompletoTest {
         assertThat(cerrada.statusCode()).isEqualTo(400);
         assertThat(JsonPath.<String>read(cerrada.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
 
-        // Tampoco se desliza sobre ellos: el feed ya no los ofrece, pero el
-        // curioso puede tener una tarjeta vieja en pantalla y llamar igualmente.
-        HttpResponse<String> swipeTardio = deslizar(tokenCurioso, avistamientos.get(1), true);
+        // Tampoco se desliza sobre ellos: el dueño puede tener una tarjeta vieja
+        // en pantalla y llamar igualmente.
+        HttpResponse<String> swipeTardio = deslizar(tokenDuenyo, avistamientos.get(1), true);
         assertThat(swipeTardio.statusCode()).isEqualTo(400);
         assertThat(JsonPath.<String>read(swipeTardio.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
 
         // Y no dejó rastro: sin registro, y sin gastarle un match del día.
         assertThat(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
-                idCurioso, avistamientos.get(1),
+                idDuenyo, avistamientos.get(1),
                 com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO)).isFalse();
-        assertThat(numero(enviar("GET", "/api/matches/limite", tokenCurioso, null).body(), "$.consumidos"))
+        assertThat(numero(enviar("GET", "/api/matches/limite", tokenDuenyo, null).body(), "$.consumidos"))
                 .isZero();
 
-        // Y el feed se vacía: sus avistamientos colgaban de una alerta ya cerrada.
-        assertThat(idsDelFeed(tokenCurioso)).doesNotContainAnyElementsOf(avistamientos);
+        // Y el feed de una alerta cerrada ya no se sirve.
+        HttpResponse<String> feedCerrado = feed(tokenDuenyo);
+        assertThat(feedCerrado.statusCode()).isEqualTo(400);
+        assertThat(JsonPath.<String>read(feedCerrado.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
     }
 
     @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
+        assertThat(feed(null).statusCode()).isEqualTo(401);
         assertThat(enviar("GET", "/api/avistamientos/feed", null, null).statusCode()).isEqualTo(401);
         assertThat(enviar("GET", "/api/matches/limite", null, null).statusCode()).isEqualTo(401);
         assertThat(deslizar(null, avistamientos.get(0), true).statusCode()).isEqualTo(401);
@@ -300,8 +330,13 @@ class MatchFlujoCompletoTest {
                 .toList();
     }
 
+    /** El feed de la alerta del escenario, pedido con este token. */
+    private HttpResponse<String> feed(String token) throws Exception {
+        return enviar("GET", "/api/alertas/" + alertaId + "/avistamientos/feed", token, null);
+    }
+
     private List<Long> idsDelFeed(String token) throws Exception {
-        HttpResponse<String> feed = enviar("GET", "/api/avistamientos/feed", token, null);
+        HttpResponse<String> feed = feed(token);
         assertThat(feed.statusCode()).isEqualTo(200);
         return JsonPath.<List<Integer>>read(feed.body(), "$[*].id")
                 .stream().map(Integer::longValue).toList();

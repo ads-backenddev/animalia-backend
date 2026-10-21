@@ -3,11 +3,13 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
+import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
@@ -17,6 +19,7 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
+import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -55,6 +58,7 @@ public class MatchService {
     private final ChatRepository chatRepository;
     private final AvistamientoRepository avistamientoRepository;
     private final AnimalAdopcionRepository animalAdopcionRepository;
+    private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
 
@@ -65,6 +69,7 @@ public class MatchService {
                         ChatRepository chatRepository,
                         AvistamientoRepository avistamientoRepository,
                         AnimalAdopcionRepository animalAdopcionRepository,
+                        AlertaRepository alertaRepository,
                         UsuarioRepository usuarioRepository,
                         NotificacionService notificacionService,
                         @Value("${app.matches.limite-diario}") int limiteDiario) {
@@ -73,6 +78,7 @@ public class MatchService {
         this.chatRepository = chatRepository;
         this.avistamientoRepository = avistamientoRepository;
         this.animalAdopcionRepository = animalAdopcionRepository;
+        this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.limiteDiario = limiteDiario;
@@ -101,6 +107,21 @@ public class MatchService {
      * escrituras sí pueden ser atómicas entre sí, mientras que una difusión por
      * WebSocket no lo es —ningún rollback la retira— y lo único elegible allí es
      * cuándo sale. El porqué completo está en el javadoc de aquel método.
+     *
+     * ORDEN DE BLOQUEO, de principio a fin de la transacción:
+     * 1. En un avistamiento, la fila de su ALERTA con FOR SHARE
+     *    (autorDelAvistamiento). Antes no se toma ningún bloqueo: el 404 y los
+     *    dos 403 se resuelven con lecturas simples.
+     * 2. Si es un match, la fila del CONTADOR DIARIO del usuario, con el UPDATE
+     *    condicional de consumirCuotaDiaria.
+     * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, de CHAT y
+     *    de NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE
+     *    de comprobar la clave ajena.
+     * Ninguna otra operación toma estos bloqueos en el orden inverso: las de la
+     * alerta (editar, retirar, cerrar, moderar, registrar un avistamiento)
+     * bloquean solo la alerta y no tocan el contador, y el match de adopción
+     * toma el contador sin bloquear ninguna alerta. Sin un par de bloqueos
+     * pedidos en orden contrario no hay ciclo posible.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
@@ -141,7 +162,7 @@ public class MatchService {
         // Avisa a quien publicó lo deslizado de que alguien ha mostrado interés.
         // El destinatario es siempre el OTRO extremo del chat que se acaba de
         // abrir, nunca quien deslizó: en los avistamientos es su autor y no el
-        // dueño de la alerta —que suele ser el propio deslizador—, y en las
+        // dueño de la alerta —que es siempre quien desliza—, y en las
         // adopciones es la cuenta de la protectora dueña del animal.
         notificacionService.notificarNuevoMatch(
                 autorDeLaPublicacion, guardado.getId(), usuarioId);
@@ -174,10 +195,51 @@ public class MatchService {
         };
     }
 
+    /**
+     * El otro extremo de un match de avistamiento es quien lo registró, y solo
+     * puede deslizarlo el DUEÑO DE LA ALERTA (403 ALERTA_AJENA para cualquier
+     * otro, en los dos sentidos del swipe). Él es quien reconoce a su animal en
+     * la foto; un desconocido no tiene nada que reconocer ni motivo para abrir
+     * un chat con el testigo. Se comprueba aquí y no solo en el feed porque el
+     * feed no impide llamar a la API con cualquier id.
+     *
+     * ORDEN DE LAS COMPROBACIONES: 404 si el avistamiento no existe; 403
+     * ALERTA_AJENA; 403 PUBLICACION_PROPIA si el dueño desliza un avistamiento
+     * que registró él; 400 AVISTAMIENTO_ELIMINADO; 400 ALERTA_NO_ACTIVA. El
+     * permiso va antes que el estado, y de los dos permisos, el de la alerta
+     * primero: a un desconocido se le dice que la alerta no es suya aunque el
+     * avistamiento sí lo sea.
+     *
+     * LA PROPIEDAD SE COMPRUEBA SIN BLOQUEO, y el estado de la alerta se lee
+     * después con bloqueo compartido (FOR SHARE, el de registrar un
+     * avistamiento). Mismo patrón que AlertaService.exigirAlertaPropia, por lo
+     * mismo: el dueño de una alerta no cambia nunca, así que comprobarlo sin
+     * bloqueo es seguro, y bloquear antes dejaría a cualquier usuario frenar al
+     * dueño y al administrador con un swipe condenado al 403.
+     *
+     * El bloqueo cierra la carrera con el cierre y la moderación: sin él, un
+     * match podía confirmarse a la vez que el cierre, abrir un chat sobre una
+     * alerta ENCONTRADA y dejar al testigo sin el aviso de ALERTA_ENCONTRADA,
+     * porque sus destinatarios se calculan con los matches ya confirmados.
+     *
+     * El dueño se pide como escalar (buscarAutorId) y no navegando
+     * avistamiento.getAlerta(): cargar la alerta aquí la dejaría en el contexto
+     * de persistencia, y la lectura bloqueada devolvería esa copia anterior al
+     * bloqueo (ver AlertaRepository.buscarAutorId).
+     */
     private Usuario autorDelAvistamiento(Long avistamientoId, Long usuarioId) {
         Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El avistamiento " + avistamientoId + " no existe"));
+        // La alerta es una asociación perezosa: pedirle el id no la carga.
+        Long alertaId = avistamiento.getAlerta().getId();
+
+        Long duenoId = alertaRepository.buscarAutorId(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
+        if (!duenoId.equals(usuarioId)) {
+            throw new AlertaAjenaException(
+                    "Solo quien publicó la alerta puede hacer match con sus avistamientos");
+        }
 
         exigirQueNoSeaPropia(avistamiento.getUsuario(), usuarioId);
 
@@ -191,12 +253,13 @@ public class MatchService {
                     "Este avistamiento fue retirado por incumplir las normas");
         }
 
-        if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
-            // El feed filtra por alerta ACTIVA, pero nada impide llamar al
-            // endpoint con el id de un avistamiento cuya alerta se cerró después
-            // de mostrarse la tarjeta. Sin esta comprobación se abriría un chat y
-            // se avisaría al dueño por un animal que ya apareció, gastándole
-            // además un match del día.
+        Alerta alerta = alertaRepository.bloquearParaAvistar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
+        if (alerta.getEstado() != EstadoAlerta.ACTIVA) {
+            // El feed solo existe para una alerta ACTIVA, pero nada impide llamar
+            // al endpoint con el id de un avistamiento cuya alerta se cerró
+            // después de mostrarse la tarjeta. Sin esta comprobación se abriría
+            // un chat con el testigo por un animal que ya apareció.
             throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
                     "La alerta de este avistamiento ya no está activa: el animal ya apareció");
         }

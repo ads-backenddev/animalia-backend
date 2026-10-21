@@ -2,6 +2,7 @@ package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
@@ -172,6 +173,18 @@ class MatchControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content(MATCH))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
+    }
+
+    @Test
+    @DisplayName("Avistamiento de una alerta ajena -> 403 ALERTA_AJENA, distinto de PUBLICACION_PROPIA")
+    void alertaAjenaDevuelve403() throws Exception {
+        when(matchService.deslizar(any(), any())).thenThrow(new AlertaAjenaException(
+                "Solo quien publicó la alerta puede hacer match con sus avistamientos"));
+
+        mockMvc.perform(post("/api/matches")
+                        .contentType(MediaType.APPLICATION_JSON).content(MATCH))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.codigo").value("ALERTA_AJENA"));
     }
 
     @Test
