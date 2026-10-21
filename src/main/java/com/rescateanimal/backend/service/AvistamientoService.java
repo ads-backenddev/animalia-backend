@@ -33,7 +33,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Lógica de registro de avistamientos y del feed de swipe (RF-15, RF-21).
+ * Lógica de registro de avistamientos y del feed de swipe del dueño de cada
+ * alerta (RF-15, RF-21).
  */
 @Slf4j
 @Service
@@ -116,33 +117,19 @@ public class AvistamientoService {
     }
 
     // ---------------------------------------------------------------------
-    // Feed de swipe (RF-15)
+    // Feed de swipe del dueño (RF-15)
     // ---------------------------------------------------------------------
-
-    /**
-     * Avistamientos que el usuario todavía no ha deslizado (RF-15).
-     *
-     * Se devuelve una tanda acotada, no todo lo que haya: el feed se consume de
-     * uno en uno y pedir el catálogo entero no tendría sentido.
-     *
-     * PENDIENTE: docs/api-rest.md pide ordenarlos por proximidad al usuario. Hoy
-     * van por fecha, más recientes primero, porque la petición no trae la
-     * posición del usuario y USUARIO no guarda coordenadas —areaGeografica es
-     * texto—. Ordenar por cercanía exige antes decidir de dónde sale ese punto.
-     */
-    @Transactional(readOnly = true)
-    public List<AvistamientoFeedResponse> feed(Long usuarioId) {
-        return aTarjetas(avistamientoRepository.buscarCandidatosParaFeed(
-                usuarioId,
-                EstadoAvistamiento.VISIBLE,
-                EstadoAlerta.ACTIVA,
-                TipoPublicacion.AVISTAMIENTO,
-                PageRequest.of(0, tamanyoFeed)));
-    }
 
     /**
      * Avistamientos de una alerta que su dueño todavía no ha revisado
      * (GET /api/alertas/{id}/avistamientos/feed).
+     *
+     * Es el único feed de avistamientos. El que había para cualquier usuario,
+     * con los de todas las alertas activas, se retiró: con el match reservado
+     * al dueño, cada tarjeta suya habría acabado en un 403.
+     *
+     * Se devuelve una tanda acotada, no todo lo que haya: el feed se consume de
+     * uno en uno y pedirlo entero no tendría sentido.
      *
      * EL FEED ES DEL DUEÑO. Él es quien puede reconocer a su animal en la foto,
      * y quien abre el chat con el testigo si lo reconoce; nadie más hace match

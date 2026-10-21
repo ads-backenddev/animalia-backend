@@ -1,7 +1,6 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.model.Avistamiento;
-import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import org.springframework.data.domain.Pageable;
@@ -21,60 +20,20 @@ import java.util.List;
 public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long> {
 
     /**
-     * Avistamientos que el usuario todavía no ha deslizado, para el feed de
-     * swipe (RF-15).
-     *
-     * Cuatro filtros, cada uno por un motivo distinto:
-     * - el avistamiento debe estar VISIBLE: uno retirado por el administrador
-     *   (RF-11) no vuelve a ofrecerse a nadie;
-     * - la alerta debe seguir ACTIVA: si el animal ya apareció, el avistamiento
-     *   ya no sirve para nada;
-     * - se excluyen los propios, porque nadie hace match consigo mismo;
-     * - y se excluye lo ya deslizado, en cualquiera de los dos sentidos, que es
-     *   justo lo que la restricción única de MATCH_REGISTRO deja registrado.
-     *
-     * El estado se compara con VISIBLE en lugar de excluir ELIMINADO, por lo
-     * mismo que el catálogo de adopción compara con DISPONIBLE: así cualquier
-     * estado que se añada al enum nace fuera del feed, que es el valor por
-     * defecto seguro, en vez de colarse hasta que alguien se acuerde de
-     * excluirlo.
-     *
-     * El NOT EXISTS se apoya en el índice único
-     * (usuario_id, publicacion_id, tipo_publicacion), que cubre las tres
-     * columnas del subconsulta.
-     */
-    @Query("""
-            SELECT a FROM Avistamiento a
-            JOIN FETCH a.alerta al
-            JOIN FETCH a.usuario u
-            WHERE a.estado = :estadoVisible
-              AND al.estado = :estadoAlerta
-              AND u.id <> :usuarioId
-              AND NOT EXISTS (
-                    SELECT 1 FROM MatchRegistro m
-                    WHERE m.usuario.id = :usuarioId
-                      AND m.tipoPublicacion = :tipoPublicacion
-                      AND m.publicacionId = a.id)
-            ORDER BY a.createdAt DESC
-            """)
-    List<Avistamiento> buscarCandidatosParaFeed(@Param("usuarioId") Long usuarioId,
-                                                @Param("estadoVisible") EstadoAvistamiento estadoVisible,
-                                                @Param("estadoAlerta") EstadoAlerta estadoAlerta,
-                                                @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
-                                                Pageable pageable);
-
-    /**
      * Avistamientos de UNA alerta que su dueño todavía no ha revisado, para su
      * feed de swipe.
      *
      * Tres filtros, cada uno por su motivo:
-     * - el avistamiento debe estar VISIBLE, por lo mismo que en el feed global:
-     *   uno retirado por el administrador (RF-11) no se ofrece, y cualquier
-     *   estado que se añada nace fuera;
+     * - el avistamiento debe estar VISIBLE: uno retirado por el administrador
+     *   (RF-11) no se ofrece. Se compara con VISIBLE en lugar de excluir
+     *   ELIMINADO, como el catálogo de adopción con DISPONIBLE, para que
+     *   cualquier estado que se añada al enum nazca fuera del feed;
      * - se excluyen los que registró el propio dueño, porque no hay nada que
      *   reconocer en lo que uno mismo vio;
      * - y se excluye lo que el dueño ya deslizó, en cualquiera de los dos
      *   sentidos. Lo que deslicen otros no cuenta: revisar es cosa del dueño.
+     *   El NOT EXISTS se apoya en el índice único (usuario_id, publicacion_id,
+     *   tipo_publicacion) de MATCH_REGISTRO, que cubre sus tres columnas.
      *
      * El estado de la alerta no se filtra aquí: quien llama ya la ha leído para
      * comprobar que es del usuario y que sigue ACTIVA.

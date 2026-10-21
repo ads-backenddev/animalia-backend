@@ -361,9 +361,17 @@ class MatchFlujoCompletoTest {
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);
-        assertThat(enviar("GET", "/api/avistamientos/feed", null, null).statusCode()).isEqualTo(401);
         assertThat(enviar("GET", "/api/matches/limite", null, null).statusCode()).isEqualTo(401);
         assertThat(deslizar(null, avistamientos.get(0), true).statusCode()).isEqualTo(401);
+    }
+
+    @Test
+    @DisplayName("El feed global de avistamientos ya no existe: 404 también para un usuario autenticado")
+    void elFeedGlobalYaNoExiste() throws Exception {
+        HttpResponse<String> global = enviar("GET", "/api/avistamientos/feed", tokenCurioso, null);
+
+        assertThat(global.statusCode()).isEqualTo(404);
+        assertThat(JsonPath.<String>read(global.body(), "$.codigo")).isEqualTo("NO_ENCONTRADO");
     }
 
     // ------------------------------------------------------------------

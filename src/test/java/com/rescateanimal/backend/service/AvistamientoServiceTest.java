@@ -181,34 +181,20 @@ class AvistamientoServiceTest {
     }
 
     @Nested
-    @DisplayName("Feed de swipe (RF-15)")
-    class Feed {
+    @DisplayName("Feed de una alerta, para su dueño")
+    class FeedDeLaAlerta {
 
-        @Test
-        @DisplayName("El feed pide candidatos ACTIVA, de tipo AVISTAMIENTO y acotados en tamaño")
-        void elFeedPideLosFiltrosCorrectos() {
-            when(avistamientoRepository.buscarCandidatosParaFeed(
-                    any(), any(), any(), any(), any(Pageable.class))).thenReturn(List.of());
-
-            avistamientoService.feed(ID_USUARIO);
-
-            verify(avistamientoRepository).buscarCandidatosParaFeed(
-                    ID_USUARIO,
-                    // Los retirados por el administrador (RF-11) no vuelven al feed.
-                    EstadoAvistamiento.VISIBLE,
-                    EstadoAlerta.ACTIVA,
-                    TipoPublicacion.AVISTAMIENTO,
-                    PageRequest.of(0, TAMANYO_FEED));
-        }
+        private static final Long ID_DUENO = 99L;
 
         @Test
         @DisplayName("Cada tarjeta lleva también la especie y la foto de la alerta, para poder comparar")
         void cadaTarjetaLlevaLaAlerta() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
             Avistamiento candidato = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
-            when(avistamientoRepository.buscarCandidatosParaFeed(
-                    any(), any(), any(), any(), any(Pageable.class))).thenReturn(List.of(candidato));
+            when(avistamientoRepository.buscarPendientesDeRevisar(any(), any(), any(), any(), any(Pageable.class)))
+                    .thenReturn(List.of(candidato));
 
-            List<AvistamientoFeedResponse> feed = avistamientoService.feed(ID_USUARIO);
+            List<AvistamientoFeedResponse> feed = avistamientoService.feedDeLaAlerta(ID_ALERTA, ID_DUENO);
 
             assertThat(feed).hasSize(1);
             assertThat(feed.get(0).getAlertaId()).isEqualTo(ID_ALERTA);
@@ -216,13 +202,6 @@ class AvistamientoServiceTest {
             assertThat(feed.get(0).getAlertaFotoUrl()).isEqualTo("https://fotos/alerta.jpg");
             assertThat(feed.get(0).getFotoUrl()).isEqualTo("https://fotos/avistamiento.jpg");
         }
-    }
-
-    @Nested
-    @DisplayName("Feed de una alerta, para su dueño")
-    class FeedDeLaAlerta {
-
-        private static final Long ID_DUENO = 99L;
 
         @Test
         @DisplayName("Pide los VISIBLE de esa alerta, sin lo que el dueño ya revisó, en tandas acotadas")

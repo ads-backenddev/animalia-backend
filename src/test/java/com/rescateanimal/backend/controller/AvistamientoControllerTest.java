@@ -1,7 +1,6 @@
 package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.response.AutorResponse;
-import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
@@ -27,11 +26,11 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
-import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -185,27 +184,13 @@ class AvistamientoControllerTest {
     }
 
     @Test
-    @DisplayName("GET /feed -> 200 y consulta el feed del usuario autenticado")
-    void feedDevuelve200() throws Exception {
-        when(avistamientoService.feed(ID_USUARIO)).thenReturn(List.of(
-                AvistamientoFeedResponse.builder()
-                        .id(77L)
-                        .fotoUrl("https://fotos/avistamiento.jpg")
-                        .ubicacion(new UbicacionResponse(40.4168, -3.7038))
-                        .autor(AutorResponse.builder().id(8L).nombre("Luis").build())
-                        .alertaId(55L)
-                        .alertaEspecie("perro")
-                        .alertaFotoUrl("https://fotos/alerta.jpg")
-                        .build()));
-
+    @DisplayName("GET /feed ya no existe -> 404 NO_ENCONTRADO: el feed es de cada alerta, para su dueño")
+    void elFeedGlobalYaNoExiste() throws Exception {
         mockMvc.perform(get("/api/avistamientos/feed"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(1)))
-                .andExpect(jsonPath("$[0].id").value(77))
-                .andExpect(jsonPath("$[0].alertaEspecie").value("perro"))
-                .andExpect(jsonPath("$[0].alertaFotoUrl").value("https://fotos/alerta.jpg"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
 
-        verify(avistamientoService).feed(ID_USUARIO);
+        verifyNoInteractions(avistamientoService);
     }
 
     @Test
