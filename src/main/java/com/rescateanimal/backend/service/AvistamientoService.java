@@ -47,6 +47,7 @@ public class AvistamientoService {
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final FotoService fotoService;
+    private final NotificacionService notificacionService;
 
     private final int tamanyoFeed;
 
@@ -57,11 +58,13 @@ public class AvistamientoService {
                                AlertaRepository alertaRepository,
                                UsuarioRepository usuarioRepository,
                                FotoService fotoService,
+                               NotificacionService notificacionService,
                                @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed) {
         this.avistamientoRepository = avistamientoRepository;
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.fotoService = fotoService;
+        this.notificacionService = notificacionService;
         this.tamanyoFeed = tamanyoFeed;
     }
 
@@ -112,6 +115,11 @@ public class AvistamientoService {
 
         Avistamiento guardado = avistamientoRepository.save(avistamiento);
         log.info("Avistamiento {} registrado sobre la alerta {}", guardado.getId(), alerta.getId());
+
+        // El dueño se entera de que tiene algo que revisar en su feed. El aviso
+        // se crea tras el commit: si el avistamiento se deshiciera, no habría
+        // nada que revisar.
+        notificacionService.avisarNuevoAvistamiento(alerta.getId(), alerta.getUsuario().getId(), autorId);
 
         return aAvistamientoResponse(guardado);
     }

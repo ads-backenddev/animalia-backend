@@ -69,13 +69,16 @@ class AvistamientoServiceTest {
     private AlertaRepository alertaRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
+    @Mock
+    private NotificacionService notificacionService;
 
     private AvistamientoService avistamientoService;
 
     @BeforeEach
     void prepararServicio() {
         avistamientoService = new AvistamientoService(
-                avistamientoRepository, alertaRepository, usuarioRepository, fotoService, TAMANYO_FEED);
+                avistamientoRepository, alertaRepository, usuarioRepository, fotoService,
+                notificacionService, TAMANYO_FEED);
 
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario(ID_USUARIO)));
         when(avistamientoRepository.save(any(Avistamiento.class))).thenAnswer(i -> {
@@ -101,6 +104,30 @@ class AvistamientoServiceTest {
             assertThat(respuesta.getAlertaId()).isEqualTo(ID_ALERTA);
             assertThat(respuesta.getUbicacion().getLatitud()).isEqualTo(LAT);
             assertThat(respuesta.getUbicacion().getLongitud()).isEqualTo(LNG);
+        }
+
+        @Test
+        @DisplayName("Se avisa al dueño de la alerta, con la alerta como referencia")
+        void seAvisaAlDueno() {
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+
+            avistamientoService.registrar(peticion(), ID_USUARIO);
+
+            // alerta() es de 99: el dueño, distinto del autor del avistamiento.
+            verify(notificacionService).avisarNuevoAvistamiento(ID_ALERTA, 99L, ID_USUARIO);
+        }
+
+        @Test
+        @DisplayName("Un avistamiento rechazado no avisa a nadie")
+        void unRechazoNoAvisa() {
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
+
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class);
+
+            verify(notificacionService, never()).avisarNuevoAvistamiento(any(), any(), any());
         }
 
         @Test

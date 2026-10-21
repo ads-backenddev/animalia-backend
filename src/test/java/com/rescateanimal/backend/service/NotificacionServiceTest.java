@@ -7,6 +7,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -15,11 +16,18 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -48,9 +56,122 @@ class NotificacionServiceTest {
     private NotificacionRepository notificacionRepository;
     @Mock
     private UsuarioRepository usuarioRepository;
+    @Mock
+    private PlatformTransactionManager transacciones;
 
     @InjectMocks
     private NotificacionService notificacionService;
+
+    /** Las pruebas que abren una sincronización la dejan siempre cerrada. */
+    @AfterEach
+    void cerrarSincronizacion() {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Nested
+    @DisplayName("NUEVO_AVISTAMIENTO, tras el commit")
+    class NuevoAvistamiento {
+
+        private static final Long ID_ALERTA = 50L;
+        private static final Long ID_DUENO = 2L;
+        private static final Long ID_TESTIGO = 3L;
+
+        @Test
+        @DisplayName("No se crea nada hasta el commit; después, un aviso al dueño que apunta a la ALERTA")
+        void seCreaTrasElCommit() {
+            when(usuarioRepository.findById(ID_DUENO)).thenReturn(Optional.of(usuario(ID_DUENO)));
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+            verifyNoInteractions(notificacionRepository);
+
+            confirmar();
+
+            ArgumentCaptor<Notificacion> guardada = ArgumentCaptor.forClass(Notificacion.class);
+            verify(notificacionRepository).save(guardada.capture());
+            assertThat(guardada.getValue().getTipo()).isEqualTo(TipoNotificacion.NUEVO_AVISTAMIENTO);
+            assertThat(guardada.getValue().getReferenciaId()).isEqualTo(ID_ALERTA);
+            assertThat(guardada.getValue().getUsuario().getId()).isEqualTo(ID_DUENO);
+            assertThat(guardada.getValue().getLeida()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Sin commit —la operación se deshizo— no hay aviso")
+        void sinCommitNoHayAviso() {
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verifyNoInteractions(notificacionRepository);
+        }
+
+        @Test
+        @DisplayName("Se escribe en una transacción nueva: la de quien llama ya está confirmada")
+        void enTransaccionNueva() {
+            when(usuarioRepository.findById(ID_DUENO)).thenReturn(Optional.of(usuario(ID_DUENO)));
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+            confirmar();
+
+            verify(transacciones).getTransaction(argThat(definicion ->
+                    definicion.getPropagationBehavior() == TransactionDefinition.PROPAGATION_REQUIRES_NEW));
+        }
+
+        @Test
+        @DisplayName("El dueño que registra un avistamiento en su propia alerta no recibe aviso")
+        void elDuenoNoSeAvisaASiMismo() {
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_DUENO);
+
+            assertThat(TransactionSynchronizationManager.getSynchronizations()).isEmpty();
+            verifyNoInteractions(notificacionRepository, usuarioRepository);
+        }
+
+        @Test
+        @DisplayName("A una cuenta inactiva no se le avisa")
+        void cuentaInactiva() {
+            Usuario inactivo = usuario(ID_DUENO);
+            inactivo.setActivo(false);
+            when(usuarioRepository.findById(ID_DUENO)).thenReturn(Optional.of(inactivo));
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+
+            verifyNoInteractions(notificacionRepository);
+        }
+
+        @Test
+        @DisplayName("Un fallo creando el aviso no llega a quien registró el avistamiento")
+        void unFalloNoSePropaga() {
+            when(usuarioRepository.findById(ID_DUENO)).thenReturn(Optional.of(usuario(ID_DUENO)));
+            when(notificacionRepository.save(any())).thenThrow(new IllegalStateException("base de datos caída"));
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+
+            assertThatCode(this::confirmar).doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("Sin transacción activa no hay commit que esperar: se crea en el momento")
+        void sinTransaccionSeCreaEnElMomento() {
+            when(usuarioRepository.findById(ID_DUENO)).thenReturn(Optional.of(usuario(ID_DUENO)));
+
+            notificacionService.avisarNuevoAvistamiento(ID_ALERTA, ID_DUENO, ID_TESTIGO);
+
+            verify(notificacionRepository).save(any());
+        }
+
+        private void confirmar() {
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+        }
+    }
 
     @Nested
     @DisplayName("A quién se notifica")

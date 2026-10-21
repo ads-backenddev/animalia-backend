@@ -6,11 +6,15 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.Optional;
@@ -20,11 +24,97 @@ import java.util.Optional;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class NotificacionService {
 
     private final NotificacionRepository notificacionRepository;
     private final UsuarioRepository usuarioRepository;
+
+    /**
+     * Transacción propia para los avisos que se crean tras el commit de la
+     * operación que los origina (ver trasConfirmar). REQUIRES_NEW no es una
+     * preferencia: desde afterCommit, la transacción de quien llama ya está
+     * confirmada pero sus recursos siguen enlazados al hilo, y cualquier
+     * escritura que no abra una nueva se colgaría de esa y no se confirmaría
+     * nunca (javadoc de TransactionSynchronization.afterCommit).
+     */
+    private final TransactionTemplate nuevaTransaccion;
+
+    public NotificacionService(NotificacionRepository notificacionRepository,
+                               UsuarioRepository usuarioRepository,
+                               PlatformTransactionManager transacciones) {
+        this.notificacionRepository = notificacionRepository;
+        this.usuarioRepository = usuarioRepository;
+        this.nuevaTransaccion = new TransactionTemplate(transacciones);
+        this.nuevaTransaccion.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    }
+
+    /**
+     * Avisa al dueño de una alerta de que alguien ha registrado un avistamiento
+     * en ella (NUEVO_AVISTAMIENTO), una vez confirmado el avistamiento.
+     *
+     * referenciaId es la ALERTA, no el avistamiento: el aviso lleva al feed de
+     * esa alerta, donde el avistamiento nuevo sale el primero, sin depender de
+     * un GET /api/avistamientos/{id} que no existe; y si el administrador retira
+     * después el avistamiento, el aviso sigue llevando a un sitio válido.
+     *
+     * Nadie recibe aviso de lo que acaba de hacer: si el autor del avistamiento
+     * es el propio dueño, no se crea nada. Tampoco se avisa a una cuenta
+     * inactiva, el mismo criterio que ALERTA_CERCANA.
+     */
+    public void avisarNuevoAvistamiento(Long alertaId, Long duenoId, Long autorDelAvistamientoId) {
+        if (duenoId.equals(autorDelAvistamientoId)) {
+            log.debug("Alerta {}: el avistamiento es de su dueño, no se le avisa", alertaId);
+            return;
+        }
+        trasConfirmar("NUEVO_AVISTAMIENTO de la alerta " + alertaId, () ->
+                usuarioRepository.findById(duenoId)
+                        .filter(dueno -> Boolean.TRUE.equals(dueno.getActivo()))
+                        .ifPresent(dueno -> {
+                            notificacionRepository.save(
+                                    crear(dueno, TipoNotificacion.NUEVO_AVISTAMIENTO, alertaId));
+                            log.info("Alerta {}: creada notificación NUEVO_AVISTAMIENTO para su dueño {}",
+                                    alertaId, duenoId);
+                        }));
+    }
+
+    /**
+     * Crea un aviso DESPUÉS de que se confirme la transacción de quien llama,
+     * como los eventos del mapa (AlertaService.publicarEnMapa).
+     *
+     * Por qué después: un aviso es la consecuencia de algo que ya ha pasado. Si
+     * se creara antes y la operación terminara en rollback, quedaría un aviso
+     * apuntando con su referencia_id a algo que nunca llegó a existir (la
+     * limitación que documentaba §12 del contrato). Aquí, sin commit no hay
+     * aviso.
+     *
+     * Y por qué en su propia transacción y protegido: la operación ya está
+     * confirmada y es lo que el usuario pidió, así que un fallo creando el aviso
+     * no puede deshacerla ni llegarle como error. Se registra en el log.
+     *
+     * Sin una transacción activa —una llamada desde fuera de cualquier
+     * transacción, o una prueba unitaria— no hay commit que esperar y se crea en
+     * el momento.
+     */
+    private void trasConfirmar(String aviso, Runnable escritura) {
+        Runnable protegida = () -> {
+            try {
+                nuevaTransaccion.executeWithoutResult(estado -> escritura.run());
+            } catch (RuntimeException e) {
+                log.error("No se pudo crear el aviso {}", aviso, e);
+            }
+        };
+
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    protegida.run();
+                }
+            });
+        } else {
+            protegida.run();
+        }
+    }
 
     /**
      * Registra una notificación para cada usuario del área donde se ha publicado
