@@ -5,7 +5,8 @@ import lombok.Getter;
 import java.time.LocalDateTime;
 
 /**
- * El usuario ha agotado su cuota diaria de matches (RF-24). Se traduce a 429.
+ * El usuario ha agotado su cuota diaria de matches de adopción (RF-24). Se
+ * traduce a 429. Los matches sobre avistamientos no consumen cuota.
  *
  * Lleva el límite y el momento de reinicio porque el requisito no se conforma
  * con bloquear: pide decirle al usuario que podrá continuar al día siguiente,
@@ -19,7 +20,7 @@ public class LimiteMatchesAlcanzadoException extends RuntimeException {
 
     public LimiteMatchesAlcanzadoException(int limiteDiario, LocalDateTime reiniciaEn) {
         super("Has alcanzado el límite de " + limiteDiario
-                + " matches diarios. Podrás continuar mañana.");
+                + " matches de adopción diarios. Podrás continuar mañana.");
         this.limiteDiario = limiteDiario;
         this.reiniciaEn = reiniciaEn;
     }

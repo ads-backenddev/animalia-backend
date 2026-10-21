@@ -2,9 +2,16 @@ package com.rescateanimal.backend.controller;
 
 import com.jayway.jsonpath.JsonPath;
 import com.rescateanimal.backend.FotosDePrueba;
+import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Notificacion;
+import com.rescateanimal.backend.model.Protectora;
+import com.rescateanimal.backend.model.Usuario;
+import com.rescateanimal.backend.model.enums.EstadoAnimal;
+import com.rescateanimal.backend.model.enums.EstadoProtectora;
+import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
+import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
@@ -12,6 +19,7 @@ import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.NotificacionRepository;
+import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 import org.junit.jupiter.api.AfterEach;
@@ -52,7 +60,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * REQUISITOS PARA EJECUTARLA: base de datos levantada ("docker compose up -d") y
  * perfil "local" activo, como BackendApplicationTests.
  *
- * El límite diario se baja a 2 para poder agotarlo sin hacer 20 peticiones.
+ * El límite diario se baja a 2 para poder agotarlo sin hacer 20 peticiones. Solo
+ * lo consumen los matches de adopción: el recorrido de los avistamientos hace
+ * tres matches sin tocarlo, y el del límite se agota con animales.
  */
 @ActiveProfiles("test")
 @SpringBootTest(
@@ -94,6 +104,10 @@ class MatchFlujoCompletoTest {
     private NotificacionRepository notificacionRepository;
     @Autowired
     private LimiteMatchDiarioRepository limiteMatchDiarioRepository;
+    @Autowired
+    private ProtectoraRepository protectoraRepository;
+    @Autowired
+    private AnimalAdopcionRepository animalAdopcionRepository;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -111,6 +125,11 @@ class MatchFlujoCompletoTest {
 
     private long alertaId;
     private final List<Long> avistamientos = new ArrayList<>();
+
+    /** Solo para la prueba del límite: una protectora con sus animales. */
+    private Usuario cuentaProtectora;
+    private Protectora protectora;
+    private final List<Long> animales = new ArrayList<>();
 
     @BeforeEach
     void prepararEscenario() throws Exception {
@@ -131,9 +150,9 @@ class MatchFlujoCompletoTest {
         assertThat(alerta.statusCode()).isEqualTo(201);
         alertaId = numero(alerta.body(), "$.id");
 
-        // Tres avistamientos del testigo sobre esa alerta: dos para agotar la
-        // cuota del dueño y uno más para chocar contra el límite.
-        for (int i = 0; i < 3; i++) {
+        // Cuatro avistamientos del testigo sobre esa alerta: tres matches, uno
+        // más de los que permite el límite, y un descarte.
+        for (int i = 0; i < 4; i++) {
             HttpResponse<String> avistamiento = enviar("POST", "/api/avistamientos", tokenTestigo, """
                     {"alertaId":%d,"descripcion":"Lo he visto en el parque %d",
                      "fotoUrl":"%s",
@@ -146,33 +165,40 @@ class MatchFlujoCompletoTest {
 
     @AfterEach
     void limpiar() {
+        List<Long> usuarios = new ArrayList<>(List.of(idDuenyo, idTestigo, idCurioso));
+        if (cuentaProtectora != null) {
+            usuarios.add(cuentaProtectora.getId());
+        }
         // En orden de dependencia: el chat apunta al match, el match al usuario.
-        chatRepository.deleteAll(chatRepository.findByMatchIdIn(
-                matchRegistroRepository.findAll().stream()
-                        .filter(m -> avistamientos.contains(m.getPublicacionId()))
-                        .map(m -> m.getId())
-                        .toList()));
-        matchRegistroRepository.deleteAll(matchRegistroRepository.findAll().stream()
-                .filter(m -> avistamientos.contains(m.getPublicacionId()))
-                .toList());
+        List<Long> matches = matchRegistroRepository.findAll().stream()
+                .filter(m -> usuarios.contains(m.getUsuario().getId()))
+                .map(m -> m.getId())
+                .toList();
+        chatRepository.deleteAll(chatRepository.findByMatchIdIn(matches));
+        matchRegistroRepository.deleteAllById(matches);
         notificacionRepository.deleteAll(notificacionRepository.findAll().stream()
-                .filter(n -> List.of(idDuenyo, idTestigo, idCurioso).contains(n.getUsuario().getId()))
+                .filter(n -> usuarios.contains(n.getUsuario().getId()))
                 .toList());
         limiteMatchDiarioRepository.deleteAll(limiteMatchDiarioRepository.findAll().stream()
-                .filter(l -> List.of(idDuenyo, idTestigo, idCurioso).contains(l.getUsuario().getId()))
+                .filter(l -> usuarios.contains(l.getUsuario().getId()))
                 .toList());
         avistamientoRepository.deleteAllById(avistamientos);
         alertaRepository.deleteById(alertaId);
-        FotosDePrueba.borrarLasDe(List.of(idDuenyo, idTestigo, idCurioso), fotoRepository, limiteFotoDiarioRepository, almacenFotos);
-        usuarioRepository.deleteAllById(List.of(idDuenyo, idTestigo, idCurioso));
+        animalAdopcionRepository.deleteAllById(animales);
+        if (protectora != null) {
+            protectoraRepository.delete(protectora);
+        }
+        FotosDePrueba.borrarLasDe(usuarios, fotoRepository, limiteFotoDiarioRepository, almacenFotos);
+        usuarioRepository.deleteAllById(usuarios);
     }
 
     @Test
-    @DisplayName("El dueño revisa su feed: match con chat y aviso al testigo, doble swipe, descarte y límite")
+    @DisplayName("El dueño revisa su feed: match con chat y aviso al testigo, doble swipe, descarte, sin cupo")
     void recorridoCompletoDelSwipe() throws Exception {
         long primero = avistamientos.get(0);
         long segundo = avistamientos.get(1);
         long tercero = avistamientos.get(2);
+        long cuarto = avistamientos.get(3);
 
         // 1. El dueño ve los tres en el feed de su alerta; nadie más tiene ese feed.
         assertThat(idsDelFeed(tokenDuenyo)).contains(primero, segundo, tercero);
@@ -211,46 +237,65 @@ class MatchFlujoCompletoTest {
         // 5. Y ya no vuelve a aparecer en el feed.
         assertThat(idsDelFeed(tokenDuenyo)).doesNotContain(primero).contains(segundo, tercero);
 
-        // 6. El contador va por uno de dos.
+        // 6. Revisar avistamientos no gasta cupo: tres matches, uno más de los
+        //    que permite el límite diario, y el contador sigue a cero.
+        assertThat(deslizar(tokenDuenyo, segundo, true).statusCode()).isEqualTo(201);
+        assertThat(deslizar(tokenDuenyo, tercero, true).statusCode()).isEqualTo(201);
+        HttpResponse<String> limite = enviar("GET", "/api/matches/limite", tokenDuenyo, null);
+        assertThat(numero(limite.body(), "$.consumidos")).isZero();
+        assertThat(numero(limite.body(), "$.restantes")).isEqualTo(LIMITE);
+
+        // 7. Un descarte: sin chat, y el avistamiento sale del feed igualmente.
+        HttpResponse<String> descarte = deslizar(tokenDuenyo, cuarto, false);
+        assertThat(descarte.statusCode()).isEqualTo(201);
+        assertThat(JsonPath.<Object>read(descarte.body(), "$")).asString().doesNotContain("chatId");
+
+        // 8. El feed queda vacío: los cuatro están revisados.
+        assertThat(idsDelFeed(tokenDuenyo)).doesNotContainAnyElementsOf(avistamientos);
+
+        // 9. Y /mios lista solo los tres matches, no el descarte.
+        HttpResponse<String> mios = enviar("GET", "/api/matches/mios", tokenDuenyo, null);
+        assertThat(JsonPath.<List<Object>>read(mios.body(), "$")).hasSize(3);
+        assertThat(JsonPath.<List<Object>>read(mios.body(), "$[?(@.chatId)]")).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("El límite diario es de adopción: dos animales lo agotan, el tercero da 429 y los avistamientos siguen")
+    void limiteDiarioDeAdopcion() throws Exception {
+        crearProtectoraConAnimales(LIMITE + 1);
+
+        // 1. Dos matches de adopción agotan el cupo.
+        assertThat(deslizarAnimal(tokenDuenyo, animales.get(0), true).statusCode()).isEqualTo(201);
         HttpResponse<String> limite = enviar("GET", "/api/matches/limite", tokenDuenyo, null);
         assertThat(numero(limite.body(), "$.consumidos")).isEqualTo(1);
         assertThat(numero(limite.body(), "$.restantes")).isEqualTo(LIMITE - 1);
         assertThat(numero(limite.body(), "$.limiteDiario")).isEqualTo(LIMITE);
+        assertThat(deslizarAnimal(tokenDuenyo, animales.get(1), true).statusCode()).isEqualTo(201);
 
-        // 7. Segundo match: cuota agotada.
-        assertThat(deslizar(tokenDuenyo, segundo, true).statusCode()).isEqualTo(201);
-
-        // 8. El tercero choca con el límite diario, con el cuerpo que pide RF-24.
-        HttpResponse<String> pasado = deslizar(tokenDuenyo, tercero, true);
+        // 2. El tercero choca con el límite, con el cuerpo que pide RF-24.
+        HttpResponse<String> pasado = deslizarAnimal(tokenDuenyo, animales.get(2), true);
         assertThat(pasado.statusCode()).isEqualTo(429);
         assertThat(JsonPath.<String>read(pasado.body(), "$.codigo")).isEqualTo("LIMITE_MATCHES_ALCANZADO");
-        assertThat(JsonPath.<String>read(pasado.body(), "$.mensaje")).contains("mañana");
+        assertThat(JsonPath.<String>read(pasado.body(), "$.mensaje")).contains("adopción", "mañana");
         assertThat(numero(pasado.body(), "$.limiteDiario")).isEqualTo(LIMITE);
         assertThat(JsonPath.<String>read(pasado.body(), "$.reiniciaEn"))
                 .startsWith(LocalDate.now(ZONA_CUOTA).plusDays(1).toString());
 
         // El rechazo no dejó rastro: ni registro ni cuota de más.
-        assertThat(matchRegistroRepository
-                .existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
-                        idDuenyo, tercero, com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO))
+        assertThat(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                idDuenyo, animales.get(2), com.rescateanimal.backend.model.enums.TipoPublicacion.ADOPCION))
                 .isFalse();
         assertThat(numero(enviar("GET", "/api/matches/limite", tokenDuenyo, null).body(), "$.consumidos"))
                 .isEqualTo(LIMITE);
 
-        // 9. Con la cuota agotada, un descarte sigue funcionando y no la toca.
-        HttpResponse<String> descarte = deslizar(tokenDuenyo, tercero, false);
-        assertThat(descarte.statusCode()).isEqualTo(201);
-        assertThat(JsonPath.<Object>read(descarte.body(), "$")).asString().doesNotContain("chatId");
+        // 3. Con el cupo agotado, un descarte sigue funcionando y no lo toca.
+        assertThat(deslizarAnimal(tokenDuenyo, animales.get(2), false).statusCode()).isEqualTo(201);
+
+        // 4. Y el dueño sigue pudiendo revisar los avistamientos de su alerta.
+        HttpResponse<String> avistamiento = deslizar(tokenDuenyo, avistamientos.get(0), true);
+        assertThat(avistamiento.statusCode()).isEqualTo(201);
         assertThat(numero(enviar("GET", "/api/matches/limite", tokenDuenyo, null).body(), "$.consumidos"))
                 .isEqualTo(LIMITE);
-
-        // 10. El feed queda vacío: los tres están revisados.
-        assertThat(idsDelFeed(tokenDuenyo)).doesNotContain(primero, segundo, tercero);
-
-        // 11. Y /mios lista solo los dos matches, no el descarte.
-        HttpResponse<String> mios = enviar("GET", "/api/matches/mios", tokenDuenyo, null);
-        assertThat(JsonPath.<List<Object>>read(mios.body(), "$")).hasSize(2);
-        assertThat(JsonPath.<List<Object>>read(mios.body(), "$[?(@.chatId)]")).hasSize(2);
     }
 
     @Test
@@ -347,6 +392,43 @@ class MatchFlujoCompletoTest {
         return enviar("POST", "/api/matches", token, """
                 {"publicacionId":%d,"tipoPublicacion":"AVISTAMIENTO","interesado":%s}
                 """.formatted(publicacionId, interesado));
+    }
+
+    private HttpResponse<String> deslizarAnimal(String token, long animalId, boolean interesado)
+            throws Exception {
+        return enviar("POST", "/api/matches", token, """
+                {"publicacionId":%d,"tipoPublicacion":"ADOPCION","interesado":%s}
+                """.formatted(animalId, interesado));
+    }
+
+    /**
+     * Una protectora ACTIVA con tantos animales DISPONIBLE. Directa a la base
+     * de datos: el alta y la aprobación de protectoras tienen su propia prueba,
+     * y aquí solo hacen falta animales que deslizar.
+     */
+    private void crearProtectoraConAnimales(int cuantos) {
+        Usuario cuenta = new Usuario();
+        cuenta.setNombre("Refugio");
+        cuenta.setEmail("protectora-" + sufijo + "@test.es");
+        cuenta.setPasswordHash("$2a$10$hashDePrueba");
+        cuenta.setRol(Rol.PROTECTORA);
+        cuenta.setActivo(true);
+        cuentaProtectora = usuarioRepository.save(cuenta);
+
+        Protectora nueva = new Protectora();
+        nueva.setUsuario(cuentaProtectora);
+        nueva.setNombreOrganizacion("Huellas " + sufijo);
+        nueva.setEstado(EstadoProtectora.ACTIVA);
+        protectora = protectoraRepository.save(nueva);
+
+        for (int i = 0; i < cuantos; i++) {
+            AnimalAdopcion animal = new AnimalAdopcion();
+            animal.setProtectora(protectora);
+            animal.setNombre("Animal " + i);
+            animal.setEspecie("perro");
+            animal.setEstado(EstadoAnimal.DISPONIBLE);
+            animales.add(animalAdopcionRepository.save(animal).getId());
+        }
     }
 
     /** Registra un usuario nuevo, inicia sesión y guarda su token. Devuelve su id. */

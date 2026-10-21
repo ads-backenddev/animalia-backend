@@ -19,6 +19,7 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
@@ -96,6 +97,12 @@ public class MatchService {
      * segundo swipe sobre la misma publicación —que acaba en 409— le habría
      * gastado al usuario un match del día.
      *
+     * LA CUOTA DIARIA (RF-24) ES SOLO DE ADOPCIÓN. El límite existe para que
+     * nadie haga match en masa con publicaciones ajenas; sobre los avistamientos
+     * ya no hay ese riesgo, porque solo los desliza el dueño de su propia
+     * alerta, y un dueño con muchos avistamientos en un día no debe quedarse sin
+     * poder revisarlos. Ver consumeCuota.
+     *
      * Todo lo que sigue al consumo de cuota ocurre en la misma transacción:
      * registro, chat y notificación son las tres partes de "hacer match" y no
      * tiene sentido que exista una sin las otras. Es distinto del caso de las
@@ -112,16 +119,17 @@ public class MatchService {
      * 1. En un avistamiento, la fila de su ALERTA con FOR SHARE
      *    (autorDelAvistamiento). Antes no se toma ningún bloqueo: el 404 y los
      *    dos 403 se resuelven con lecturas simples.
-     * 2. Si es un match, la fila del CONTADOR DIARIO del usuario, con el UPDATE
-     *    condicional de consumirCuotaDiaria.
+     * 2. En un match de adopción, la fila del CONTADOR DIARIO del usuario, con
+     *    el UPDATE condicional de consumirCuotaDiaria. Un avistamiento no la
+     *    toca: no consume cuota.
      * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, de CHAT y
      *    de NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE
      *    de comprobar la clave ajena.
-     * Ninguna otra operación toma estos bloqueos en el orden inverso: las de la
-     * alerta (editar, retirar, cerrar, moderar, registrar un avistamiento)
-     * bloquean solo la alerta y no tocan el contador, y el match de adopción
-     * toma el contador sin bloquear ninguna alerta. Sin un par de bloqueos
-     * pedidos en orden contrario no hay ciclo posible.
+     * Así que cada tipo toma un solo bloqueo de fila antes de los INSERT: el de
+     * la alerta o el del contador, nunca los dos. Las operaciones de la alerta
+     * (editar, retirar, cerrar, moderar, registrar un avistamiento) bloquean
+     * solo la alerta y no tocan el contador. Sin un par de bloqueos pedidos en
+     * orden contrario no hay ciclo posible.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
@@ -136,7 +144,7 @@ public class MatchService {
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
 
         boolean interesado = Boolean.TRUE.equals(peticion.getInteresado());
-        if (interesado) {
+        if (interesado && consumeCuota(peticion.getTipoPublicacion())) {
             consumirCuotaDiaria(usuario);
         }
 
@@ -181,7 +189,8 @@ public class MatchService {
      * Es lo único que cambia entre tipos de publicación (RF-08 y RF-09): cada
      * uno vive en su tabla, tiene su propio dueño y su propia regla de cuándo
      * deja de admitir matches. Todo lo que viene después —swipe duplicado,
-     * cuota diaria, registro, chat y notificación— es común y no se duplica.
+     * registro, chat y notificación— es común y no se duplica; la cuota diaria
+     * también, pero solo la consume la adopción (consumeCuota).
      *
      * El orden dentro de cada rama importa y es el mismo en las dos: primero se
      * rechaza deslizar lo propio y solo después se mira el estado. Al revés, a
@@ -309,7 +318,21 @@ public class MatchService {
     }
 
     /**
-     * Consume un match de la cuota del día o falla con 429 (RF-24).
+     * Si un match de este tipo gasta cuota diaria (RF-24): solo los de adopción.
+     *
+     * Con un switch y no con una comparación para que un tipo de publicación
+     * nuevo no compile hasta que alguien decida si consume cuota, en vez de
+     * heredar en silencio una de las dos respuestas.
+     */
+    private static boolean consumeCuota(TipoPublicacion tipo) {
+        return switch (tipo) {
+            case ADOPCION -> true;
+            case AVISTAMIENTO -> false;
+        };
+    }
+
+    /**
+     * Consume un match de adopción de la cuota del día o falla con 429 (RF-24).
      *
      * Son dos sentencias atómicas en vez de leer-decidir-guardar: con el
      * contador en memoria, dos peticiones simultáneas leerían el mismo valor y
@@ -340,7 +363,8 @@ public class MatchService {
         limiteMatchDiarioRepository.crearContadorSiNoExiste(usuario.getId(), hoy);
 
         if (limiteMatchDiarioRepository.incrementarSiHayCupo(usuario.getId(), hoy, limiteDiario) == 0) {
-            log.info("Usuario {} ha agotado sus {} matches diarios", usuario.getId(), limiteDiario);
+            log.info("Usuario {} ha agotado sus {} matches de adopción diarios",
+                    usuario.getId(), limiteDiario);
             throw new LimiteMatchesAlcanzadoException(limiteDiario, reinicioDelContador(hoy));
         }
     }

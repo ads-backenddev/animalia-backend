@@ -211,7 +211,7 @@ class MatchControllerTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.codigo").value("LIMITE_MATCHES_ALCANZADO"))
                 .andExpect(jsonPath("$.mensaje").value(
-                        "Has alcanzado el límite de 20 matches diarios. Podrás continuar mañana."))
+                        "Has alcanzado el límite de 20 matches de adopción diarios. Podrás continuar mañana."))
                 .andExpect(jsonPath("$.limiteDiario").value(20))
                 .andExpect(jsonPath("$.reiniciaEn").exists());
     }

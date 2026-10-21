@@ -142,8 +142,10 @@ class MatchServiceTest {
             c.setId(200L);
             return c;
         });
-        // Por defecto queda cupo.
+        // Por defecto queda cupo, y hay un animal DISPONIBLE que deslizar.
         when(limiteMatchDiarioRepository.incrementarSiHayCupo(anyLong(), any(), anyInt())).thenReturn(1);
+        when(animalAdopcionRepository.buscarConProtectora(ID_ANIMAL))
+                .thenReturn(Optional.of(animal(EstadoAnimal.DISPONIBLE)));
     }
 
     // ---------------------------------------------------------------------
@@ -187,9 +189,17 @@ class MatchServiceTest {
         }
 
         @Test
-        @DisplayName("Un match consume cuota diaria")
-        void elMatchConsumeCuota() {
+        @DisplayName("Un match sobre un avistamiento no consume cuota: el dueño revisa los suyos sin límite")
+        void elMatchDeAvistamientoNoConsumeCuota() {
             matchService.deslizar(peticion(true), ID_USUARIO);
+
+            verifyNoInteractions(limiteMatchDiarioRepository);
+        }
+
+        @Test
+        @DisplayName("Un match de adopción sí consume cuota diaria (RF-24)")
+        void elMatchDeAdopcionConsumeCuota() {
+            matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO);
 
             verify(limiteMatchDiarioRepository)
                     .crearContadorSiNoExiste(ID_USUARIO, LocalDate.now(ZONA_CUOTA));
@@ -300,6 +310,7 @@ class MatchServiceTest {
         }
     }
 
+    /** El cupo diario es de la adopción: estas pruebas deslizan animales. */
     @Nested
     @DisplayName("Límite diario (RF-24)")
     class Limite {
@@ -310,14 +321,14 @@ class MatchServiceTest {
             when(limiteMatchDiarioRepository.incrementarSiHayCupo(anyLong(), any(), anyInt()))
                     .thenReturn(0);
 
-            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
                     .isInstanceOf(LimiteMatchesAlcanzadoException.class)
                     .satisfies(e -> {
                         LimiteMatchesAlcanzadoException ex = (LimiteMatchesAlcanzadoException) e;
                         assertThat(ex.getLimiteDiario()).isEqualTo(LIMITE_DIARIO);
                         assertThat(ex.getReiniciaEn())
                                 .isEqualTo(LocalDate.now(ZONA_CUOTA).plusDays(1).atStartOfDay());
-                        assertThat(ex.getMessage()).contains("mañana");
+                        assertThat(ex.getMessage()).contains("adopción", "mañana");
                     });
         }
 
@@ -327,7 +338,7 @@ class MatchServiceTest {
             when(limiteMatchDiarioRepository.incrementarSiHayCupo(anyLong(), any(), anyInt()))
                     .thenReturn(0);
 
-            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
                     .isInstanceOf(LimiteMatchesAlcanzadoException.class);
 
             verify(matchRegistroRepository, never()).save(any());
@@ -341,10 +352,21 @@ class MatchServiceTest {
             when(limiteMatchDiarioRepository.incrementarSiHayCupo(anyLong(), any(), anyInt()))
                     .thenReturn(0);
 
-            MatchResponse respuesta = matchService.deslizar(peticion(false), ID_USUARIO);
+            MatchResponse respuesta = matchService.deslizar(peticionDeAdopcion(false), ID_USUARIO);
 
             assertThat(respuesta.getInteresado()).isFalse();
             verify(matchRegistroRepository).save(any());
+        }
+
+        @Test
+        @DisplayName("Agotado el cupo, el dueño sigue haciendo match con los avistamientos de su alerta")
+        void conElCupoAgotadoElAvistamientoSigueFuncionando() {
+            when(limiteMatchDiarioRepository.incrementarSiHayCupo(anyLong(), any(), anyInt()))
+                    .thenReturn(0);
+
+            MatchResponse respuesta = matchService.deslizar(peticion(true), ID_USUARIO);
+
+            assertThat(respuesta.getChatId()).isEqualTo(200L);
         }
 
         @Test
@@ -398,7 +420,7 @@ class MatchServiceTest {
             when(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
                     anyLong(), anyLong(), any())).thenReturn(true);
 
-            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
                     .isInstanceOf(PublicacionYaDeslizadaException.class);
 
             verifyNoInteractions(limiteMatchDiarioRepository);
@@ -442,17 +464,6 @@ class MatchServiceTest {
         }
 
         @Test
-        @DisplayName("La alerta cerrada se comprueba antes de gastar cuota")
-        void laAlertaCerradaNoGastaCuota() {
-            cerrarLaAlerta();
-
-            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
-                    .isInstanceOf(OperacionNoPermitidaException.class);
-
-            verifyNoInteractions(limiteMatchDiarioRepository);
-        }
-
-        @Test
         @DisplayName("El descarte sobre una alerta cerrada también se rechaza")
         void elDescarteSobreAlertaCerradaTambienSeRechaza() {
             // Se bloquean los dos sentidos, igual que con la publicación propia:
@@ -473,9 +484,10 @@ class MatchServiceTest {
      *
      * Lo único que cambia respecto al avistamiento es de dónde sale el otro
      * extremo: allí es el autor del avistamiento y aquí la CUENTA de la
-     * protectora dueña del animal. El resto del camino —cuota, swipe duplicado,
+     * protectora dueña del animal. El resto del camino —swipe duplicado y
      * apertura del chat— es compartido, así que aquí se prueba lo propio de la
-     * adopción en vez de repetir lo ya cubierto arriba.
+     * adopción en vez de repetir lo ya cubierto arriba. La cuota diaria es solo
+     * suya, y se prueba en Limite.
      */
     @Nested
     @DisplayName("Swipe sobre adopción (RF-09)")
