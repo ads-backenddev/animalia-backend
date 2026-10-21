@@ -477,6 +477,13 @@ public class AlertaService {
      * Marca la alerta como ENCONTRADA y la retira del mapa (RF-14).
      * Solo puede cerrarla quien la publicó.
      *
+     * Al cerrarse avisa con ALERTA_ENCONTRADA a los participantes de los chats
+     * abiertos por sus avistamientos —los testigos con los que el dueño hizo
+     * match—, como pide el caso de uso de cerrar alerta del SRS. Los
+     * destinatarios se calculan tras el commit: el match sobre un avistamiento
+     * lee la alerta con FOR SHARE, así que ninguno puede confirmarse después del
+     * cierre sin verla ya ENCONTRADA y quedarse fuera del aviso.
+     *
      * SOLO DESDE ACTIVA. Antes no se miraba el estado, y el dueño de una alerta
      * retirada por el administrador podía marcarla como ENCONTRADA y deshacer la
      * moderación: volvía a verse entera en el detalle y en el listado de
@@ -500,6 +507,10 @@ public class AlertaService {
             alerta = alertaRepository.save(alerta);
             // El cliente necesita saber que debe retirar el marcador del mapa.
             publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+            // Y quienes tienen un chat por un avistamiento suyo, que el animal
+            // ha aparecido. Tras el commit, como el mapa; y solo al cerrarse
+            // de verdad, no al repetir el cierre.
+            notificacionService.avisarAlertaEncontrada(alerta.getId(), usuarioId);
         }
 
         return aAlertaResponse(alerta);

@@ -353,6 +353,19 @@ class AlertaServiceTest {
         }
 
         @Test
+        @DisplayName("Al cerrarla se avisa con ALERTA_ENCONTRADA a quienes tienen chat por ella")
+        void alCerrarlaSeAvisa() {
+            Alerta alerta = alertaExistente(5L);
+            when(alertaRepository.buscarAutorId(5L)).thenReturn(Optional.of(1L));
+            when(alertaRepository.bloquearParaModificar(5L)).thenReturn(Optional.of(alerta));
+            when(alertaRepository.save(any(Alerta.class))).thenAnswer(i -> i.getArgument(0));
+
+            alertaService.cerrar(5L, 1L);
+
+            verify(notificacionService).avisarAlertaEncontrada(5L, 1L);
+        }
+
+        @Test
         @DisplayName("Otro usuario no puede cerrar una alerta ajena")
         void otroUsuarioNoPuedeCerrarla() {
             when(alertaRepository.buscarAutorId(5L)).thenReturn(Optional.of(1L));
@@ -389,10 +402,11 @@ class AlertaServiceTest {
             assertThat(alerta.getEstado()).isEqualTo(estado);
             verify(alertaRepository, never()).save(any());
             verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+            verify(notificacionService, never()).avisarAlertaEncontrada(any(), any());
         }
 
         @Test
-        @DisplayName("Cerrar otra vez una ENCONTRADA no cambia nada ni vuelve a avisar al mapa")
+        @DisplayName("Cerrar otra vez una ENCONTRADA no cambia nada ni vuelve a avisar, ni al mapa ni a nadie")
         void cerrarDosVecesEsIdempotente() {
             Alerta alerta = alertaExistente(5L);
             alerta.setEstado(EstadoAlerta.ENCONTRADA);
@@ -403,6 +417,7 @@ class AlertaServiceTest {
 
             verify(alertaRepository, never()).save(any());
             verify(mensajeria, never()).convertAndSend(anyString(), any(EventoMapaResponse.class));
+            verify(notificacionService, never()).avisarAlertaEncontrada(any(), any());
         }
     }
 

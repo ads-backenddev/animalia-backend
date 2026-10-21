@@ -5,6 +5,7 @@ import com.rescateanimal.backend.model.Notificacion;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -170,6 +171,52 @@ class NotificacionServiceTest {
         private void confirmar() {
             TransactionSynchronizationManager.getSynchronizations()
                     .forEach(TransactionSynchronization::afterCommit);
+        }
+    }
+
+    @Nested
+    @DisplayName("ALERTA_ENCONTRADA, tras el commit")
+    class AlertaEncontrada {
+
+        private static final Long ID_ALERTA = 50L;
+        private static final Long ID_DUENO = 2L;
+
+        @Test
+        @DisplayName("Tras el commit, un aviso por participante con la alerta como referencia")
+        void unAvisoPorParticipante() {
+            when(usuarioRepository.buscarParticipantesDeChatsDeLaAlerta(
+                    ID_ALERTA, ID_DUENO, TipoPublicacion.AVISTAMIENTO))
+                    .thenReturn(List.of(usuario(3L), usuario(4L)));
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarAlertaEncontrada(ID_ALERTA, ID_DUENO);
+            verifyNoInteractions(notificacionRepository, usuarioRepository);
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            @SuppressWarnings("unchecked")
+            ArgumentCaptor<List<Notificacion>> guardadas = ArgumentCaptor.forClass(List.class);
+            verify(notificacionRepository).saveAll(guardadas.capture());
+            assertThat(guardadas.getValue())
+                    .allSatisfy(n -> {
+                        assertThat(n.getTipo()).isEqualTo(TipoNotificacion.ALERTA_ENCONTRADA);
+                        assertThat(n.getReferenciaId()).isEqualTo(ID_ALERTA);
+                    })
+                    .extracting(n -> n.getUsuario().getId())
+                    .containsExactly(3L, 4L);
+        }
+
+        @Test
+        @DisplayName("Sin commit no se busca a nadie ni se avisa")
+        void sinCommitNoHayAviso() {
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.avisarAlertaEncontrada(ID_ALERTA, ID_DUENO);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verifyNoInteractions(notificacionRepository, usuarioRepository);
         }
     }
 

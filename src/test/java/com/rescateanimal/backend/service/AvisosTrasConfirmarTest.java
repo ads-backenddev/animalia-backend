@@ -1,12 +1,14 @@
 package com.rescateanimal.backend.service;
 
 import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
+import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
@@ -54,6 +56,10 @@ class AvisosTrasConfirmarTest {
     @Autowired
     private AvistamientoService avistamientoService;
     @Autowired
+    private AlertaService alertaService;
+    @Autowired
+    private MatchService matchService;
+    @Autowired
     private AlertaRepository alertaRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -98,6 +104,9 @@ class AvisosTrasConfirmarTest {
     @AfterEach
     void limpiar() {
         for (Usuario usuario : usuarios) {
+            jdbc.update("DELETE FROM chat WHERE match_id IN "
+                    + "(SELECT id FROM match_registro WHERE usuario_id = ?)", usuario.getId());
+            jdbc.update("DELETE FROM match_registro WHERE usuario_id = ?", usuario.getId());
             jdbc.update("DELETE FROM notificacion WHERE usuario_id = ?", usuario.getId());
         }
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
@@ -131,7 +140,49 @@ class AvisosTrasConfirmarTest {
                 Integer.class, alertaId)).isZero();
     }
 
+    @Test
+    @DisplayName("ALERTA_ENCONTRADA: el testigo con chat lo recibe al confirmarse el cierre, y una sola vez")
+    void alertaEncontradaTrasElCommit() {
+        conChatConElTestigo();
+
+        new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+            alertaService.cerrar(alertaId, dueno.getId());
+            assertThat(avisos(testigo, "ALERTA_ENCONTRADA"))
+                    .as("dentro de la transacción del cierre, todavía nada").isEmpty();
+        });
+        assertThat(avisos(testigo, "ALERTA_ENCONTRADA")).containsExactly(alertaId);
+        assertThat(avisos(dueno, "ALERTA_ENCONTRADA")).as("quien cierra no se avisa").isEmpty();
+
+        // Repetir el cierre no cambia nada, y tampoco vuelve a avisar.
+        alertaService.cerrar(alertaId, dueno.getId());
+        assertThat(avisos(testigo, "ALERTA_ENCONTRADA")).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("ALERTA_ENCONTRADA: si el cierre se deshace, no hay aviso y la alerta sigue ACTIVA")
+    void alertaEncontradaSinCommit() {
+        conChatConElTestigo();
+
+        new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+            alertaService.cerrar(alertaId, dueno.getId());
+            estado.setRollbackOnly();
+        });
+
+        assertThat(avisos(testigo, "ALERTA_ENCONTRADA")).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT estado FROM alerta WHERE id = ?", String.class, alertaId))
+                .isEqualTo("ACTIVA");
+    }
+
     // ---------------------------------------------------------------------
+
+    /** El testigo registra un avistamiento y el dueño hace match con él: hay chat. */
+    private void conChatConElTestigo() {
+        avistar();
+        Long avistamiento = jdbc.queryForObject(
+                "SELECT id FROM avistamiento WHERE alerta_id = ?", Long.class, alertaId);
+        matchService.deslizar(new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, true),
+                dueno.getId());
+    }
 
     private void avistar() {
         avistamientoService.registrar(new CrearAvistamientoRequest(alertaId, "Visto junto al río",

@@ -4,6 +4,7 @@ import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Notificacion;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.TipoNotificacion;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -75,6 +76,32 @@ public class NotificacionService {
                             log.info("Alerta {}: creada notificación NUEVO_AVISTAMIENTO para su dueño {}",
                                     alertaId, duenoId);
                         }));
+    }
+
+    /**
+     * Avisa con ALERTA_ENCONTRADA a quienes tienen un chat abierto por un
+     * avistamiento de la alerta, una vez confirmado el cierre (caso de uso de
+     * cerrar alerta del SRS). referenciaId es la alerta: su detalle responde 200
+     * con el estado ENCONTRADA.
+     *
+     * Los destinatarios se buscan ya dentro de la transacción del aviso, tras el
+     * commit, y no antes: así cuentan todos los matches confirmados hasta el
+     * cierre. Quiénes son exactamente lo explica
+     * UsuarioRepository.buscarParticipantesDeChatsDeLaAlerta.
+     *
+     * @param duenoId quien cierra la alerta, que es su dueño: no se le avisa de
+     *                lo que acaba de hacer
+     */
+    public void avisarAlertaEncontrada(Long alertaId, Long duenoId) {
+        trasConfirmar("ALERTA_ENCONTRADA de la alerta " + alertaId, () -> {
+            List<Notificacion> avisos = usuarioRepository
+                    .buscarParticipantesDeChatsDeLaAlerta(alertaId, duenoId, TipoPublicacion.AVISTAMIENTO)
+                    .stream()
+                    .map(destinatario -> crear(destinatario, TipoNotificacion.ALERTA_ENCONTRADA, alertaId))
+                    .toList();
+            notificacionRepository.saveAll(avisos);
+            log.info("Alerta {}: creadas {} notificaciones ALERTA_ENCONTRADA", alertaId, avisos.size());
+        });
     }
 
     /**
