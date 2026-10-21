@@ -11,7 +11,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -150,7 +149,7 @@ public class NotificacionService {
      * ALCANCE: por ahora solo persiste la notificación. El envío push real
      * (Firebase u otro proveedor) se conectará cuando exista la aplicación
      * Android que lo consuma; hasta entonces el cliente las recibe consultando
-     * /api/notificaciones o por el canal /ws/notificaciones.
+     * GET /api/notificaciones.
      *
      * LIMITACIÓN DEL MODELO: la cercanía se resuelve comparando el texto de
      * Usuario.areaGeografica con el del autor de la alerta, porque el SRS define
@@ -159,49 +158,34 @@ public class NotificacionService {
      * una coordenada a USUARIO o geocodificar el área, que es un cambio de
      * modelo pendiente de acordar.
      *
-     * TRANSACCIÓN PROPIA (REQUIRES_NEW): esta es una consecuencia de publicar una
-     * alerta, no parte de publicarla. Compartiendo transacción con
-     * AlertaService.publicar, un fallo aquí marcaría esa transacción como
-     * "rollback only" y la alerta —que ya estaba guardada y es lo que el usuario
-     * pidió— se perdería. La entidad que llega ya tiene cargados su id y su
-     * autor, así que no hace falta inicializar nada perezoso desde esta
-     * transacción nueva.
+     * TRAS EL COMMIT (trasConfirmar). Antes se creaban en una transacción propia
+     * que se confirmaba ANTES que la de publicar, y si aquella fallaba al
+     * confirmarse quedaban avisos huérfanos apuntando a una alerta que nunca
+     * existió. Ahora el aviso solo se crea con la alerta ya confirmada, y un
+     * fallo creándolo no tumba la publicación, que es lo que el usuario pidió.
      *
-     * LIMITACIÓN ACEPTADA: EL AVISO PUEDE SOBREVIVIR A LA ALERTA. Esta
-     * transacción se confirma antes que la de publicar, así que si aquella
-     * fallara después, quedarían notificaciones ALERTA_CERCANA apuntando con su
-     * referencia_id a una alerta que nunca llegó a existir; el cliente que abra
-     * una recibiría un 404. Es el mismo riesgo simétrico que se acepta en
-     * notificarDecisionAdministrativa, pero aquí no se corrige solo: la
-     * notificación queda huérfana para siempre. Se acepta porque es remoto:
-     * Alerta usa IDENTITY, de modo que el INSERT ya se ejecutó en save() y
-     * cualquier CHECK, NOT NULL o clave ajena habría fallado antes de llegar
-     * aquí; solo queda que falle el propio commit (conexión perdida, caída de la
-     * base de datos). Y no puede apuntar a la alerta equivocada: un id de
-     * IDENTITY consumido no se reutiliza aunque la transacción se deshaga.
-     * Si hubiera que cerrarlo, la llamada se movería a un afterCommit, como el
-     * evento del mapa en AlertaService.publicarEnMapa: el aviso solo se crearía
-     * con la alerta ya confirmada.
+     * El área y los ids se leen ahora, con la entidad todavía gestionada; la
+     * escritura, después, en una transacción en la que esa entidad ya no está.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public int notificarAlertaCercana(Alerta alerta) {
+    public void notificarAlertaCercana(Alerta alerta) {
         String area = alerta.getUsuario().getAreaGeografica();
+        Long alertaId = alerta.getId();
         if (area == null || area.isBlank()) {
-            log.debug("La alerta {} no tiene área asociada: no se notifica a nadie", alerta.getId());
-            return 0;
+            log.debug("La alerta {} no tiene área asociada: no se notifica a nadie", alertaId);
+            return;
         }
+        Long autorId = alerta.getUsuario().getId();
 
-        List<Usuario> destinatarios = usuarioRepository
-                .findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(area, alerta.getUsuario().getId());
-
-        List<Notificacion> notificaciones = destinatarios.stream()
-                .map(destinatario -> crear(destinatario, TipoNotificacion.ALERTA_CERCANA, alerta.getId()))
-                .toList();
-
-        notificacionRepository.saveAll(notificaciones);
-        log.info("Alerta {}: creadas {} notificaciones de tipo ALERTA_CERCANA",
-                alerta.getId(), notificaciones.size());
-        return notificaciones.size();
+        trasConfirmar("ALERTA_CERCANA de la alerta " + alertaId, () -> {
+            List<Notificacion> notificaciones = usuarioRepository
+                    .findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(area, autorId)
+                    .stream()
+                    .map(destinatario -> crear(destinatario, TipoNotificacion.ALERTA_CERCANA, alertaId))
+                    .toList();
+            notificacionRepository.saveAll(notificaciones);
+            log.info("Alerta {}: creadas {} notificaciones de tipo ALERTA_CERCANA",
+                    alertaId, notificaciones.size());
+        });
     }
 
     /**
@@ -211,15 +195,15 @@ public class NotificacionService {
      *
      * EL DESTINATARIO ES EL AUTOR DEL AVISTAMIENTO, no el dueño de la alerta.
      * Son los dos extremos del chat que abre el match (RF-12): quien desliza y
-     * quien publicó lo deslizado. El dueño de la alerta es habitualmente quien
-     * desliza —el feed solo le esconde sus propios avistamientos, no los que
-     * otros registran sobre su alerta—, así que notificarle a él era avisar a
+     * quien publicó lo deslizado. Quien desliza un avistamiento es siempre el
+     * dueño de su alerta (MatchService), así que notificarle a él sería avisar a
      * quien acababa de hacer el match.
      *
-     * Aquí NO se usa REQUIRES_NEW, al contrario que en notificarAlertaCercana:
-     * un match del que el destinatario nunca se entera no sirve de nada, así
-     * que la notificación forma parte de la operación y comparte su suerte. La
-     * alerta, en cambio, es útil por sí sola aunque falle el aviso a la zona.
+     * ESTE AVISO NO VA TRAS EL COMMIT, al contrario que todos los demás, y es a
+     * propósito: un match del que el destinatario nunca se entera no sirve de
+     * nada, así que la notificación forma parte de la operación y comparte su
+     * suerte —match, chat y aviso, o ninguno—. Los demás avisos son
+     * consecuencias de algo que vale por sí solo aunque el aviso falle.
      *
      * @return la notificación creada, o vacío si el destinatario es el propio
      *         autor del deslizamiento: nadie necesita que le avisen de lo que
@@ -245,41 +229,42 @@ public class NotificacionService {
 
     /**
      * Avisa a un usuario de una decisión que el administrador ha tomado sobre su
-     * cuenta o sobre su protectora (RF-11): aprobación, rechazo, bloqueo o
-     * desbloqueo.
+     * cuenta, su protectora o su reporte (RF-11, RF-26): aprobación, rechazo,
+     * bloqueo, desbloqueo o reporte resuelto.
      *
-     * UN SOLO MÉTODO PARA LOS CUATRO CASOS, y no cuatro. Aquí, a diferencia de
-     * las alertas o los matches, no hay nada que decidir por tipo: el
-     * destinatario ya viene resuelto por quien toma la decisión y lo único que
-     * cambia es la constante. Cuatro métodos idénticos salvo por un literal
-     * habrían sido cuatro sitios donde equivocarse.
+     * UN SOLO MÉTODO PARA TODOS LOS CASOS, y no uno por tipo. Aquí, a
+     * diferencia de las alertas o los matches, no hay nada que decidir por tipo:
+     * el destinatario ya viene resuelto por quien toma la decisión y lo único
+     * que cambia es la constante.
      *
-     * TRANSACCIÓN PROPIA (REQUIRES_NEW), como en notificarAlertaCercana y por el
-     * mismo motivo, que aquí pesa más todavía: bloquear una cuenta abusiva es lo
-     * que el administrador ha pedido, y avisar al afectado es la consecuencia.
-     * Compartiendo transacción, un fallo insertando la notificación marcaría la
-     * del bloqueo como "rollback only" y la cuenta se quedaría operativa. El
-     * riesgo simétrico —que el aviso sobreviva a una decisión que sí se
-     * deshace— es remoto y se corrige solo: lo que el usuario puede hacer
-     * depende de su fila, no del aviso.
+     * TRAS EL COMMIT (trasConfirmar): la decisión del administrador vale por sí
+     * sola y el aviso es su consecuencia. Un fallo creándolo no deshace un
+     * bloqueo —la cuenta abusiva no se queda operativa por culpa del aviso— y,
+     * al revés, una decisión que se deshace no deja un aviso de algo que no
+     * pasó. Antes se creaba en una transacción propia que se confirmaba antes
+     * que la de la decisión, y ese segundo caso sí podía darse.
+     *
+     * Se avisa aunque la cuenta esté inactiva: es justo el caso de
+     * CUENTA_BLOQUEADA, un aviso diferido que el usuario lee al desbloquearse.
      *
      * EL MOTIVO NO VIAJA AQUÍ. NOTIFICACION no tiene ningún campo de texto, así
      * que lo que el administrador escribió queda en el log. Ver
      * BloquearUsuarioRequest.motivo.
      *
      * @param referenciaId el recurso al que se refiere la decisión: la protectora
-     *                     al aprobar o rechazar, y nulo al bloquear o desbloquear
-     *                     una cuenta, porque el afectado es el propio destinatario
-     *                     y no hay nada más a lo que apuntar
+     *                     al aprobar o rechazar, el reporte al resolverlo, y nulo
+     *                     al bloquear o desbloquear una cuenta, porque el afectado
+     *                     es el propio destinatario y no hay nada más a lo que
+     *                     apuntar
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public Notificacion notificarDecisionAdministrativa(Usuario destinatario, TipoNotificacion tipo,
-                                                        Long referenciaId) {
-
-        Notificacion notificacion = notificacionRepository.save(
-                crear(destinatario, tipo, referenciaId));
-        log.info("Creada notificación {} para el usuario {}", tipo, destinatario.getId());
-        return notificacion;
+    public void notificarDecisionAdministrativa(Usuario destinatario, TipoNotificacion tipo,
+                                                Long referenciaId) {
+        Long destinatarioId = destinatario.getId();
+        trasConfirmar(tipo + " para el usuario " + destinatarioId, () -> {
+            notificacionRepository.save(
+                    crear(usuarioRepository.getReferenceById(destinatarioId), tipo, referenciaId));
+            log.info("Creada notificación {} para el usuario {}", tipo, destinatarioId);
+        });
     }
 
     private Notificacion crear(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {

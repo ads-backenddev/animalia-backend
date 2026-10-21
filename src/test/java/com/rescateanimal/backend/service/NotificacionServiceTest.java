@@ -230,9 +230,7 @@ class NotificacionServiceTest {
             when(usuarioRepository.findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(AREA, ID_AUTOR))
                     .thenReturn(List.of(usuario(2L), usuario(3L)));
 
-            int creadas = notificacionService.notificarAlertaCercana(alerta(50L, AREA));
-
-            assertThat(creadas).isEqualTo(2);
+            notificacionService.notificarAlertaCercana(alerta(50L, AREA));
 
             @SuppressWarnings("unchecked")
             ArgumentCaptor<List<Notificacion>> guardadas = ArgumentCaptor.forClass(List.class);
@@ -272,10 +270,62 @@ class NotificacionServiceTest {
             when(usuarioRepository.findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(AREA, ID_AUTOR))
                     .thenReturn(List.of());
 
-            int creadas = notificacionService.notificarAlertaCercana(alerta(50L, AREA));
+            notificacionService.notificarAlertaCercana(alerta(50L, AREA));
 
-            assertThat(creadas).isZero();
             verify(notificacionRepository).saveAll(List.of());
+        }
+
+        @Test
+        @DisplayName("Los avisos a la zona esperan al commit de la alerta: antes no se busca ni se guarda nada")
+        void esperanAlCommit() {
+            when(usuarioRepository.findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(AREA, ID_AUTOR))
+                    .thenReturn(List.of(usuario(2L)));
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.notificarAlertaCercana(alerta(50L, AREA));
+            verifyNoInteractions(notificacionRepository, usuarioRepository);
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+            verify(notificacionRepository).saveAll(any());
+        }
+    }
+
+    @Nested
+    @DisplayName("Decisiones del administrador, tras el commit")
+    class DecisionAdministrativa {
+
+        @Test
+        @DisplayName("El aviso espera al commit de la decisión y se guarda para el afectado")
+        void esperaAlCommit() {
+            Usuario afectado = usuario(2L);
+            when(usuarioRepository.getReferenceById(2L)).thenReturn(afectado);
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.notificarDecisionAdministrativa(afectado, TipoNotificacion.CUENTA_BLOQUEADA, null);
+            verifyNoInteractions(notificacionRepository);
+
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(TransactionSynchronization::afterCommit);
+
+            ArgumentCaptor<Notificacion> guardada = ArgumentCaptor.forClass(Notificacion.class);
+            verify(notificacionRepository).save(guardada.capture());
+            assertThat(guardada.getValue().getTipo()).isEqualTo(TipoNotificacion.CUENTA_BLOQUEADA);
+            assertThat(guardada.getValue().getUsuario().getId()).isEqualTo(2L);
+            assertThat(guardada.getValue().getReferenciaId()).isNull();
+        }
+
+        @Test
+        @DisplayName("Una decisión que se deshace no deja aviso de algo que no pasó")
+        void sinCommitNoHayAviso() {
+            TransactionSynchronizationManager.initSynchronization();
+
+            notificacionService.notificarDecisionAdministrativa(
+                    usuario(2L), TipoNotificacion.PROTECTORA_VERIFICADA, 7L);
+            TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verifyNoInteractions(notificacionRepository);
         }
     }
 
@@ -286,9 +336,8 @@ class NotificacionServiceTest {
         @Test
         @DisplayName("Autor sin área geográfica -> no se notifica a nadie ni se consulta la BD")
         void areaNulaNoNotifica() {
-            int creadas = notificacionService.notificarAlertaCercana(alerta(50L, null));
+            notificacionService.notificarAlertaCercana(alerta(50L, null));
 
-            assertThat(creadas).isZero();
             verifyNoInteractions(notificacionRepository);
             verify(usuarioRepository, never())
                     .findByAreaGeograficaIgnoreCaseAndActivoTrueAndIdNot(anyString(), any());
@@ -297,9 +346,8 @@ class NotificacionServiceTest {
         @Test
         @DisplayName("Área en blanco -> se trata igual que si no la hubiera")
         void areaEnBlancoNoNotifica() {
-            int creadas = notificacionService.notificarAlertaCercana(alerta(50L, "   "));
+            notificacionService.notificarAlertaCercana(alerta(50L, "   "));
 
-            assertThat(creadas).isZero();
             verifyNoInteractions(notificacionRepository);
         }
     }

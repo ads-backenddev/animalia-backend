@@ -621,16 +621,12 @@ public class AlertaService {
     /**
      * Avisa a la zona sin arriesgar la publicación.
      *
-     * NotificacionService abre su propia transacción (REQUIRES_NEW), de modo que
-     * un fallo suyo no marca como "rollback only" la transacción que acaba de
-     * guardar la alerta; aquí solo queda registrarlo. Sin las dos piezas —la
-     * transacción aparte y este catch— un error creando notificaciones haría
-     * fracasar un RF-03 perfectamente válido por culpa de un RF-05.
-     *
-     * Lo contrario sí puede pasar: las notificaciones se confirman antes que la
-     * alerta, y si la publicación fallara al confirmar quedarían huérfanas. Es
-     * una limitación aceptada; el razonamiento está en
-     * NotificacionService.notificarAlertaCercana.
+     * NotificacionService crea los avisos tras el commit, en su propia
+     * transacción y capturando cualquier fallo de esa escritura, así que ni un
+     * error creándolos puede tumbar un RF-03 perfectamente válido por culpa de
+     * un RF-05, ni una publicación que se deshace deja avisos huérfanos. Este
+     * catch cubre lo único que queda: un fallo al preparar el aviso, antes de
+     * que llegue a programarse.
      */
     private void notificarZona(Alerta alerta) {
         try {

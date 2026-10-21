@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
 import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
@@ -60,6 +61,8 @@ class AvisosTrasConfirmarTest {
     @Autowired
     private MatchService matchService;
     @Autowired
+    private AdminService adminService;
+    @Autowired
     private AlertaRepository alertaRepository;
     @Autowired
     private UsuarioRepository usuarioRepository;
@@ -76,6 +79,7 @@ class AvisosTrasConfirmarTest {
     private Usuario testigo;
     private String fotoDelTestigo;
     private Long alertaId;
+    private final List<Long> alertasPublicadas = new ArrayList<>();
     private final List<Usuario> usuarios = new ArrayList<>();
 
     @BeforeEach
@@ -111,6 +115,7 @@ class AvisosTrasConfirmarTest {
         }
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
         alertaRepository.deleteById(alertaId);
+        alertaRepository.deleteAllById(alertasPublicadas);
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
         usuarioRepository.deleteAll(usuarios);
     }
@@ -173,7 +178,82 @@ class AvisosTrasConfirmarTest {
                 .isEqualTo("ACTIVA");
     }
 
+    @Test
+    @DisplayName("ALERTA_CERCANA: la zona se entera cuando la alerta está confirmada, nunca antes")
+    void alertaCercanaTrasElCommit() {
+        Usuario vecino = vecinoDelDueno();
+
+        Long publicada = new TransactionTemplate(transacciones).execute(estado -> {
+            Long id = alertaService.publicar(peticionDeAlerta(), dueno.getId()).getId();
+            assertThat(avisos(vecino, "ALERTA_CERCANA"))
+                    .as("dentro de la transacción de la publicación, todavía nada").isEmpty();
+            return id;
+        });
+        alertasPublicadas.add(publicada);
+
+        assertThat(avisos(vecino, "ALERTA_CERCANA")).containsExactly(publicada);
+    }
+
+    @Test
+    @DisplayName("ALERTA_CERCANA: si la publicación se deshace, no queda un aviso huérfano")
+    void alertaCercanaSinCommit() {
+        Usuario vecino = vecinoDelDueno();
+
+        new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+            alertaService.publicar(peticionDeAlerta(), dueno.getId());
+            estado.setRollbackOnly();
+        });
+
+        assertThat(avisos(vecino, "ALERTA_CERCANA")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Decisión del administrador: el aviso llega con la decisión confirmada")
+    void decisionAdministrativaTrasElCommit() {
+        new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+            adminService.bloquear(testigo.getId(), "Spam", dueno.getId());
+            assertThat(cuantos(testigo, "CUENTA_BLOQUEADA"))
+                    .as("dentro de la transacción del bloqueo, todavía nada").isZero();
+        });
+
+        assertThat(cuantos(testigo, "CUENTA_BLOQUEADA")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Decisión del administrador: si se deshace, no hay aviso de algo que no pasó")
+    void decisionAdministrativaSinCommit() {
+        new TransactionTemplate(transacciones).executeWithoutResult(estado -> {
+            adminService.bloquear(testigo.getId(), "Spam", dueno.getId());
+            estado.setRollbackOnly();
+        });
+
+        assertThat(cuantos(testigo, "CUENTA_BLOQUEADA")).isZero();
+        assertThat(usuarioRepository.findById(testigo.getId()).orElseThrow().getActivo()).isTrue();
+    }
+
     // ---------------------------------------------------------------------
+
+    /** Dueño y vecino comparten un área que solo es de esta prueba. */
+    private Usuario vecinoDelDueno() {
+        String area = "zona-" + UUID.randomUUID().toString().substring(0, 8);
+        dueno.setAreaGeografica(area);
+        dueno = usuarioRepository.save(dueno);
+        Usuario vecino = usuario("Vecino");
+        vecino.setAreaGeografica(area);
+        return usuarioRepository.save(vecino);
+    }
+
+    private CrearAlertaRequest peticionDeAlerta() {
+        return new CrearAlertaRequest("Perdido en la zona", null,
+                "zona-" + UUID.randomUUID().toString().substring(0, 8), Instant.now(),
+                new UbicacionRequest(LAT, LNG), null);
+    }
+
+    private int cuantos(Usuario destinatario, String tipo) {
+        Integer total = jdbc.queryForObject("SELECT count(*) FROM notificacion WHERE usuario_id = ? AND tipo = ?",
+                Integer.class, destinatario.getId(), tipo);
+        return total == null ? 0 : total;
+    }
 
     /** El testigo registra un avistamiento y el dueño hace match con él: hay chat. */
     private void conChatConElTestigo() {

@@ -471,12 +471,13 @@ public class AdminService {
     /**
      * Avisa al afectado, sin dejar que un fallo del aviso deshaga la decisión.
      *
-     * NotificacionService abre su propia transacción para esto, así que un error
-     * insertando la notificación no arrastra a la del bloqueo o la aprobación.
-     * El try/catch cubre la otra mitad: que la excepción no suba hasta aquí y
-     * tumbe igualmente la operación. Es el mismo trato que AlertaService da al
-     * aviso a la zona, y por el mismo motivo: la decisión del administrador vale
-     * por sí sola, el aviso es su consecuencia.
+     * NotificacionService crea el aviso tras el commit, en su propia
+     * transacción y capturando cualquier fallo de esa escritura: un error
+     * insertándolo no arrastra al bloqueo o la aprobación, y una decisión que se
+     * deshace no deja un aviso de algo que no pasó. Este catch cubre lo único
+     * que queda, un fallo antes de programar el aviso. Es el mismo trato que
+     * AlertaService da al aviso a la zona, y por el mismo motivo: la decisión
+     * del administrador vale por sí sola, el aviso es su consecuencia.
      */
     private void notificar(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {
         try {
