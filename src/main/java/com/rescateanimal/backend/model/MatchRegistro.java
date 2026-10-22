@@ -9,6 +9,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -79,7 +80,10 @@ import java.time.Instant;
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_match_usuario_publicacion",
                 columnNames = {"usuario_id", "publicacion_id", "tipo_publicacion"}
-        )
+        ),
+        // Para ir de una publicación a sus deslizamientos, a lo que no sirve la
+        // restricción única porque empieza por usuario_id (V18).
+        indexes = @Index(name = "idx_match_registro_publicacion", columnList = "publicacion_id, tipo_publicacion")
 )
 @Getter
 @Setter

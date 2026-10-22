@@ -30,7 +30,10 @@ import java.time.Instant;
 @Table(name = "notificacion", indexes = {
         // Se consultan siempre por destinatario, y el badge de "sin leer" filtra
         // ademas por leida.
-        @Index(name = "idx_notificacion_usuario_leida", columnList = "usuario_id, leida")
+        @Index(name = "idx_notificacion_usuario_leida", columnList = "usuario_id, leida"),
+        // El listado sale de aqui ya en su orden: mas recientes primero, con el
+        // id de desempate (V18).
+        @Index(name = "idx_notificacion_usuario_fecha", columnList = "usuario_id, created_at DESC, id DESC")
 })
 @Getter
 @Setter

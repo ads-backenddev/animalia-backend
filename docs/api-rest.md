@@ -2536,3 +2536,17 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   no ocupe una conexión, así que diecinueve subidas lentas a la vez retrasarían al resto de
   peticiones. Con el uso previsto no es probable; si llegara a pasar, la salida es crear los avisos
   en un ejecutor propio, fuera del hilo de la petición, que ya no necesitaría la segunda conexión.
+- **Dos consultas no tenían índice** (`V18`). Los destinatarios de `ALERTA_ENCONTRADA` se buscan
+  yendo de los avistamientos de la alerta a sus matches por publicación y tipo, y el único índice de
+  `MATCH_REGISTRO`, el de su restricción única, empieza por `usuario_id`: cada cierre recorría la
+  tabla entera, que crece con cada swipe. Y `GET /api/notificaciones` ordena por `createdAt` e `id`
+  con un índice que solo tenía `(usuario_id, leida)`, así que PostgreSQL ordenaba en memoria todas
+  las notificaciones del usuario para devolver una página. Ahora hay
+  `(publicacion_id, tipo_publicacion)` y `(usuario_id, created_at DESC, id DESC)`; una prueba
+  comprueba que existen y que el plan de cada consulta los usa.
+
+**Limitaciones que deja la revisión, aceptadas:**
+
+| Limitación | Por qué se acepta |
+|---|---|
+| `ALERTA_CERCANA` no está acotado: carga enteras todas las cuentas activas del área del autor, inserta los avisos uno a uno y, aunque va tras el commit, corre en el hilo de la petición, que no responde hasta terminar. El área se compara sin distinguir mayúsculas con `upper()`, y no hay índice que lo sostenga | Con los usuarios previstos, un área tiene pocas cuentas. Si llegara a miles, la salida sería un único `INSERT … SELECT`, un índice sobre `lower(area_geografica)` y crear los avisos fuera del hilo de la petición |

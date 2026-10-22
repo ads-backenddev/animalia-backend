@@ -177,6 +177,14 @@ public class NotificacionService {
      *
      * El área y los ids se leen ahora, con la entidad todavía gestionada; la
      * escritura, después, en una transacción en la que esa entidad ya no está.
+     *
+     * LIMITACIÓN DE VOLUMEN, aceptada (docs/api-rest.md §22): no está acotado.
+     * Carga enteras todas las cuentas activas del área, inserta los avisos uno
+     * a uno y, aunque va tras el commit, corre en el hilo de la petición, que no
+     * responde hasta terminar. El área se compara con upper(), sin índice que
+     * lo sostenga. Si un área llegara a miles de usuarios, la salida sería un
+     * único INSERT ... SELECT, un índice sobre lower(area_geografica) y crear
+     * los avisos fuera del hilo de la petición.
      */
     public void notificarAlertaCercana(Alerta alerta) {
         String area = alerta.getUsuario().getAreaGeografica();
