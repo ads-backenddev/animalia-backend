@@ -185,6 +185,8 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
 | `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
 | `JPA_LOCK_TIMEOUT_MS` | `5000` | Espera máxima, en milisegundos, de un bloqueo de fila sobre una alerta. Al vencer, el cliente recibe `409 RECURSO_OCUPADO` en lugar de quedarse esperando |
+| `DB_POOL_MAX` | `20` | Conexiones del pool con PostgreSQL. Tiene que ser mayor que `TOMCAT_HILOS_MAX`, o la aplicación no arranca: cada aviso que se crea tras el commit necesita una segunda conexión. `application.properties` justifica el valor frente al límite de 100 conexiones del PostgreSQL de Railway |
+| `TOMCAT_HILOS_MAX` | `19` | Peticiones que Tomcat atiende a la vez; las demás esperan en cola. Siempre por debajo de `DB_POOL_MAX` |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
 | `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |

@@ -1231,6 +1231,11 @@ solo sitio (`trasConfirmar`):
 - **Un fallo creando el aviso no deshace la operación** ni le llega a quien la hizo como error: la
   alerta, el avistamiento, el cierre o la decisión del administrador ya están confirmados y valen por
   sí solos. El fallo queda en el log.
+- **Cada aviso ocupa una segunda conexión** con la base de datos mientras la petición conserva la
+  primera, que no se suelta hasta que terminan los avisos. Para que el pool no se agote con todas
+  las peticiones esperando su segunda conexión, Tomcat atiende a la vez una petición menos de las
+  conexiones que tiene el pool —19 hilos y 20 conexiones— y la aplicación no arranca si se
+  configuran al revés. Los valores se justifican en la nota de §22 sobre la revisión del feed.
 
 `NUEVO_MATCH` es la excepción, y a propósito: match, chat y aviso son una sola operación, y un match
 del que el destinatario nunca se entera no sirve de nada (§6).
@@ -2507,3 +2512,27 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   y la moderación y el match se esperan el uno al otro (§6). La tabla de §6 recoge el orden de
   bloqueo completo: la moderación de un avistamiento no toca nada más que esa fila, y la de una
   alerta borra además la fila de su foto, lo último que toma.
+- **El pool de conexiones podía agotarse con los avisos tras el commit.** Cada aviso pide una
+  segunda conexión mientras su petición conserva la primera (§12), y con el pool por defecto de
+  Hikari, de 10 conexiones, frente a los 200 hilos de Tomcat, diez peticiones a la vez en ese punto lo
+  bloqueaban: todas esperaban 30 s, sus avisos se perdían y el resto de la API se quedaba sin
+  conexiones. Ahora el pool tiene **20 conexiones** y Tomcat **19 hilos** (`DB_POOL_MAX`,
+  `TOMCAT_HILOS_MAX`): con menos hilos que conexiones siempre queda una libre o en manos de quien no
+  necesita otra, y la aplicación no arranca si se configuran al revés. Una prueba contra PostgreSQL
+  lo demuestra con un pool de 4: tres hilos a la vez en el punto que necesita dos conexiones crean
+  todos sus avisos; cuatro agotan el pool, esperan el tiempo máximo y pierden avisos.
+
+  **Por qué esos valores.** El PostgreSQL de Railway admite 100 conexiones: la plantilla parte de la
+  imagen oficial, que trae ese `max_connections`, y reserva 3 al superusuario. Con el volumen de
+  fotos, Railway no solapa dos despliegues ni admite réplicas (§21), así que hay un solo pool a la
+  vez: 20 deja casi 80 conexiones para la consola de datos de Railway, `psql` o `pg_dump`, y seguiría
+  cabiendo con el solape de un despliegue si las fotos salieran algún día del volumen. Más conexiones
+  no darían más rendimiento: la guía de dimensionado de HikariCP sitúa el tamaño útil en torno al
+  doble de los núcleos de la base de datos, y por encima de eso solo compiten entre sí. Y
+  19 peticiones a la vez sobran para los 100 usuarios simultáneos de RNF-02, porque una petición
+  tarda milisegundos y las que lleguen de más esperan en la cola de Tomcat, sin fallar.
+
+  **El precio**, que se acepta: la subida de una foto ocupa un hilo mientras llega el archivo, aunque
+  no ocupe una conexión, así que diecinueve subidas lentas a la vez retrasarían al resto de
+  peticiones. Con el uso previsto no es probable; si llegara a pasar, la salida es crear los avisos
+  en un ejecutor propio, fuera del hilo de la petición, que ya no necesitaría la segunda conexión.
