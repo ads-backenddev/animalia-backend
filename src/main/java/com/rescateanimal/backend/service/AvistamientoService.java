@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
 import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
@@ -25,7 +26,9 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,8 +40,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Lógica de registro de avistamientos y del feed de swipe del dueño de cada
- * alerta (RF-15, RF-21).
+ * Lógica de registro de avistamientos, del feed de swipe del dueño de cada
+ * alerta y de su lista de descartados (RF-15, RF-21).
  */
 @Slf4j
 @Service
@@ -49,6 +52,9 @@ public class AvistamientoService {
 
     /** El día del cupo es el de Madrid, como el de matches y el de fotos. */
     private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
+
+    /** Tope de tamaño de página de los descartados, el mismo que el del resto de listados. */
+    static final int MAXIMO_POR_PAGINA = 100;
 
     private final AvistamientoRepository avistamientoRepository;
     private final AlertaRepository alertaRepository;
@@ -189,6 +195,47 @@ public class AvistamientoService {
      */
     @Transactional(readOnly = true)
     public List<AvistamientoFeedResponse> feedDeLaAlerta(Long alertaId, Long usuarioId) {
+        exigirAlertaActivaDelDueno(alertaId, usuarioId);
+
+        return aTarjetas(avistamientoRepository.buscarPendientesDeRevisar(
+                alertaId,
+                usuarioId,
+                EstadoAvistamiento.VISIBLE,
+                TipoPublicacion.AVISTAMIENTO,
+                PageRequest.of(0, tamanyoFeed)));
+    }
+
+    /**
+     * Los avistamientos de una alerta que su dueño descartó
+     * (GET /api/alertas/{id}/avistamientos/descartados), para que recupere uno
+     * que descartó por error: hace match desde aquí con el mismo
+     * POST /api/matches, que convierte el descarte (MatchService.deslizar).
+     *
+     * Las comprobaciones son las del feed, en el mismo orden, y la tarjeta la
+     * misma, distancia incluida. Cambian el orden —el último descarte primero—
+     * y que va en páginas (ver AvistamientoRepository.buscarDescartados). El
+     * orden lo fija la consulta: el que pida el cliente no se aplica.
+     */
+    @Transactional(readOnly = true)
+    public PaginaResponse<AvistamientoFeedResponse> descartadosDeLaAlerta(Long alertaId, Long usuarioId,
+                                                                          Pageable paginacion) {
+        exigirAlertaActivaDelDueno(alertaId, usuarioId);
+
+        PageRequest peticion = PageRequest.of(
+                Math.max(0, paginacion.getPageNumber()),
+                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA));
+        Page<Avistamiento> pagina = avistamientoRepository.buscarDescartados(
+                alertaId, usuarioId, EstadoAvistamiento.VISIBLE, TipoPublicacion.AVISTAMIENTO, peticion);
+        return PaginaResponse.de(pagina, aTarjetas(pagina.getContent()));
+    }
+
+    /**
+     * La alerta tiene que existir (404), ser de este usuario (403) y seguir
+     * ACTIVA (400), en ese orden: el permiso va antes que el estado. Es lo que
+     * piden el feed y los descartados; sobre un animal que ya apareció no hay
+     * nada que revisar ni que recuperar.
+     */
+    private void exigirAlertaActivaDelDueno(Long alertaId, Long usuarioId) {
         Alerta alerta = alertaRepository.findById(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
         if (!alerta.getUsuario().getId().equals(usuarioId)) {
@@ -198,13 +245,6 @@ public class AvistamientoService {
             throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
                     "La alerta ya no está activa: no hay avistamientos que revisar");
         }
-
-        return aTarjetas(avistamientoRepository.buscarPendientesDeRevisar(
-                alertaId,
-                usuarioId,
-                EstadoAvistamiento.VISIBLE,
-                TipoPublicacion.AVISTAMIENTO,
-                PageRequest.of(0, tamanyoFeed)));
     }
 
     /** Las tarjetas de una tanda, con su distancia resuelta en una sola consulta. */

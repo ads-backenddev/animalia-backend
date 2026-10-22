@@ -8,6 +8,7 @@ import com.rescateanimal.backend.dto.response.MatchResponse;
 import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
+import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
@@ -377,6 +378,31 @@ class AlertaBloqueoTest {
         assertThat(jdbc.queryForObject("SELECT estado FROM avistamiento WHERE id = ?", String.class, avistamiento))
                 .isEqualTo("ELIMINADO");
         assertThat(deslizamientos()).as("el match confirmó antes que la moderación").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Dos conversiones a la vez del mismo descarte abren un solo chat: la segunda espera y recibe SWIPE_DUPLICADO")
+    void dosConversionesALaVez() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        matchService.deslizar(new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false),
+                duenyo.getId());
+        Retenida primera = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<MatchResponse> segunda = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(primera);
+        assertThat(segunda).as("la segunda espera a la fila del registro").isNotDone();
+
+        primera.confirmar();
+
+        assertThatThrownBy(() -> segunda.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PublicacionYaDeslizadaException.class);
+        assertThat(deslizamientos()).as("un solo registro").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id = ?)", Integer.class, duenyo.getId()))
+                .as("un solo chat").isEqualTo(1);
     }
 
     @Test

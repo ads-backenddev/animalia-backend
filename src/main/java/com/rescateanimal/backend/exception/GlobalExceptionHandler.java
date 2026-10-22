@@ -206,8 +206,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      * - rol insuficiente para el endpoint, lo que lanza @PreAuthorize;
      * - un recurso de otro usuario sin código propio, lo que lanzan los
      *   services: una alerta ajena al editarla, retirarla, cerrarla o pedir su
-     *   feed (AlertaService, AvistamientoService) y la notificación de otro al
-     *   marcarla leída (NotificacionService).
+     *   feed o sus descartados (AlertaService, AvistamientoService) y la
+     *   notificación de otro al marcarla leída (NotificacionService).
      * Los recursos ajenos que el cliente necesita distinguir tienen excepción
      * y código propios (ALERTA_AJENA, CHAT_AJENO, ANIMAL_AJENO).
      */

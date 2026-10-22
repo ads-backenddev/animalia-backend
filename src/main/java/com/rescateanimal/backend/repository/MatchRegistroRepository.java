@@ -4,11 +4,13 @@ import com.rescateanimal.backend.model.MatchRegistro;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Capa de datos de MatchRegistro. Sin lógica de negocio.
@@ -23,6 +25,40 @@ public interface MatchRegistroRepository extends JpaRepository<MatchRegistro, Lo
     boolean existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(Long usuarioId,
                                                                 Long publicacionId,
                                                                 TipoPublicacion tipoPublicacion);
+
+    /** El deslizamiento de este usuario sobre esta publicación, si lo hay. */
+    Optional<MatchRegistro> findByUsuarioIdAndPublicacionIdAndTipoPublicacion(Long usuarioId,
+                                                                              Long publicacionId,
+                                                                              TipoPublicacion tipoPublicacion);
+
+    /**
+     * Convierte el descarte de este usuario sobre esta publicación en un match,
+     * en una sola sentencia. Devuelve 1 si lo ha convertido y 0 si no había
+     * descarte que convertir: ya era un match, o lo acaba de convertir otra
+     * petición.
+     *
+     * Condicional y atómica, como los contadores de cupo, y por lo mismo: leer
+     * el registro, decidir y guardarlo dejaría a dos conversiones simultáneas
+     * del mismo descarte leer las dos "descarte" y abrir dos chats. Con el
+     * UPDATE, la segunda espera a la fila que tiene la primera y, cuando la
+     * primera confirma, ya no la encuentra en descarte. El registro sigue
+     * siendo el mismo —la restricción única no admitiría otro—: solo cambia de
+     * sentido.
+     *
+     * Sin clearAutomatically: vaciar el contexto de persistencia desprendería
+     * la alerta y el avistamiento que el service acaba de leer bloqueados.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            UPDATE MatchRegistro m SET m.interesado = true
+            WHERE m.usuario.id = :usuarioId
+              AND m.publicacionId = :publicacionId
+              AND m.tipoPublicacion = :tipoPublicacion
+              AND m.interesado = false
+            """)
+    int convertirDescarteEnMatch(@Param("usuarioId") Long usuarioId,
+                                 @Param("publicacionId") Long publicacionId,
+                                 @Param("tipoPublicacion") TipoPublicacion tipoPublicacion);
 
     /**
      * Matches del usuario, más recientes primero. Solo los positivos: los

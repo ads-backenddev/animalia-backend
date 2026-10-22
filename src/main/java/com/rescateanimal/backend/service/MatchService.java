@@ -123,9 +123,10 @@ public class MatchService {
      * 2. En un match de adopción, la fila del CONTADOR DIARIO del usuario, con
      *    el UPDATE condicional de consumirCuotaDiaria. Un avistamiento no la
      *    toca: no consume cuota.
-     * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, de CHAT y
-     *    de NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE
-     *    de comprobar la clave ajena.
+     * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, o el
+     *    UPDATE de su fila si se recupera un descarte, y los de CHAT y de
+     *    NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE de
+     *    comprobar la clave ajena.
      * Quién más toma esas filas, y por qué no hay ciclo:
      * - La ALERTA la bloquean en exclusiva editarla, retirarla, cerrarla y
      *   moderarla (FOR NO KEY UPDATE), y en compartido registrar un
@@ -143,20 +144,32 @@ public class MatchService {
      * match, y nadie espera en sentido contrario: quien tiene un avistamiento
      * bloqueado no pide después su alerta. Sin un par de bloqueos pedidos en
      * orden contrario no hay ciclo posible.
+     *
+     * UN DESCARTE DE AVISTAMIENTO SE PUEDE CONVERTIR EN MATCH, una vez: así
+     * recupera el dueño, desde su lista de descartados, el que descartó por
+     * error (AvistamientoService.descartadosDeLaAlerta). El registro existente
+     * cambia de sentido —la restricción única no admitiría otro— y lo demás es
+     * un match normal, en la misma transacción: chat y aviso. Las comprobaciones
+     * y los bloqueos son los mismos porque se hacen antes de mirar si ya había
+     * registro; el UPDATE de ese registro ocupa el lugar del INSERT. Ver
+     * recuperarDescarte.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
         Usuario autorDeLaPublicacion = resolverAutor(peticion, usuarioId);
+        boolean interesado = Boolean.TRUE.equals(peticion.getInteresado());
 
         if (matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
                 usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion())) {
+            if (interesado && admiteRecuperarDescarte(peticion.getTipoPublicacion())) {
+                return recuperarDescarte(peticion, usuarioId, autorDeLaPublicacion);
+            }
             throw new PublicacionYaDeslizadaException("Ya habías deslizado esta publicación");
         }
 
         Usuario usuario = usuarioRepository.findById(usuarioId)
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
 
-        boolean interesado = Boolean.TRUE.equals(peticion.getInteresado());
         if (interesado && consumeCuota(peticion.getTipoPublicacion())) {
             consumirCuotaDiaria(usuario);
         }
@@ -176,8 +189,45 @@ public class MatchService {
             return aMatchResponse(guardado, null);
         }
 
+        return abrirChatYAvisar(guardado, autorDeLaPublicacion, usuarioId);
+    }
+
+    /**
+     * Convierte en match el descarte que el usuario hizo de esta publicación, y
+     * abre el chat y avisa, en la transacción del deslizamiento.
+     *
+     * La conversión es un UPDATE condicional (convertirDescarteEnMatch): si dos
+     * peticiones del mismo dueño llegan a la vez, la segunda espera a la fila y
+     * ya no la encuentra en descarte, así que recibe el mismo 409 que repetir un
+     * match y solo se abre un chat.
+     *
+     * El registro se lee después del UPDATE y por primera vez en esta
+     * transacción —existsBy no lo carga—, así que llega ya convertido. Conserva
+     * su createdAt: es cuándo se deslizó, y el registro es el mismo.
+     */
+    private MatchResponse recuperarDescarte(CrearMatchRequest peticion, Long usuarioId,
+                                            Usuario autorDeLaPublicacion) {
+        if (matchRegistroRepository.convertirDescarteEnMatch(
+                usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion()) == 0) {
+            throw new PublicacionYaDeslizadaException("Ya habías hecho match con esta publicación");
+        }
+        MatchRegistro recuperado = matchRegistroRepository
+                .findByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                        usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion())
+                .orElseThrow(() -> new IllegalStateException("El descarte recién convertido no aparece"));
+
+        log.info("Usuario {} recupera su descarte {} de la publicación {} de tipo {}",
+                usuarioId, recuperado.getId(), peticion.getPublicacionId(), peticion.getTipoPublicacion());
+        return abrirChatYAvisar(recuperado, autorDeLaPublicacion, usuarioId);
+    }
+
+    /**
+     * Las otras dos partes de un match, comunes al nuevo y al recuperado de un
+     * descarte: el chat entre los dos extremos y el aviso al otro.
+     */
+    private MatchResponse abrirChatYAvisar(MatchRegistro match, Usuario autorDeLaPublicacion, Long usuarioId) {
         Chat chat = new Chat();
-        chat.setMatch(guardado);
+        chat.setMatch(match);
         Chat chatGuardado = chatRepository.save(chat);
 
         // Avisa a quien publicó lo deslizado de que alguien ha mostrado interés.
@@ -185,14 +235,13 @@ public class MatchService {
         // abrir, nunca quien deslizó: en los avistamientos es su autor y no el
         // dueño de la alerta —que es siempre quien desliza—, y en las
         // adopciones es la cuenta de la protectora dueña del animal.
-        notificacionService.notificarNuevoMatch(
-                autorDeLaPublicacion, guardado.getId(), usuarioId);
+        notificacionService.notificarNuevoMatch(autorDeLaPublicacion, match.getId(), usuarioId);
 
         log.info("Match {} del usuario {} sobre la publicación {} de tipo {}; chat {}",
-                guardado.getId(), usuarioId, peticion.getPublicacionId(),
-                peticion.getTipoPublicacion(), chatGuardado.getId());
+                match.getId(), usuarioId, match.getPublicacionId(),
+                match.getTipoPublicacion(), chatGuardado.getId());
 
-        return aMatchResponse(guardado, chatGuardado.getId());
+        return aMatchResponse(match, chatGuardado.getId());
     }
 
     /**
@@ -372,6 +421,20 @@ public class MatchService {
         return switch (tipo) {
             case ADOPCION -> true;
             case AVISTAMIENTO -> false;
+        };
+    }
+
+    /**
+     * Si un descarte de este tipo se puede convertir después en match: solo los
+     * de avistamiento, que el dueño recupera desde su lista de descartados. La
+     * adopción no tiene esa lista, y convertirlo por la API sin ella sería una
+     * funcionalidad que nadie ha pedido y que tendría que decidir qué hace con
+     * el cupo. Con un switch por lo mismo que consumeCuota.
+     */
+    private static boolean admiteRecuperarDescarte(TipoPublicacion tipo) {
+        return switch (tipo) {
+            case AVISTAMIENTO -> true;
+            case ADOPCION -> false;
         };
     }
 

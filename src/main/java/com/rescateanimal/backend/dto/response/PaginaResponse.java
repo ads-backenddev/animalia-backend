@@ -34,8 +34,17 @@ public class PaginaResponse<T> {
 
     /** Convierte una página de entidades en una página de DTOs. */
     public static <E, T> PaginaResponse<T> de(Page<E> pagina, Function<E, T> aDto) {
+        return de(pagina, pagina.getContent().stream().map(aDto).toList());
+    }
+
+    /**
+     * Una página cuyo contenido ya viene convertido: para cuando los DTOs se
+     * construyen de una vez para toda la página y no uno a uno, como las
+     * tarjetas de avistamientos, que piden sus distancias en una sola consulta.
+     */
+    public static <T> PaginaResponse<T> de(Page<?> pagina, List<T> contenido) {
         return PaginaResponse.<T>builder()
-                .content(pagina.getContent().stream().map(aDto).toList())
+                .content(contenido)
                 .page(pagina.getNumber())
                 .size(pagina.getSize())
                 .totalElements(pagina.getTotalElements())

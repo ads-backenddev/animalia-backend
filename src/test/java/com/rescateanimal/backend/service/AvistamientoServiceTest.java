@@ -4,6 +4,7 @@ import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
 import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
@@ -36,8 +37,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.access.AccessDeniedException;
 
 import java.time.LocalDate;
@@ -394,6 +398,66 @@ class AvistamientoServiceTest {
                     .isInstanceOf(OperacionNoPermitidaException.class)
                     .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
                             .isEqualTo("ALERTA_NO_ACTIVA"));
+        }
+    }
+
+    @Nested
+    @DisplayName("Descartados de una alerta, para su dueño")
+    class Descartados {
+
+        private static final Long ID_DUENO = 99L;
+
+        @Test
+        @DisplayName("Pide los VISIBLE que el dueño descartó, con el tope de página y sin el orden del cliente")
+        void pideLosFiltrosYLaPagina() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+            when(avistamientoRepository.buscarDescartados(any(), any(), any(), any(), any(Pageable.class)))
+                    .thenReturn(Page.empty());
+
+            avistamientoService.descartadosDeLaAlerta(ID_ALERTA, ID_DUENO,
+                    PageRequest.of(3, 500, Sort.by("createdAt")));
+
+            verify(avistamientoRepository).buscarDescartados(ID_ALERTA, ID_DUENO, EstadoAvistamiento.VISIBLE,
+                    TipoPublicacion.AVISTAMIENTO, PageRequest.of(3, AvistamientoService.MAXIMO_POR_PAGINA));
+        }
+
+        @Test
+        @DisplayName("Las tarjetas son las del feed, con su distancia, y la página lleva el total")
+        void tarjetasYPagina() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+            Avistamiento descartado = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            when(avistamientoRepository.buscarDescartados(any(), any(), any(), any(), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(descartado), PageRequest.of(0, 20), 21));
+            when(avistamientoRepository.distanciasALaAlerta(List.of(77L)))
+                    .thenReturn(List.of(filaDeDistancia(77L, 1110.4)));
+
+            PaginaResponse<AvistamientoFeedResponse> pagina =
+                    avistamientoService.descartadosDeLaAlerta(ID_ALERTA, ID_DUENO, PageRequest.of(0, 20));
+
+            assertThat(pagina.getContent()).extracting(AvistamientoFeedResponse::getId).containsExactly(77L);
+            assertThat(pagina.getContent().get(0).getDistanciaMetros()).isEqualTo(1110L);
+            assertThat(pagina.getContent().get(0).getAlertaEspecie()).isEqualTo("perro");
+            assertThat(pagina.getTotalElements()).isEqualTo(21);
+            assertThat(pagina.getTotalPages()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("Las comprobaciones del feed, en su orden: 404, 403 y 400")
+        void mismasComprobacionesQueElFeed() {
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> avistamientoService.descartadosDeLaAlerta(ID_ALERTA, ID_DUENO, PageRequest.of(0, 20)))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            // Cerrada y ajena: manda el permiso.
+            when(alertaRepository.findById(ID_ALERTA)).thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
+            assertThatThrownBy(() -> avistamientoService.descartadosDeLaAlerta(ID_ALERTA, ID_USUARIO, PageRequest.of(0, 20)))
+                    .isInstanceOf(AccessDeniedException.class);
+            assertThatThrownBy(() -> avistamientoService.descartadosDeLaAlerta(ID_ALERTA, ID_DUENO, PageRequest.of(0, 20)))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ALERTA_NO_ACTIVA"));
+
+            verify(avistamientoRepository, never()).buscarDescartados(any(), any(), any(), any(), any());
         }
     }
 

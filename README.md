@@ -302,7 +302,7 @@ avistamientos.
 | Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
 | Perfil, idioma y baja de cuenta con anonimización (RF-02, RF-18, RF-19) | Terminado |
 | Alertas: publicación, listado y detalle, edición, cierre, retirada por el dueño y moderación, mapa en tiempo real por STOMP, detección de duplicados y bloqueo de fila contra operaciones simultáneas (RF-03, RF-04, RF-11, RF-14, RF-25; §22) | Terminado |
-| Avistamientos y el feed de swipe del dueño de cada alerta, con la distancia a la alerta (RF-15, RF-21; §5, nota en §22) | Terminado, salvo `GET /api/avistamientos/{id}`, pendiente aceptado (§5, §20) |
+| Avistamientos y el feed de swipe del dueño de cada alerta, con la distancia a la alerta, y la lista de descartados para recuperar uno (RF-15, RF-21; §5, nota en §22) | Terminado, salvo `GET /api/avistamientos/{id}`, pendiente aceptado (§5, §20) |
 | Matches y descarte: sobre avistamientos solo el dueño de la alerta; límite diario solo para adopción (RF-08, RF-09, RF-15, RF-24; §6) | Terminado |
 | Chat en tiempo real (RF-12) | Terminado |
 | Adopción: publicación, catálogo con filtros, feed y confirmación (RF-07, RF-20, RF-22) | Terminado |

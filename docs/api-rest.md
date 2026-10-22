@@ -294,6 +294,7 @@ RF-03, RF-04, RF-14, RF-25.
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA` desde §22, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
 | `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14), y se avisa con `ALERTA_ENCONTRADA` a quienes tienen un chat por uno de sus avistamientos (§12). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada ni vuelve a avisar, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/alertas/{id}/avistamientos/feed` | **Feed de swipe del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que todavía no ha revisado —sin los que registró él, sin los que ya deslizó, en cualquier sentido, y sin los de cuentas bloqueadas o dadas de baja—, más recientes primero, en una tanda acotada. Cada tarjeta lleva `distanciaMetros` a la última ubicación de la alerta. Ver §5 | Propietario | — | Lista de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/alertas/{id}/avistamientos/descartados` | **Descartados del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que descartó, para recuperar uno haciendo match desde aquí con `POST /api/matches`. La misma tarjeta que el feed, el último descarte primero, en páginas (`page`/`size`, 20 por defecto y 100 como máximo). Ver §5 | Propietario | — | Página de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
 
 ### Estados de una alerta
 
@@ -437,6 +438,27 @@ Es información, no criterio: no afecta al orden.
 avistamientos de todas las alertas activas; con el match reservado al dueño, cada tarjeta de ese feed
 habría acabado en un `403`. Ningún cliente lo usaba, y hoy la ruta responde `404`.
 
+### Recuperar un avistamiento descartado
+
+Un descarte no es definitivo. `GET /api/alertas/{id}/avistamientos/descartados` devuelve al dueño los
+avistamientos de su alerta que descartó, y si se equivocó hace match desde ahí con el mismo
+`POST /api/matches` (§6): el registro del descarte pasa a ser un match, se abre el chat y se avisa al
+testigo. Para un animal perdido, el error caro no es el que se nota al momento, sino darse cuenta más
+tarde de que la foto sí era la suya; la lista cubre los dos casos, y la app puede ofrecer el
+«deshacer» del último descarte sobre ella, porque es el primero.
+
+Las comprobaciones son las del feed, en el mismo orden —`404`, `403 ACCESO_DENEGADO`,
+`400 ALERTA_NO_ACTIVA`—, y la tarjeta es la misma, `distanciaMetros` incluida. Qué entra:
+
+- **Lo que el dueño descartó**, y nada más: ni lo que hizo match ni lo que descartaron otros.
+- **Solo avistamientos `VISIBLE` y de cuentas activas**, como en el feed: sobre los demás el match se
+  rechazaría (§6).
+
+**El último descarte primero**, con el id del registro como desempate. Y **en páginas**, a diferencia
+del feed: el feed se vacía a medida que se revisa y basta una tanda, pero los descartes se acumulan y
+a los antiguos también hay que poder llegar. El orden lo fija el servidor; el que pida el cliente no
+se aplica.
+
 Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
 `AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero, con los
 datos públicos de su autor. Los `ELIMINADO` por el administrador no salen, y una alerta retirada o
@@ -497,6 +519,18 @@ cualquiera de los dos sentidos. Lo garantiza la restricción única
 `(usuario_id, publicacion_id, tipo_publicacion)`, que es la misma que permite a los feeds de
 `/api/alertas/{id}/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto.
 
+**Salvo una excepción: un descarte de avistamiento se puede convertir en match**, una vez (§5,
+*Recuperar un avistamiento descartado*). Si el dueño hace match (`interesado: true`) sobre un
+avistamiento que había descartado, el registro existente cambia de sentido —no se inserta otro: la
+restricción única lo impediría— y, en la misma transacción, se abre el chat y se avisa al testigo con
+`NUEVO_MATCH`, igual que en un match normal: las mismas comprobaciones, en el mismo orden, y los
+mismos bloqueos, con el `UPDATE` de ese registro en el lugar del `INSERT`. El `UPDATE` solo cambia un
+descarte, así que dos conversiones a la vez abren un solo chat y la segunda recibe
+`409 SWIPE_DUPLICADO`. La respuesta es `201`, con el `id` del registro de siempre y su `createdAt`
+original —cuándo se deslizó por primera vez—; el chat lleva la fecha de su apertura. Todo lo demás
+sigue siendo `409`: repetir un match, repetir un descarte, descartar lo que ya era match y cualquier
+repetición en adopción, que no tiene lista de descartados.
+
 **`400` con código `AVISTAMIENTO_ELIMINADO`** si el administrador retiró el avistamiento (RF-11), y
 **`400` con código `AUTOR_NO_DISPONIBLE`** si la cuenta de quien lo registró está bloqueada o se ha
 dado de baja (RF-11, RF-19), en los dos sentidos del deslizamiento. El feed ya no ofrece ninguno de
@@ -539,7 +573,7 @@ El orden de las comprobaciones importa, y es este:
 | 2 | `403 ALERTA_AJENA` | — |
 | 3 | `403 PUBLICACION_PROPIA` | `403 PUBLICACION_PROPIA` |
 | 4 | `400 AVISTAMIENTO_ELIMINADO`, `400 AUTOR_NO_DISPONIBLE`, `400 ALERTA_NO_ACTIVA` | `400 ANIMAL_NO_DISPONIBLE` |
-| 5 | `409 SWIPE_DUPLICADO` | `409 SWIPE_DUPLICADO` |
+| 5 | `409 SWIPE_DUPLICADO`, salvo el match sobre un descarte propio, que lo convierte | `409 SWIPE_DUPLICADO` |
 | 6 | — | `429 LIMITE_MATCHES_ALCANZADO`, solo con `interesado: true` |
 
 El permiso va antes que el estado: a quien desliza algo que no puede deslizar ya cerrado se le dice
@@ -549,8 +583,10 @@ repetido —que acaba en `409`— le habría gastado al usuario un match del dí
 **Orden de bloqueo.** En un avistamiento, la fila de su alerta y después la del avistamiento, las
 dos con `FOR SHARE`; en una adopción, la fila del contador diario del usuario con el `UPDATE`
 condicional. Después, en los dos, los `INSERT` de `MATCH_REGISTRO`, `CHAT` y `NOTIFICACION`, que
-sobre sus filas padre solo toman el `FOR KEY SHARE` de comprobar la clave ajena. Las demás
-operaciones que tocan esas filas son estas:
+sobre sus filas padre solo toman el `FOR KEY SHARE` de comprobar la clave ajena; al recuperar un
+descarte, el `UPDATE` de su fila de `MATCH_REGISTRO` ocupa el lugar del primer `INSERT`, y es esa
+fila la que hace esperar a una segunda conversión del mismo descarte. Las demás operaciones que tocan
+esas filas son estas:
 
 | Operación | Filas que bloquea, en orden |
 |---|---|
@@ -1394,7 +1430,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |
 | RF-13 | `POST /api/auth/login` |
 | RF-14 | `PUT /api/alertas/{id}/cerrar`, con el aviso `ALERTA_ENCONTRADA` |
-| RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/alertas/{id}/avistamientos/feed`, `GET /api/adopcion/feed` |
+| RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/alertas/{id}/avistamientos/feed`, `GET /api/alertas/{id}/avistamientos/descartados`, `GET /api/adopcion/feed` |
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
 | RF-18 | `PUT /api/usuarios/me/idioma` |
@@ -2606,6 +2642,12 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   segunda espera a la primera, sin posibilidad de interbloqueo. Y varios comentarios del código que se
   habían quedado atrás dicen ya lo que hace: los códigos de `POST /api/avistamientos`, qué lanza el
   `403 ACCESO_DENEGADO`, la ruta del feed y cómo se entregan las notificaciones.
+
+**Además, un descarte dejó de ser definitivo.** El dueño tiene la lista de los avistamientos que
+descartó (§5) y convierte uno en match con el mismo `POST /api/matches` (§6): el registro cambia de
+sentido —no se inserta otro—, el chat y el aviso se crean en la misma transacción, con las mismas
+comprobaciones y bloqueos que un match normal, y un `UPDATE` condicional impide que dos conversiones a
+la vez abran dos chats.
 
 **Limitaciones que deja la revisión, aceptadas:**
 

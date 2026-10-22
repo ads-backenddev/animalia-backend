@@ -1,6 +1,7 @@
 package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.MatchRegistro;
@@ -20,6 +21,7 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
@@ -32,9 +34,10 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * El feed de avistamientos de una alerta contra PostgreSQL de verdad:
- * AvistamientoRepository.buscarPendientesDeRevisar y distanciasALaAlerta, a
- * través de AvistamientoService.feedDeLaAlerta.
+ * El feed de avistamientos de una alerta, y la lista de los que su dueño
+ * descartó, contra PostgreSQL de verdad: buscarPendientesDeRevisar,
+ * buscarDescartados y distanciasALaAlerta de AvistamientoRepository, a través
+ * de AvistamientoService.
  *
  * Lo que solo se sabe ejecutándolo: que el NOT EXISTS sobre MATCH_REGISTRO
  * filtra por quién deslizó y por el tipo, y no solo por el id —la referencia es
@@ -150,10 +153,73 @@ class FeedDeLaAlertaQueryTest {
         assertThat(feed.get(1).getDistanciaMetros()).isNull();
     }
 
+    @Test
+    @DisplayName("Descartados: solo lo que descartó el dueño, VISIBLE y de cuentas activas, el último descarte primero")
+    void descartadosContenidoYOrden() {
+        long antiguo = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 1, true);
+        long reciente = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 2, true);
+        // El orden es el del descarte, no el del avistamiento: el más antiguo
+        // de los dos se descartó el último.
+        descartarHace(dueno, reciente, 3);
+        descartarHace(dueno, antiguo, 1);
+
+        long conMatch = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 3, true);
+        deslizar(dueno, conMatch, TipoPublicacion.AVISTAMIENTO, true);
+        long descartadoPorOtro = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 4, true);
+        deslizar(otro, descartadoPorOtro, TipoPublicacion.AVISTAMIENTO, false);
+        long retirado = avistamiento(alerta, testigo, EstadoAvistamiento.ELIMINADO, 5, true);
+        deslizar(dueno, retirado, TipoPublicacion.AVISTAMIENTO, false);
+        Usuario inactivo = usuario("Inactivo");
+        long deUnaCuentaInactiva = avistamiento(alerta, inactivo, EstadoAvistamiento.VISIBLE, 6, true);
+        deslizar(dueno, deUnaCuentaInactiva, TipoPublicacion.AVISTAMIENTO, false);
+        inactivo.setActivo(false);
+        usuarioRepository.save(inactivo);
+        long deOtraAlerta = avistamiento(alerta(dueno), testigo, EstadoAvistamiento.VISIBLE, 7, true);
+        deslizar(dueno, deOtraAlerta, TipoPublicacion.AVISTAMIENTO, false);
+        // La referencia es polimórfica: descartar el ANIMAL con el mismo id que
+        // este avistamiento no lo convierte en un avistamiento descartado.
+        long sinDescartar = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 8, true);
+        deslizar(dueno, sinDescartar, TipoPublicacion.ADOPCION, false);
+
+        assertThat(ids(descartados(0, 20).getContent())).containsExactly(antiguo, reciente);
+    }
+
+    @Test
+    @DisplayName("Descartados en páginas, con el total")
+    void descartadosEnPaginas() {
+        List<Long> enOrden = new ArrayList<>();
+        for (int horas = 1; horas <= 3; horas++) {
+            long descartado = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, horas, true);
+            descartarHace(dueno, descartado, horas);
+            enOrden.add(descartado);
+        }
+
+        PaginaResponse<AvistamientoFeedResponse> primera = descartados(0, 2);
+        PaginaResponse<AvistamientoFeedResponse> segunda = descartados(1, 2);
+
+        assertThat(ids(primera.getContent())).containsExactly(enOrden.get(0), enOrden.get(1));
+        assertThat(ids(segunda.getContent())).containsExactly(enOrden.get(2));
+        assertThat(primera.getTotalElements()).isEqualTo(3);
+        assertThat(primera.getTotalPages()).isEqualTo(2);
+        assertThat(segunda.isLast()).isTrue();
+    }
+
     // ---------------------------------------------------------------------
 
     private List<AvistamientoFeedResponse> feed() {
         return avistamientoService.feedDeLaAlerta(alerta.getId(), dueno.getId());
+    }
+
+    private PaginaResponse<AvistamientoFeedResponse> descartados(int pagina, int tamanyo) {
+        return avistamientoService.descartadosDeLaAlerta(alerta.getId(), dueno.getId(),
+                PageRequest.of(pagina, tamanyo));
+    }
+
+    /** Un descarte de quien, hecho hace tantas horas. */
+    private void descartarHace(Usuario quien, long avistamiento, int horas) {
+        long registro = deslizar(quien, avistamiento, TipoPublicacion.AVISTAMIENTO, false);
+        jdbc.update("UPDATE match_registro SET created_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minusSeconds(3_600L * horas)), registro);
     }
 
     private static List<Long> ids(List<AvistamientoFeedResponse> feed) {
@@ -201,13 +267,15 @@ class FeedDeLaAlertaQueryTest {
         return id;
     }
 
-    private void deslizar(Usuario quien, long publicacionId, TipoPublicacion tipo, boolean interesado) {
+    private long deslizar(Usuario quien, long publicacionId, TipoPublicacion tipo, boolean interesado) {
         MatchRegistro registro = new MatchRegistro();
         registro.setUsuario(quien);
         registro.setPublicacionId(publicacionId);
         registro.setTipoPublicacion(tipo);
         registro.setInteresado(interesado);
-        deslizamientos.add(matchRegistroRepository.save(registro).getId());
+        Long id = matchRegistroRepository.save(registro).getId();
+        deslizamientos.add(id);
+        return id;
     }
 
     private Point punto(double latitud) {

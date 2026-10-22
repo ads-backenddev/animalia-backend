@@ -4,6 +4,7 @@ import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -110,6 +111,55 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
                                                  @Param("estadoVisible") EstadoAvistamiento estadoVisible,
                                                  @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
                                                  Pageable pageable);
+
+    /**
+     * Los avistamientos de UNA alerta que su dueño descartó, para que pueda
+     * recuperar uno que descartó por error
+     * (GET /api/alertas/{id}/avistamientos/descartados).
+     *
+     * Los filtros del feed, salvo el del swipe, que aquí es el contrario: solo
+     * lo que el dueño descartó (interesado = false), ni lo que hizo match ni lo
+     * que descartaron otros. VISIBLE y de una cuenta activa por lo mismo que en
+     * el feed: sobre los demás el match se rechazaría. Los del propio dueño no
+     * pueden estar: nadie desliza lo suyo.
+     *
+     * Ordenados por cuándo se descartaron, el último primero, que es el que se
+     * quiere deshacer al momento; el id del registro desempata. Paginada, a
+     * diferencia del feed: el feed se vacía a medida que se revisa, pero los
+     * descartes se acumulan y a los antiguos también hay que poder llegar. El
+     * recuento va aparte porque Spring Data no sabe derivarlo de una consulta
+     * con JOIN FETCH.
+     *
+     * MATCH_REGISTRO se une por publicación Y tipo, nunca solo por el id: la
+     * referencia es polimórfica, y el descarte de un animal con el mismo id no
+     * es el de este avistamiento (ver MatchRegistro).
+     */
+    @Query(value = """
+            SELECT a FROM Avistamiento a
+            JOIN FETCH a.usuario u
+            JOIN MatchRegistro m ON m.publicacionId = a.id AND m.tipoPublicacion = :tipoPublicacion
+            WHERE a.alerta.id = :alertaId
+              AND a.estado = :estadoVisible
+              AND u.activo = true
+              AND m.usuario.id = :duenoId
+              AND m.interesado = false
+            ORDER BY m.createdAt DESC, m.id DESC
+            """,
+            countQuery = """
+            SELECT COUNT(a) FROM Avistamiento a
+            JOIN a.usuario u
+            JOIN MatchRegistro m ON m.publicacionId = a.id AND m.tipoPublicacion = :tipoPublicacion
+            WHERE a.alerta.id = :alertaId
+              AND a.estado = :estadoVisible
+              AND u.activo = true
+              AND m.usuario.id = :duenoId
+              AND m.interesado = false
+            """)
+    Page<Avistamiento> buscarDescartados(@Param("alertaId") Long alertaId,
+                                         @Param("duenoId") Long duenoId,
+                                         @Param("estadoVisible") EstadoAvistamiento estadoVisible,
+                                         @Param("tipoPublicacion") TipoPublicacion tipoPublicacion,
+                                         Pageable pageable);
 
     /**
      * Distancia en metros entre cada avistamiento y la última ubicación de su

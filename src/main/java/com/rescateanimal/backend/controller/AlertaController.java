@@ -174,4 +174,20 @@ public class AlertaController {
 
         return ResponseEntity.ok(avistamientoService.feedDeLaAlerta(id, usuario.getId()));
     }
+
+    /**
+     * GET /api/alertas/{id}/avistamientos/descartados -> 200, 400, 401, 403, 404
+     *
+     * Los avistamientos de su alerta que el dueño descartó, el último primero,
+     * para recuperar uno haciendo match desde aquí con POST /api/matches. Mismas
+     * comprobaciones que el feed. Paginada: page y size, 20 por defecto.
+     */
+    @GetMapping("/{id}/avistamientos/descartados")
+    public ResponseEntity<PaginaResponse<AvistamientoFeedResponse>> descartadosDeAvistamientos(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UsuarioPrincipal usuario,
+            @PageableDefault(size = 20) Pageable paginacion) {
+
+        return ResponseEntity.ok(avistamientoService.descartadosDeLaAlerta(id, usuario.getId(), paginacion));
+    }
 }

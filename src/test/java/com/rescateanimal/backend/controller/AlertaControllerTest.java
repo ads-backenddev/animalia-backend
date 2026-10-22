@@ -505,6 +505,66 @@ class AlertaControllerTest {
         }
     }
 
+    @Nested
+    @DisplayName("GET /api/alertas/{id}/avistamientos/descartados")
+    class DescartadosDelDueno {
+
+        @Test
+        @DisplayName("El dueño recibe una página de tarjetas, 20 por defecto, con su distancia")
+        void descartadosDevuelve200() throws Exception {
+            when(avistamientoService.descartadosDeLaAlerta(eq(42L), eq(ID_USUARIO), any()))
+                    .thenReturn(PaginaResponse.<AvistamientoFeedResponse>builder()
+                            .content(List.of(AvistamientoFeedResponse.builder()
+                                    .id(77L).alertaId(42L).distanciaMetros(300L).build()))
+                            .page(0).size(20).totalElements(1).totalPages(1).last(true)
+                            .build());
+
+            mockMvc.perform(get("/api/alertas/42/avistamientos/descartados"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content[0].id").value(77))
+                    .andExpect(jsonPath("$.content[0].distanciaMetros").value(300))
+                    .andExpect(jsonPath("$.totalElements").value(1));
+
+            verify(avistamientoService).descartadosDeLaAlerta(eq(42L), eq(ID_USUARIO),
+                    org.mockito.ArgumentMatchers.argThat(p -> p.getPageNumber() == 0 && p.getPageSize() == 20));
+        }
+
+        @Test
+        @DisplayName("Pasa al servicio la página que pide el cliente")
+        void pasaLaPagina() throws Exception {
+            when(avistamientoService.descartadosDeLaAlerta(any(), any(), any()))
+                    .thenReturn(PaginaResponse.<AvistamientoFeedResponse>builder().content(List.of()).build());
+
+            mockMvc.perform(get("/api/alertas/42/avistamientos/descartados").param("page", "2").param("size", "5"))
+                    .andExpect(status().isOk());
+
+            verify(avistamientoService).descartadosDeLaAlerta(eq(42L), eq(ID_USUARIO),
+                    org.mockito.ArgumentMatchers.argThat(p -> p.getPageNumber() == 2 && p.getPageSize() == 5));
+        }
+
+        @Test
+        @DisplayName("Alerta ajena -> 403, inexistente -> 404 y no activa -> 400, como el feed")
+        void mismosRechazosQueElFeed() throws Exception {
+            when(avistamientoService.descartadosDeLaAlerta(eq(42L), eq(ID_USUARIO), any()))
+                    .thenThrow(new AccessDeniedException("No es tu alerta"));
+            mockMvc.perform(get("/api/alertas/42/avistamientos/descartados"))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.codigo").value("ACCESO_DENEGADO"));
+
+            when(avistamientoService.descartadosDeLaAlerta(eq(999L), eq(ID_USUARIO), any()))
+                    .thenThrow(new ResourceNotFoundException("La alerta no existe"));
+            mockMvc.perform(get("/api/alertas/999/avistamientos/descartados"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
+
+            when(avistamientoService.descartadosDeLaAlerta(eq(43L), eq(ID_USUARIO), any()))
+                    .thenThrow(new OperacionNoPermitidaException("ALERTA_NO_ACTIVA", "Ya no está activa"));
+            mockMvc.perform(get("/api/alertas/43/avistamientos/descartados"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.codigo").value("ALERTA_NO_ACTIVA"));
+        }
+    }
+
     private static String cuerpoValido() {
         return cuerpo("perro", Instant.now().minus(2, ChronoUnit.HOURS), "40.4168", "-3.7038");
     }

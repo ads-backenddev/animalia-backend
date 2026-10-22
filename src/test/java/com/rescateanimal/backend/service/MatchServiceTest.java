@@ -334,6 +334,93 @@ class MatchServiceTest {
         }
     }
 
+    /**
+     * El dueño recupera, desde su lista de descartados, un avistamiento que
+     * descartó: el match convierte el registro que ya había. Que el UPDATE
+     * condicional sea atómico con dos a la vez lo comprueba AlertaBloqueoTest.
+     */
+    @Nested
+    @DisplayName("Recuperar un descarte")
+    class RecuperarUnDescarte {
+
+        @BeforeEach
+        void yaLoHabiaDescartado() {
+            when(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                    ID_USUARIO, ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO)).thenReturn(true);
+            when(matchRegistroRepository.convertirDescarteEnMatch(
+                    ID_USUARIO, ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO)).thenReturn(1);
+            when(matchRegistroRepository.findByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                    ID_USUARIO, ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO)).thenReturn(Optional.of(registro(100L)));
+        }
+
+        @Test
+        @DisplayName("El match convierte el descarte en el mismo registro, abre el chat y avisa al testigo")
+        void elMatchConvierteElDescarte() {
+            MatchResponse respuesta = matchService.deslizar(peticion(true), ID_USUARIO);
+
+            assertThat(respuesta.getId()).isEqualTo(100L);
+            assertThat(respuesta.getInteresado()).isTrue();
+            assertThat(respuesta.getChatId()).isEqualTo(200L);
+            // El mismo registro: insertar otro chocaría con la restricción única.
+            verify(matchRegistroRepository, never()).save(any());
+            ArgumentCaptor<Chat> chat = ArgumentCaptor.forClass(Chat.class);
+            verify(chatRepository).save(chat.capture());
+            assertThat(chat.getValue().getMatch().getId()).isEqualTo(100L);
+            verify(notificacionService).notificarNuevoMatch(
+                    argThatTieneId(ID_AUTOR_AVISTAMIENTO), org.mockito.ArgumentMatchers.eq(100L),
+                    org.mockito.ArgumentMatchers.eq(ID_USUARIO));
+            // Como cualquier match sobre un avistamiento, no gasta cupo.
+            verifyNoInteractions(limiteMatchDiarioRepository);
+        }
+
+        @Test
+        @DisplayName("Si ya era un match, o lo acaba de convertir otra petición, 409 y ningún chat")
+        void sinDescarteQueConvertir409() {
+            when(matchRegistroRepository.convertirDescarteEnMatch(
+                    ID_USUARIO, ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO)).thenReturn(0);
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(PublicacionYaDeslizadaException.class);
+
+            verifyNoInteractions(chatRepository, notificacionService);
+        }
+
+        @Test
+        @DisplayName("Un descarte repetido sigue siendo 409, sin intentar convertir nada")
+        void unDescarteRepetidoNoConvierte() {
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO))
+                    .isInstanceOf(PublicacionYaDeslizadaException.class);
+
+            verify(matchRegistroRepository, never()).convertirDescarteEnMatch(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("En adopción un descarte no se convierte: 409, sin tocar el registro ni el cupo")
+        void enAdopcionNoSeConvierte() {
+            when(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                    ID_USUARIO, ID_ANIMAL, TipoPublicacion.ADOPCION)).thenReturn(true);
+
+            assertThatThrownBy(() -> matchService.deslizar(peticionDeAdopcion(true), ID_USUARIO))
+                    .isInstanceOf(PublicacionYaDeslizadaException.class);
+
+            verify(matchRegistroRepository, never()).convertirDescarteEnMatch(any(), any(), any());
+            verifyNoInteractions(limiteMatchDiarioRepository);
+        }
+
+        @Test
+        @DisplayName("Pasa las comprobaciones de un match normal: con la alerta cerrada, 400 antes de convertir")
+        void lasComprobacionesVanAntes() {
+            cerrarLaAlerta();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("ALERTA_NO_ACTIVA"));
+
+            verify(matchRegistroRepository, never()).convertirDescarteEnMatch(any(), any(), any());
+        }
+    }
+
     /** El cupo diario es de la adopción: estas pruebas deslizan animales. */
     @Nested
     @DisplayName("Límite diario (RF-24)")

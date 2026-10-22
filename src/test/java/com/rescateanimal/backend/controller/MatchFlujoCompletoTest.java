@@ -471,6 +471,56 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("El dueño recupera un avistamiento que descartó: sale en sus descartados y el match convierte el registro, abre el chat y avisa")
+    void recuperarUnDescarte() throws Exception {
+        long descartado = avistamientos.get(0);
+        HttpResponse<String> descarte = deslizar(tokenDuenyo, descartado, false);
+        assertThat(descarte.statusCode()).isEqualTo(201);
+        long registro = numero(descarte.body(), "$.id");
+
+        // 1. Sale en sus descartados, con la tarjeta del feed, y ya no en el feed.
+        HttpResponse<String> lista = descartados(tokenDuenyo);
+        assertThat(lista.statusCode()).isEqualTo(200);
+        assertThat(JsonPath.<List<Integer>>read(lista.body(), "$.content[*].id")).containsExactly((int) descartado);
+        assertThat(numero(lista.body(), "$.totalElements")).isEqualTo(1);
+        assertThat(JsonPath.<Object>read(lista.body(), "$.content[0].distanciaMetros")).isNotNull();
+        assertThat(idsDelFeed(tokenDuenyo)).doesNotContain(descartado);
+
+        // Nadie más tiene esa lista.
+        assertThat(descartados(tokenCurioso).statusCode()).isEqualTo(403);
+        assertThat(descartados(tokenTestigo).statusCode()).isEqualTo(403);
+        assertThat(descartados(null).statusCode()).isEqualTo(401);
+        assertThat(enviar("GET", "/api/alertas/999999999/avistamientos/descartados", tokenDuenyo, null)
+                .statusCode()).isEqualTo(404);
+
+        // 2. El match lo convierte: el mismo registro, con chat y aviso al testigo.
+        HttpResponse<String> match = deslizar(tokenDuenyo, descartado, true);
+        assertThat(match.statusCode()).isEqualTo(201);
+        assertThat(numero(match.body(), "$.id")).isEqualTo(registro);
+        assertThat(JsonPath.<Boolean>read(match.body(), "$.interesado")).isTrue();
+        assertThat(chatRepository.findById(numero(match.body(), "$.chatId"))).isPresent();
+        assertThat(matchRegistroRepository.findAll().stream()
+                .filter(m -> m.getUsuario().getId().equals(idDuenyo) && m.getPublicacionId().equals(descartado)))
+                .singleElement()
+                .satisfies(m -> assertThat(m.getInteresado()).isTrue());
+        assertThat(notificacionesDeMatch(idTestigo)).hasSize(1);
+
+        // 3. Sale de los descartados, y todo lo demás sigue siendo 409.
+        assertThat(numero(descartados(tokenDuenyo).body(), "$.totalElements")).isZero();
+        HttpResponse<String> otraVez = deslizar(tokenDuenyo, descartado, true);
+        assertThat(otraVez.statusCode()).isEqualTo(409);
+        assertThat(JsonPath.<String>read(otraVez.body(), "$.codigo")).isEqualTo("SWIPE_DUPLICADO");
+        assertThat(deslizar(tokenDuenyo, descartado, false).statusCode()).isEqualTo(409);
+
+        // 4. Con la alerta cerrada, la lista ya no se sirve.
+        assertThat(enviar("PUT", "/api/alertas/" + alertaId + "/cerrar", tokenDuenyo, null)
+                .statusCode()).isEqualTo(200);
+        HttpResponse<String> cerrada = descartados(tokenDuenyo);
+        assertThat(cerrada.statusCode()).isEqualTo(400);
+        assertThat(JsonPath.<String>read(cerrada.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
+    }
+
+    @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);
@@ -549,6 +599,11 @@ class MatchFlujoCompletoTest {
                         && n.getTipo() == TipoNotificacion.NUEVO_AVISTAMIENTO
                         && Long.valueOf(alerta).equals(n.getReferenciaId()))
                 .count();
+    }
+
+    /** Los descartados de la alerta del escenario, pedidos con este token. */
+    private HttpResponse<String> descartados(String token) throws Exception {
+        return enviar("GET", "/api/alertas/" + alertaId + "/avistamientos/descartados", token, null);
     }
 
     /** El feed de la alerta del escenario, pedido con este token. */
