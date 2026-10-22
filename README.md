@@ -287,22 +287,23 @@ git merge --no-ff feature/publicar-alertas
 ## Estado actual
 
 El backend está construido salvo lo que señala la columna de estado. Quedan tres piezas sin construir:
-RF-05 (notificaciones y *push*), los dos endpoints de contacto de RF-06 y `GET /api/avistamientos/{id}`.
+la entrega en vivo y la *push* de RF-05, los dos endpoints de contacto de RF-06 y
+`GET /api/avistamientos/{id}`.
 Las tres están descritas en `docs/api-rest.md`, §20 («El SRS no queda cubierto al cien por cien» y
 «Trabajo futuro»); la tercera es un pendiente aceptado, porque el detalle de una alerta ya devuelve sus
 avistamientos.
 
 | Bloque | Estado |
 |---|---|
-| Estructura por capas, 15 entidades JPA, esquema versionado con Flyway (`V1`–`V16`), `JPA_DDL_AUTO=validate`, Docker, contrato en `docs/api-rest.md` | Terminado |
+| Estructura por capas, 15 entidades JPA, esquema versionado con Flyway (`V1`–`V17`), `JPA_DDL_AUTO=validate`, Docker, contrato en `docs/api-rest.md` | Terminado |
 | Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
 | Perfil, idioma y baja de cuenta con anonimización (RF-02, RF-18, RF-19) | Terminado |
 | Alertas: publicación, listado y detalle, edición, cierre, retirada por el dueño y moderación, mapa en tiempo real por STOMP, detección de duplicados y bloqueo de fila contra operaciones simultáneas (RF-03, RF-04, RF-11, RF-14, RF-25; §22) | Terminado |
-| Avistamientos y su feed de swipe (RF-21) | Terminado, salvo `GET /api/avistamientos/{id}`, pendiente aceptado (§5, §20) |
-| Matches, descarte y límite diario (RF-08, RF-09, RF-15, RF-24) | Terminado |
+| Avistamientos y el feed de swipe del dueño de cada alerta, con la distancia a la alerta (RF-15, RF-21; §5, nota en §22) | Terminado, salvo `GET /api/avistamientos/{id}`, pendiente aceptado (§5, §20) |
+| Matches y descarte: sobre avistamientos solo el dueño de la alerta; límite diario solo para adopción (RF-08, RF-09, RF-15, RF-24; §6) | Terminado |
 | Chat en tiempo real (RF-12) | Terminado |
 | Adopción: publicación, catálogo con filtros, feed y confirmación (RF-07, RF-20, RF-22) | Terminado |
 | Protectoras: directorio, ficha, valoraciones y panel (RF-06, RF-10, RF-23) | Terminado, **salvo los dos endpoints de contacto** de RF-06 (§9) |
 | Reportes y administración (RF-11, RF-26) | Terminado |
 | Subida de fotos: almacenamiento propio, borrado en la baja y al moderar una alerta, limpieza diaria y cupo (§21, §22) | Terminado |
-| Notificaciones (RF-05) | **Solo persistencia**: no hay `GET /api/notificaciones` ni entrega en vivo ni *push*, que se diseñará con la app Android delante (§12, §20) |
+| Notificaciones (RF-05): creadas tras el commit, listado y marcado como leídas (`GET /api/notificaciones`, `PATCH /{id}/leida`) | Terminado **salvo la entrega en vivo y la *push***, que se diseñará con la app Android delante (§12, §20) |
