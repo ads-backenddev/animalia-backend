@@ -195,6 +195,7 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
 | `APP_FOTOS_URL_PUBLICA` | `http://localhost:8080/fotos` | Base de las URLs de las fotos. **Obligatoria y `https` en producción** |
 | `FOTOS_LIMITE_DIARIO` | `25` | Subidas de fotos por usuario y día |
+| `AVISTAMIENTOS_LIMITE_DIARIO_POR_ALERTA` | `5` | Avistamientos que un usuario puede registrar al día en una misma alerta |
 | `FOTOS_LIMPIEZA_CRON` | `0 30 4 * * *` | Hora de la limpieza diaria de fotos sin uso (Europe/Madrid); `-` la desactiva |
 
 En el perfil `prod` los secretos **no tienen valor por defecto**: si falta una variable, la

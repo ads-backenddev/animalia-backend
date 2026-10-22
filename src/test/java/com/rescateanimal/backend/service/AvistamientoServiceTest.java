@@ -5,6 +5,7 @@ import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.exception.FotoUrlNoValidaException;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -16,6 +17,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
+import com.rescateanimal.backend.repository.LimiteAvistamientoDiarioRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +31,7 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.PrecisionModel;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -37,15 +40,21 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -56,6 +65,9 @@ import static org.mockito.Mockito.when;
 class AvistamientoServiceTest {
 
     private static final int TAMANYO_FEED = 30;
+    private static final int LIMITE_POR_ALERTA = 5;
+    /** El día del cupo es el de Madrid; ver AvistamientoService.ZONA_CUPO. */
+    private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
     private static final Long ID_USUARIO = 7L;
     private static final Long ID_ALERTA = 55L;
     private static final double LAT = 40.4168;
@@ -71,6 +83,8 @@ class AvistamientoServiceTest {
     private UsuarioRepository usuarioRepository;
     @Mock
     private NotificacionService notificacionService;
+    @Mock
+    private LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository;
 
     private AvistamientoService avistamientoService;
 
@@ -78,8 +92,11 @@ class AvistamientoServiceTest {
     void prepararServicio() {
         avistamientoService = new AvistamientoService(
                 avistamientoRepository, alertaRepository, usuarioRepository, fotoService,
-                notificacionService, TAMANYO_FEED);
+                notificacionService, limiteAvistamientoDiarioRepository, TAMANYO_FEED, LIMITE_POR_ALERTA);
 
+        // Por defecto queda cupo.
+        when(limiteAvistamientoDiarioRepository.incrementarSiHayCupo(anyLong(), anyLong(), any(), anyInt()))
+                .thenReturn(1);
         when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario(ID_USUARIO)));
         when(avistamientoRepository.save(any(Avistamiento.class))).thenAnswer(i -> {
             Avistamiento a = i.getArgument(0);
@@ -204,6 +221,81 @@ class AvistamientoServiceTest {
 
             assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
                     .isInstanceOf(OperacionNoPermitidaException.class);
+        }
+    }
+
+    /**
+     * Cupo diario por usuario y alerta. Las consultas nativas del contador se
+     * simulan aquí; que su SQL sea válido, y atómico con dos a la vez, lo
+     * comprueban MatchFlujoCompletoTest y AlertaBloqueoTest contra PostgreSQL.
+     */
+    @Nested
+    @DisplayName("Cupo diario por alerta")
+    class Cupo {
+
+        @Test
+        @DisplayName("Cada avistamiento consume el cupo del autor en esa alerta, del día de Madrid, antes del INSERT")
+        void consumeElCupoAntesDeGuardar() {
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+
+            avistamientoService.registrar(peticion(), ID_USUARIO);
+
+            LocalDate hoy = LocalDate.now(ZONA_CUPO);
+            InOrder orden = inOrder(limiteAvistamientoDiarioRepository, avistamientoRepository);
+            orden.verify(limiteAvistamientoDiarioRepository).crearContadorSiNoExiste(ID_USUARIO, ID_ALERTA, hoy);
+            orden.verify(limiteAvistamientoDiarioRepository)
+                    .incrementarSiHayCupo(ID_USUARIO, ID_ALERTA, hoy, LIMITE_POR_ALERTA);
+            orden.verify(avistamientoRepository).save(any());
+        }
+
+        @Test
+        @DisplayName("Sin cupo -> 429 con el límite y la hora de reinicio, sin registro ni aviso al dueño")
+        void sinCupoSeRechaza() {
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+            when(limiteAvistamientoDiarioRepository.incrementarSiHayCupo(anyLong(), anyLong(), any(), anyInt()))
+                    .thenReturn(0);
+
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(LimiteAvistamientosAlcanzadoException.class)
+                    .satisfies(e -> {
+                        LimiteAvistamientosAlcanzadoException ex = (LimiteAvistamientosAlcanzadoException) e;
+                        assertThat(ex.getLimiteDiario()).isEqualTo(LIMITE_POR_ALERTA);
+                        assertThat(ex.getReiniciaEn())
+                                .isEqualTo(LocalDate.now(ZONA_CUPO).plusDays(1).atStartOfDay());
+                        assertThat(ex.getMessage()).contains("esta alerta", "mañana");
+                    });
+
+            verify(avistamientoRepository, never()).save(any());
+            verify(notificacionService, never()).avisarNuevoAvistamiento(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Una alerta inexistente o ya cerrada no consume cupo: se comprueba antes")
+        void laAlertaSeCompruebaAntes() {
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA)).thenReturn(Optional.empty());
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(ResourceNotFoundException.class);
+
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ENCONTRADA)));
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class);
+
+            verifyNoInteractions(limiteAvistamientoDiarioRepository);
+        }
+
+        @Test
+        @DisplayName("Una foto ajena tampoco lo consume")
+        void laFotoSeCompruebaAntes() {
+            doThrow(new FotoUrlNoValidaException("ajena"))
+                    .when(fotoService).exigirPropia("https://fotos/avistamiento.jpg", ID_USUARIO);
+
+            assertThatThrownBy(() -> avistamientoService.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(FotoUrlNoValidaException.class);
+
+            verifyNoInteractions(limiteAvistamientoDiarioRepository);
         }
     }
 

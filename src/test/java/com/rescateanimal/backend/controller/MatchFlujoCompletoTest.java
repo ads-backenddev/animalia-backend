@@ -15,6 +15,7 @@ import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteAvistamientoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
@@ -106,6 +107,8 @@ class MatchFlujoCompletoTest {
     @Autowired
     private LimiteMatchDiarioRepository limiteMatchDiarioRepository;
     @Autowired
+    private LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository;
+    @Autowired
     private ProtectoraRepository protectoraRepository;
     @Autowired
     private AnimalAdopcionRepository animalAdopcionRepository;
@@ -128,6 +131,8 @@ class MatchFlujoCompletoTest {
 
     private long alertaId;
     private final List<Long> avistamientos = new ArrayList<>();
+    /** Las que publique alguna prueba además de la del escenario. */
+    private final List<Long> otrasAlertas = new ArrayList<>();
 
     /** Solo para las pruebas que moderan: quien retira un avistamiento. */
     private Long idAdministrador;
@@ -191,8 +196,13 @@ class MatchFlujoCompletoTest {
         limiteMatchDiarioRepository.deleteAll(limiteMatchDiarioRepository.findAll().stream()
                 .filter(l -> usuarios.contains(l.getUsuario().getId()))
                 .toList());
+        // Antes que las alertas y los usuarios: el cupo de avistamientos apunta a los dos.
+        limiteAvistamientoDiarioRepository.deleteAll(limiteAvistamientoDiarioRepository.findAll().stream()
+                .filter(l -> usuarios.contains(l.getUsuario().getId()))
+                .toList());
         avistamientoRepository.deleteAllById(avistamientos);
         alertaRepository.deleteById(alertaId);
+        alertaRepository.deleteAllById(otrasAlertas);
         animalAdopcionRepository.deleteAllById(animales);
         if (protectora != null) {
             protectoraRepository.delete(protectora);
@@ -397,6 +407,38 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("Cada usuario registra como mucho 5 avistamientos al día en una misma alerta; otro usuario, u otra alerta, tienen el suyo")
+    void cupoDiarioDeAvistamientosPorAlerta() throws Exception {
+        // 1. El escenario ya tiene cuatro del testigo en esta alerta: el quinto entra.
+        assertThat(avistar(tokenTestigo, alertaId).statusCode()).isEqualTo(201);
+
+        // 2. El sexto no: 429 con el límite y la hora de reinicio.
+        HttpResponse<String> sexto = avistar(tokenTestigo, alertaId);
+        assertThat(sexto.statusCode()).isEqualTo(429);
+        assertThat(JsonPath.<String>read(sexto.body(), "$.codigo")).isEqualTo("LIMITE_AVISTAMIENTOS_ALCANZADO");
+        assertThat(numero(sexto.body(), "$.limiteDiario")).isEqualTo(5);
+        assertThat(JsonPath.<String>read(sexto.body(), "$.reiniciaEn"))
+                .startsWith(LocalDate.now(ZONA_CUOTA).plusDays(1).toString());
+
+        // Sin rastro: el dueño tiene un aviso por cada uno de los cinco, no seis.
+        assertThat(avisosDeAvistamiento(alertaId)).isEqualTo(5);
+
+        // 3. Otro usuario en la misma alerta tiene su propio cupo.
+        assertThat(avistar(tokenCurioso, alertaId).statusCode()).isEqualTo(201);
+
+        // 4. Y el testigo, en otra alerta, también. Otra especie, para que no
+        //    sea un duplicado de la primera (RF-25).
+        HttpResponse<String> otra = enviar("POST", "/api/alertas", tokenDuenyo, """
+                {"descripcion":"Gata gris","especie":"gato-%s","fechaAvistamiento":"%s",
+                 "ubicacion":{"latitud":40.416775,"longitud":-3.703790}}
+                """.formatted(sufijo, ahoraMenos(1)));
+        assertThat(otra.statusCode()).isEqualTo(201);
+        long otraAlerta = numero(otra.body(), "$.id");
+        otrasAlertas.add(otraAlerta);
+        assertThat(avistar(tokenTestigo, otraAlerta).statusCode()).isEqualTo(201);
+    }
+
+    @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);
@@ -454,6 +496,27 @@ class MatchFlujoCompletoTest {
                 .filter(n -> n.getUsuario().getId().equals(usuarioId)
                         && n.getTipo() == TipoNotificacion.NUEVO_MATCH)
                 .toList();
+    }
+
+    /** Registra un avistamiento con una foto recién subida por quien lo registra. */
+    private HttpResponse<String> avistar(String token, long alerta) throws Exception {
+        HttpResponse<String> respuesta = enviar("POST", "/api/avistamientos", token, """
+                {"alertaId":%d,"descripcion":"Otra vez por el parque","fotoUrl":"%s",
+                 "ubicacion":{"latitud":40.4170,"longitud":-3.7040}}
+                """.formatted(alerta, FotosDePrueba.subir(http, puerto, token)));
+        if (respuesta.statusCode() == 201) {
+            avistamientos.add(numero(respuesta.body(), "$.id"));
+        }
+        return respuesta;
+    }
+
+    /** Los NUEVO_AVISTAMIENTO que ha recibido el dueño por esta alerta. */
+    private long avisosDeAvistamiento(long alerta) {
+        return notificacionRepository.findAll().stream()
+                .filter(n -> n.getUsuario().getId().equals(idDuenyo)
+                        && n.getTipo() == TipoNotificacion.NUEVO_AVISTAMIENTO
+                        && Long.valueOf(alerta).equals(n.getReferenciaId()))
+                .count();
     }
 
     /** El feed de la alerta del escenario, pedido con este token. */

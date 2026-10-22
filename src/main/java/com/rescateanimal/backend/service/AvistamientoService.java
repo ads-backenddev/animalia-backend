@@ -6,6 +6,7 @@ import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
@@ -16,6 +17,7 @@ import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
+import com.rescateanimal.backend.repository.LimiteAvistamientoDiarioRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
@@ -28,6 +30,8 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,13 +47,18 @@ public class AvistamientoService {
     /** SRID 4326: coordenadas geográficas WGS84, las mismas que da el GPS. */
     private static final int SRID_WGS84 = 4326;
 
+    /** El día del cupo es el de Madrid, como el de matches y el de fotos. */
+    private static final ZoneId ZONA_CUPO = ZoneId.of("Europe/Madrid");
+
     private final AvistamientoRepository avistamientoRepository;
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final FotoService fotoService;
     private final NotificacionService notificacionService;
+    private final LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository;
 
     private final int tamanyoFeed;
+    private final int limiteDiarioPorAlerta;
 
     private final GeometryFactory geometryFactory =
             new GeometryFactory(new PrecisionModel(), SRID_WGS84);
@@ -59,13 +68,17 @@ public class AvistamientoService {
                                UsuarioRepository usuarioRepository,
                                FotoService fotoService,
                                NotificacionService notificacionService,
-                               @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed) {
+                               LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository,
+                               @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed,
+                               @Value("${app.avistamientos.limite-diario-por-alerta}") int limiteDiarioPorAlerta) {
         this.avistamientoRepository = avistamientoRepository;
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.fotoService = fotoService;
         this.notificacionService = notificacionService;
+        this.limiteAvistamientoDiarioRepository = limiteAvistamientoDiarioRepository;
         this.tamanyoFeed = tamanyoFeed;
+        this.limiteDiarioPorAlerta = limiteDiarioPorAlerta;
     }
 
     // ---------------------------------------------------------------------
@@ -84,6 +97,22 @@ public class AvistamientoService {
      * el INSERT dejaba un avistamiento colgando de una alerta terminada. Es
      * compartido para que los avistamientos de una misma alerta no se esperen
      * entre sí (ver AlertaRepository.bloquearParaAvistar).
+     *
+     * HAY UN CUPO DIARIO POR USUARIO Y ALERTA, cinco por defecto
+     * (app.avistamientos.limite-diario-por-alerta), con el mismo mecanismo
+     * atómico y el mismo día natural de Europe/Madrid que los de matches y
+     * fotos. Sin él, un
+     * usuario podía enterrar el feed del dueño —y llenarle de avisos— con
+     * cientos de avistamientos falsos. Se consume después de saber que la
+     * alerta existe y sigue ACTIVA, porque la fila del cupo apunta a ella, y
+     * antes del INSERT; como va en la misma transacción, un registro que acaba
+     * fallando deshace su consumo.
+     *
+     * ORDEN DE BLOQUEO: la alerta (FOR SHARE) y después la fila del cupo de este
+     * usuario en esta alerta, con el UPDATE condicional. Los avistamientos de
+     * personas distintas sobre una misma alerta siguen sin esperarse —cada una
+     * tiene su fila—; dos de la misma persona a la vez sí se esperan en la suya,
+     * que es justo lo que impide pasarse del límite.
      */
     @Transactional
     public AvistamientoResponse registrar(CrearAvistamientoRequest peticion, Long autorId) {
@@ -98,6 +127,8 @@ public class AvistamientoService {
             throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
                     "La alerta ya no está activa: no admite avistamientos nuevos");
         }
+
+        consumirCupo(autorId, alerta.getId());
 
         Usuario autor = usuarioRepository.findById(autorId)
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
@@ -193,6 +224,23 @@ public class AvistamientoService {
     // ---------------------------------------------------------------------
     // Apoyo
     // ---------------------------------------------------------------------
+
+    /**
+     * Suma un avistamiento al cupo del día de este usuario en esta alerta, o
+     * falla con 429. Las dos sentencias son atómicas en la base de datos: ver
+     * LimiteAvistamientoDiarioRepository.
+     */
+    private void consumirCupo(Long autorId, Long alertaId) {
+        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        limiteAvistamientoDiarioRepository.crearContadorSiNoExiste(autorId, alertaId, hoy);
+        if (limiteAvistamientoDiarioRepository.incrementarSiHayCupo(
+                autorId, alertaId, hoy, limiteDiarioPorAlerta) == 0) {
+            log.info("Usuario {} ha agotado sus {} avistamientos del día en la alerta {}",
+                    autorId, limiteDiarioPorAlerta, alertaId);
+            // Medianoche de Madrid, como reiniciaEn en los otros dos cupos.
+            throw new LimiteAvistamientosAlcanzadoException(limiteDiarioPorAlerta, hoy.plusDays(1).atStartOfDay());
+        }
+    }
 
     /** El orden de JTS es (x, y), es decir (longitud, latitud), no al revés. */
     private Point aPunto(UbicacionRequest ubicacion) {

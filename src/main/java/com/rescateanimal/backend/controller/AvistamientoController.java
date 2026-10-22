@@ -34,10 +34,11 @@ public class AvistamientoController {
     private final AvistamientoService avistamientoService;
 
     /**
-     * POST /api/avistamientos -> 201, 400, 401, 404
+     * POST /api/avistamientos -> 201, 400, 401, 404, 429
      *
      * El 404 es que la alerta referenciada no existe; el 400 con código
-     * ALERTA_NO_ACTIVA, que existe pero ya está cerrada.
+     * ALERTA_NO_ACTIVA, que existe pero ya está cerrada; el 429, que el usuario
+     * ya ha registrado hoy en esa alerta los avistamientos que admite su cupo.
      */
     @PostMapping
     public ResponseEntity<AvistamientoResponse> registrar(

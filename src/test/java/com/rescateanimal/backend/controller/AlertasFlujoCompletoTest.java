@@ -8,6 +8,7 @@ import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteAvistamientoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
@@ -97,6 +98,8 @@ class AlertasFlujoCompletoTest {
     @Autowired
     private LimiteMatchDiarioRepository limiteMatchDiarioRepository;
     @Autowired
+    private LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository;
+    @Autowired
     private FotoRepository fotoRepository;
     @Autowired
     private LimiteFotoDiarioRepository limiteFotoDiarioRepository;
@@ -147,6 +150,8 @@ class AlertasFlujoCompletoTest {
         notificacionRepository.deleteAll(notificacionRepository.findAll().stream()
                 .filter(n -> usuarios.contains(n.getUsuario().getId())).toList());
         limiteMatchDiarioRepository.deleteAll(limiteMatchDiarioRepository.findAll().stream()
+                .filter(l -> usuarios.contains(l.getUsuario().getId())).toList());
+        limiteAvistamientoDiarioRepository.deleteAll(limiteAvistamientoDiarioRepository.findAll().stream()
                 .filter(l -> usuarios.contains(l.getUsuario().getId())).toList());
         avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
                 .filter(a -> usuarios.contains(a.getUsuario().getId())).toList());

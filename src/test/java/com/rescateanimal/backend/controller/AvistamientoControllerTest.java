@@ -3,6 +3,7 @@ package com.rescateanimal.backend.controller;
 import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.enums.Rol;
@@ -26,6 +27,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -181,6 +183,22 @@ class AvistamientoControllerTest {
                         .contentType(MediaType.APPLICATION_JSON).content(CUERPO_VALIDO))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.codigo").value("ALERTA_NO_ACTIVA"));
+    }
+
+    @Test
+    @DisplayName("Cupo de la alerta agotado -> 429 con el límite y la hora de reinicio")
+    void cupoAgotadoDevuelve429() throws Exception {
+        when(avistamientoService.registrar(any(), any())).thenThrow(new LimiteAvistamientosAlcanzadoException(
+                5, LocalDate.now().plusDays(1).atStartOfDay()));
+
+        mockMvc.perform(post("/api/avistamientos")
+                        .contentType(MediaType.APPLICATION_JSON).content(CUERPO_VALIDO))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.codigo").value("LIMITE_AVISTAMIENTOS_ALCANZADO"))
+                .andExpect(jsonPath("$.mensaje").value(
+                        "Has alcanzado el límite de 5 avistamientos diarios en esta alerta. Podrás registrar más mañana."))
+                .andExpect(jsonPath("$.limiteDiario").value(5))
+                .andExpect(jsonPath("$.reiniciaEn").exists());
     }
 
     @Test

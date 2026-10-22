@@ -49,7 +49,7 @@ del método.
 | `403 Forbidden` | Autenticado pero sin permiso: rol insuficiente, no es propietario, cuenta bloqueada o protectora no verificada |
 | `404 Not Found` | El recurso no existe |
 | `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25); o `RECURSO_OCUPADO`: otra operación tiene bloqueado el recurso más allá de la espera máxima (5 s por defecto, `JPA_LOCK_TIMEOUT_MS`). Este último es el único `409` que se arregla reintentando |
-| `429 Too Many Requests` | Límite diario de matches de adopción alcanzado (RF-24) |
+| `429 Too Many Requests` | Un cupo agotado: matches de adopción del día (RF-24), subidas de fotos del día, avistamientos del día en una misma alerta, o intentos contra `/api/auth` (`DEMASIADOS_INTENTOS`, §2) |
 | `500 Internal Server Error` | Error no previsto |
 
 ### Formato de error
@@ -116,8 +116,8 @@ del cuerpo de error) como para lo que el cliente **envía**: `fechaAvistamiento`
 > entre entornos y se encogía o estiraba en el cambio de hora. El cliente Android tiene que enviar
 > y parsear con zona a partir de aquí.
 
-La única excepción es **`reiniciaEn`**, del `429` por cuota diaria agotada (RF-24), que sigue siendo
-una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
+La única excepción es **`reiniciaEn`**, de los `429` por cupo diario agotado —matches de adopción
+(RF-24), fotos y avistamientos—, que sigue siendo una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
 por día natural y "mañana a las 00:00" depende de qué calendario se mire. Ese calendario es el de
 **`Europe/Madrid`**, fijado explícitamente en el servidor — con sus límites, en §6, *Estado del
 límite diario*.
@@ -363,7 +363,7 @@ RF-08, RF-15, RF-21.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21). Avisa a su dueño con `NUEVO_AVISTAMIENTO` (§12) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409` |
+| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21). Avisa a su dueño con `NUEVO_AVISTAMIENTO` (§12). Como mucho 5 al día por usuario en una misma alerta | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409`, `429` |
 | `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento. **Sin construir: pendiente aceptado** (§20) | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
 
 `fotoUrl` es obligatoria aunque el modelo la admita nula: el swipe se decide comparando la foto del
@@ -376,6 +376,26 @@ nuevo no aporta nada y solo ensuciaría el feed.
 Al registrarse, el dueño de la alerta recibe `NUEVO_AVISTAMIENTO` con la **alerta** como
 `referenciaId` —no el avistamiento—, para que el cliente abra su feed. Se crea tras el commit
 (§12). No se avisa al dueño de un avistamiento que registra él mismo.
+
+**Como mucho 5 avistamientos al día por usuario en una misma alerta**, contados por día natural de
+`Europe/Madrid` como los cupos de matches y fotos (`app.avistamientos.limite-diario-por-alerta`).
+Sin el cupo, un usuario podía enterrar el feed del dueño —que enseña primero los más recientes— y
+llenarle de avisos con cientos de avistamientos falsos. Es por alerta: el mismo usuario puede
+registrar otros cinco en otra alerta, y otro usuario tiene su propio cupo en esta. Pasado el cupo,
+`429` con el mismo cuerpo que el de matches (§6):
+
+```json
+{
+  "status": 429,
+  "codigo": "LIMITE_AVISTAMIENTOS_ALCANZADO",
+  "mensaje": "Has alcanzado el límite de 5 avistamientos diarios en esta alerta. Podrás registrar más mañana.",
+  "limiteDiario": 5,
+  "reiniciaEn": "2026-03-15T00:00:00"
+}
+```
+
+El cupo se consume después de comprobar la foto y la alerta, así que un avistamiento rechazado con
+`400` o `404` no lo gasta. Se aplica también al dueño sobre su propia alerta.
 
 ### El feed de swipe es del dueño de cada alerta
 
@@ -523,14 +543,15 @@ operaciones que tocan esas filas son estas:
 |---|---|
 | Editar, retirar o cerrar una alerta | La alerta (`FOR NO KEY UPDATE`) |
 | Moderar una alerta | La alerta (`FOR NO KEY UPDATE`) y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra |
-| Registrar un avistamiento | La alerta (`FOR SHARE`); el avistamiento es una fila nueva |
+| Registrar un avistamiento | La alerta (`FOR SHARE`) y después la fila del cupo del autor en esa alerta y ese día (§5); el avistamiento es una fila nueva |
 | Moderar un avistamiento | Solo el avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`): ni la alerta ni su foto, que se conserva |
 | Match de adopción | El contador diario del usuario |
 
 Nadie bloquea un avistamiento y pide después su alerta: la única espera de una alerta hacia un
 avistamiento es la del propio match, y la moderación del avistamiento no pide nada más. La fila de
 `FOTO` que borra la moderación de una alerta es lo último que esa operación toma, y el match no la
-toca; el contador solo lo toca la adopción, que no bloquea alertas ni avistamientos. Sin dos
+toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
+fila del cupo de avistamientos solo la toma el registro, siempre después de la alerta. Sin dos
 bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
 `MatchService.deslizar`.
 
@@ -2544,6 +2565,14 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   las notificaciones del usuario para devolver una página. Ahora hay
   `(publicacion_id, tipo_publicacion)` y `(usuario_id, created_at DESC, id DESC)`; una prueba
   comprueba que existen y que el plan de cada consulta los usa.
+- **Cualquiera podía inundar la alerta de otro con avistamientos falsos** (`V19`). No había límite:
+  con una sola foto se podían registrar cientos, el dueño recibía un `NUEVO_AVISTAMIENTO` por cada
+  uno y el testigo de verdad quedaba enterrado en su feed. Ahora cada usuario registra como mucho
+  **5 al día en una misma alerta** (§5), con el mismo mecanismo atómico que los cupos de matches y
+  fotos: una fila por usuario, alerta y día, creada con `INSERT … ON CONFLICT DO NOTHING` y sumada
+  con un `UPDATE` condicional, sin carreras. Esa fila es un bloqueo más al registrar, después del de
+  la alerta (§6): dos avistamientos de la misma persona a la vez se esperan; los de personas
+  distintas, no.
 
 **Limitaciones que deja la revisión, aceptadas:**
 

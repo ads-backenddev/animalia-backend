@@ -6,6 +6,7 @@ import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
 import com.rescateanimal.backend.dto.response.MatchResponse;
 import com.rescateanimal.backend.exception.AlertaAjenaException;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
@@ -79,6 +80,8 @@ class AlertaBloqueoTest {
     private static final double LNG = -3.90;
     /** Solo va al log de la moderación: no hace falta que exista. */
     private static final long ADMIN = 1L;
+    /** El cupo diario de avistamientos por alerta de application.properties. */
+    private static final int LIMITE_POR_ALERTA = 5;
     private static final Duration ESPERA_MAXIMA = Duration.ofSeconds(10);
 
     private final GeometryFactory geometrias = new GeometryFactory(new PrecisionModel(), 4326);
@@ -111,6 +114,9 @@ class AlertaBloqueoTest {
     private Usuario duenyo;
     private Usuario testigo;
     private String fotoDelTestigo;
+    /** Un segundo testigo, con su propio cupo, para lo que no debe esperarse. */
+    private Usuario otroTestigo;
+    private String fotoDelOtroTestigo;
     private Long alertaId;
     private String especie;
 
@@ -119,14 +125,9 @@ class AlertaBloqueoTest {
         especie = "bloqueo-" + UUID.randomUUID().toString().substring(0, 8);
         duenyo = usuario("Dueño");
         testigo = usuario("Testigo");
-
-        // registrar exige que la foto sea del testigo; para eso basta la fila.
-        Foto foto = new Foto();
-        foto.setNombre(UUID.randomUUID() + ".jpg");
-        foto.setUsuario(testigo);
-        foto.setTamanyo(1);
-        fotoRepository.save(foto);
-        fotoDelTestigo = almacenFotos.urlDe(foto.getNombre());
+        otroTestigo = usuario("Otro testigo");
+        fotoDelTestigo = fotoDe(testigo);
+        fotoDelOtroTestigo = fotoDe(otroTestigo);
 
         Alerta alerta = new Alerta();
         alerta.setUsuario(duenyo);
@@ -155,17 +156,21 @@ class AlertaBloqueoTest {
         }
         hilos.shutdownNow();
         // Lo que dejen los swipes, también si una prueba falla con el match ya
-        // hecho. Por usuario, y son los dos de esta prueba.
+        // hecho. Por usuario, y son los tres de esta prueba.
+        Object[] usuarios = {duenyo.getId(), testigo.getId(), otroTestigo.getId()};
         jdbc.update("DELETE FROM chat WHERE match_id IN "
-                + "(SELECT id FROM match_registro WHERE usuario_id IN (?, ?))", duenyo.getId(), testigo.getId());
-        jdbc.update("DELETE FROM match_registro WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
-        jdbc.update("DELETE FROM notificacion WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
-        jdbc.update("DELETE FROM limite_match_diario WHERE usuario_id IN (?, ?)", duenyo.getId(), testigo.getId());
+                + "(SELECT id FROM match_registro WHERE usuario_id IN (?, ?, ?))", usuarios);
+        jdbc.update("DELETE FROM match_registro WHERE usuario_id IN (?, ?, ?)", usuarios);
+        jdbc.update("DELETE FROM notificacion WHERE usuario_id IN (?, ?, ?)", usuarios);
+        jdbc.update("DELETE FROM limite_match_diario WHERE usuario_id IN (?, ?, ?)", usuarios);
         // Directo por alerta_id: la tabla es de la base de datos compartida, y
         // cargarla entera para filtrar en memoria crece con todo lo que haya.
+        jdbc.update("DELETE FROM limite_avistamiento_diario WHERE alerta_id = ?", alertaId);
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
         alertaRepository.deleteById(alertaId);
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
+        fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelOtroTestigo).orElseThrow());
+        usuarioRepository.delete(otroTestigo);
         usuarioRepository.delete(testigo);
         usuarioRepository.delete(duenyo);
     }
@@ -256,17 +261,54 @@ class AlertaBloqueoTest {
     }
 
     @Test
-    @DisplayName("Dos avistamientos sobre la misma alerta no se esperan: el bloqueo es compartido")
+    @DisplayName("Dos avistamientos de personas distintas sobre la misma alerta no se esperan: bloqueo compartido y un cupo cada una")
     void dosAvistamientosALaVez() throws Exception {
         Retenida primero = retener(this::avistar);
 
-        // El primero sigue con su transacción abierta, y su bloqueo, mientras
+        // El primero sigue con su transacción abierta, y sus bloqueos, mientras
         // el segundo se registra y confirma entero.
-        CompletableFuture.runAsync(this::avistar, hilos).get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        CompletableFuture.runAsync(() -> avistarComo(otroTestigo, fotoDelOtroTestigo), hilos)
+                .get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
         assertThat(primero.transaccion).as("el primero sigue sin confirmar").isNotDone();
 
         primero.confirmar();
         assertThat(avistamientos()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Dos avistamientos de la misma persona a la vez se esperan en su fila del cupo, y entran los dos")
+    void dosAvistamientosDelMismoTestigoSeEsperan() throws Exception {
+        Retenida primero = retener(this::avistar);
+
+        CompletableFuture<Void> segundo = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(primero);
+        assertThat(segundo).as("el segundo espera al cupo del primero").isNotDone();
+
+        primero.confirmar();
+
+        segundo.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(avistamientos()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Con un solo hueco en el cupo y dos avistamientos a la vez, entra uno y el otro recibe el 429")
+    void elCupoNoSePasaConDosALaVez() throws Exception {
+        for (int i = 0; i < LIMITE_POR_ALERTA - 1; i++) {
+            avistar();
+        }
+        Retenida ultimoHueco = retener(this::avistar);
+
+        CompletableFuture<Void> deMas = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(ultimoHueco);
+
+        ultimoHueco.confirmar();
+
+        // Al soltarse la fila, el UPDATE condicional del segundo vuelve a mirar
+        // el contador, ya en el límite, y no suma.
+        assertThatThrownBy(() -> deMas.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(LimiteAvistamientosAlcanzadoException.class);
+        assertThat(avistamientos()).isEqualTo(LIMITE_POR_ALERTA);
     }
 
     @Test
@@ -442,8 +484,22 @@ class AlertaBloqueoTest {
     }
 
     private void avistar() {
+        avistarComo(testigo, fotoDelTestigo);
+    }
+
+    private void avistarComo(Usuario quien, String foto) {
         avistamientoService.registrar(new CrearAvistamientoRequest(alertaId, "Visto en la esquina",
-                fotoDelTestigo, new UbicacionRequest(LAT, LNG)), testigo.getId());
+                foto, new UbicacionRequest(LAT, LNG)), quien.getId());
+    }
+
+    /** registrar exige que la foto sea de quien avista; para eso basta la fila. */
+    private String fotoDe(Usuario usuario) {
+        Foto foto = new Foto();
+        foto.setNombre(UUID.randomUUID() + ".jpg");
+        foto.setUsuario(usuario);
+        foto.setTamanyo(1);
+        fotoRepository.save(foto);
+        return almacenFotos.urlDe(foto.getNombre());
     }
 
     private int avistamientos() {

@@ -129,9 +129,11 @@ public class MatchService {
      * Quién más toma esas filas, y por qué no hay ciclo:
      * - La ALERTA la bloquean en exclusiva editarla, retirarla, cerrarla y
      *   moderarla (FOR NO KEY UPDATE), y en compartido registrar un
-     *   avistamiento. Ninguna toca después un avistamiento ya registrado ni el
-     *   contador. La moderación borra además la fila de FOTO de la alerta, que
-     *   es lo último que toma; el match no toca FOTO.
+     *   avistamiento, que después toma la fila de su cupo diario en esa alerta
+     *   (LimiteAvistamientoDiario), una fila que el match no toca. Ninguna toca
+     *   después un avistamiento ya registrado ni el contador. La moderación
+     *   borra además la fila de FOTO de la alerta, que es lo último que toma;
+     *   el match no toca FOTO.
      * - El AVISTAMIENTO solo lo escribe su moderación
      *   (AdminService.retirarAvistamiento): el UPDATE de su estado y nada más,
      *   ni la alerta, ni FOTO —su foto no se borra—, ni el contador.

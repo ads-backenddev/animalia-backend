@@ -273,6 +273,20 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * 429 — cupo diario de avistamientos de un usuario en una misma alerta
+     * agotado. Mismo cuerpo que el de matches.
+     */
+    @ExceptionHandler(LimiteAvistamientosAlcanzadoException.class)
+    public ResponseEntity<ErrorResponse> limiteAvistamientosAlcanzado(LimiteAvistamientosAlcanzadoException ex,
+                                                                     WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_AVISTAMIENTOS_ALCANZADO",
+                ex.getMessage(), ruta(request));
+        cuerpo.setLimiteDiario(ex.getLimiteDiario());
+        cuerpo.setReiniciaEn(ex.getReiniciaEn());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
+    }
+
+    /**
      * 409 — choque contra una restricción única de la base de datos.
      *
      * Cubre la ventana entre comprobar que un email está libre e insertarlo: con

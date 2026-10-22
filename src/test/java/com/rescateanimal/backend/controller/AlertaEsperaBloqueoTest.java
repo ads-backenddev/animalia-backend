@@ -143,6 +143,8 @@ class AlertaEsperaBloqueoTest {
             }
         }
         hilos.shutdown();
+        // Antes que las alertas y los usuarios: el cupo de avistamientos apunta a los dos.
+        usuarios.forEach(id -> jdbc.update("DELETE FROM limite_avistamiento_diario WHERE usuario_id = ?", id));
         avistamientoRepository.deleteAll(avistamientoRepository.findAll().stream()
                 .filter(a -> usuarios.contains(a.getUsuario().getId())).toList());
         alertaRepository.deleteAll(alertaRepository.findAll().stream()

@@ -112,6 +112,7 @@ class AvisosTrasConfirmarTest {
                     + "(SELECT id FROM match_registro WHERE usuario_id = ?)", usuario.getId());
             jdbc.update("DELETE FROM match_registro WHERE usuario_id = ?", usuario.getId());
             jdbc.update("DELETE FROM notificacion WHERE usuario_id = ?", usuario.getId());
+            jdbc.update("DELETE FROM limite_avistamiento_diario WHERE usuario_id = ?", usuario.getId());
         }
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
         alertaRepository.deleteById(alertaId);
