@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -52,6 +53,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -126,7 +128,12 @@ class MatchServiceTest {
                 usuarioRepository, notificacionService,
                 LIMITE_DIARIO);
 
-        when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(avistamiento()));
+        // Los permisos se miran con escalares; el avistamiento se carga después,
+        // ya bloqueado.
+        when(avistamientoRepository.buscarAlertaYAutor(ID_AVISTAMIENTO))
+                .thenReturn(Optional.of(ids(ID_AUTOR_AVISTAMIENTO)));
+        when(avistamientoRepository.bloquearParaDeslizar(ID_AVISTAMIENTO))
+                .thenReturn(Optional.of(avistamiento()));
         // La alerta del avistamiento es de quien desliza, y sigue ACTIVA.
         when(alertaRepository.buscarAutorId(ID_ALERTA)).thenReturn(Optional.of(ID_USUARIO));
         when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
@@ -222,8 +229,10 @@ class MatchServiceTest {
 
             verify(matchRegistroRepository, never()).save(any());
             verifyNoInteractions(chatRepository, notificacionService, limiteMatchDiarioRepository);
-            // Comprobar la propiedad no bloquea: un desconocido no frena al dueño.
+            // Comprobar la propiedad no bloquea: un desconocido no frena al dueño
+            // ni al administrador, ni en la alerta ni en el avistamiento.
             verify(alertaRepository, never()).bloquearParaAvistar(any());
+            verify(avistamientoRepository, never()).bloquearParaDeslizar(any());
         }
 
         @Test
@@ -245,9 +254,7 @@ class MatchServiceTest {
         @Test
         @DisplayName("El permiso va antes que el estado: alerta cerrada y avistamiento retirado siguen dando 403")
         void elPermisoVaAntesQueElEstado() {
-            Avistamiento retirado = avistamiento();
-            retirado.setEstado(EstadoAvistamiento.ELIMINADO);
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
+            retirarElAvistamiento();
             cerrarLaAlerta();
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_AJENO))
@@ -255,12 +262,29 @@ class MatchServiceTest {
         }
 
         @Test
-        @DisplayName("Al dueño se le bloquea la alerta en modo compartido, y su estado se lee de esa lectura")
+        @DisplayName("Al dueño se le bloquean la alerta y después el avistamiento, los dos en modo compartido")
         void elEstadoSeLeeConBloqueo() {
             matchService.deslizar(peticion(true), ID_USUARIO);
 
-            verify(alertaRepository).bloquearParaAvistar(ID_ALERTA);
+            // El orden es el documentado en MatchService.deslizar: alerta antes
+            // que avistamiento, el mismo en todas las rutas, o podría haber ciclo.
+            InOrder orden = inOrder(alertaRepository, avistamientoRepository);
+            orden.verify(alertaRepository).bloquearParaAvistar(ID_ALERTA);
+            orden.verify(avistamientoRepository).bloquearParaDeslizar(ID_AVISTAMIENTO);
             verify(alertaRepository, never()).bloquearParaModificar(any());
+        }
+
+        @Test
+        @DisplayName("El avistamiento se carga por primera vez ya bloqueado: ninguna lectura previa deja su estado viejo")
+        void elAvistamientoNoSeCargaAntesDelBloqueo() {
+            retirarElAvistamiento();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class);
+
+            // Una entidad cargada antes quedaría en el contexto de persistencia,
+            // y la lectura bloqueada devolvería esa copia anterior al bloqueo.
+            verify(avistamientoRepository, never()).findById(any());
         }
 
         @Test
@@ -429,7 +453,7 @@ class MatchServiceTest {
         @Test
         @DisplayName("Un avistamiento inexistente se rechaza con 404")
         void avistamientoInexistenteSeRechaza() {
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.empty());
+            when(avistamientoRepository.buscarAlertaYAutor(ID_AVISTAMIENTO)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
                     .isInstanceOf(ResourceNotFoundException.class);
@@ -438,8 +462,8 @@ class MatchServiceTest {
         @Test
         @DisplayName("El dueño no desliza un avistamiento que registró él: abriría un chat consigo mismo")
         void noSePuedeDeslizarLoPropio() {
-            when(avistamientoRepository.findById(ID_AVISTAMIENTO))
-                    .thenReturn(Optional.of(avistamientoDe(ID_USUARIO)));
+            when(avistamientoRepository.buscarAlertaYAutor(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(ids(ID_USUARIO)));
 
             assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
                     .isInstanceOf(PublicacionPropiaException.class);
@@ -768,11 +792,26 @@ class MatchServiceTest {
         return alerta;
     }
 
-    /** El administrador ha retirado el avistamiento: pasa a ELIMINADO. */
+    /** El administrador ha retirado el avistamiento: así lo ve la lectura bloqueada. */
     private void retirarElAvistamiento() {
         Avistamiento retirado = avistamiento();
         retirado.setEstado(EstadoAvistamiento.ELIMINADO);
-        when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
+        when(avistamientoRepository.bloquearParaDeslizar(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
+    }
+
+    /** Los escalares con que se comprueban los permisos, sin cargar el avistamiento. */
+    private static AvistamientoRepository.AlertaYAutor ids(Long autorId) {
+        return new AvistamientoRepository.AlertaYAutor() {
+            @Override
+            public Long getAlertaId() {
+                return ID_ALERTA;
+            }
+
+            @Override
+            public Long getAutorId() {
+                return autorId;
+            }
+        };
     }
 
     /** La alerta se ha cerrado: así lo ve la lectura bloqueada. */

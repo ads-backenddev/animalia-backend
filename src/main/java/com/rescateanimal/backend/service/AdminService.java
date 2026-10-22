@@ -415,7 +415,19 @@ public class AdminService {
         }
     }
 
-    /** @return true si esta llamada lo retiró, false si ya lo estaba. */
+    /**
+     * Pasa el avistamiento a ELIMINADO.
+     *
+     * Su UPDATE toma la fila en exclusiva (FOR NO KEY UPDATE en PostgreSQL) y
+     * choca con el FOR SHARE con que el dueño la lee al deslizarla
+     * (AvistamientoRepository.bloquearParaDeslizar): con un match en curso, la
+     * moderación espera a que confirme; si la moderación va primero, el match
+     * espera y ve el ELIMINADO. No toma ninguna otra fila —ni la alerta, ni la
+     * foto, que se conserva—, así que no puede cerrar un ciclo con el match,
+     * que bloquea la alerta antes que el avistamiento (MatchService.deslizar).
+     *
+     * @return true si esta llamada lo retiró, false si ya lo estaba.
+     */
     private boolean retirarAvistamiento(Long avistamientoId, Long adminId) {
         Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(

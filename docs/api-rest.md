@@ -480,12 +480,15 @@ pero el dueño puede cerrarla en otra pestaña mientras tiene la tarjeta en pant
 comprobación se abriría un chat con el testigo por un animal que ya apareció. Es el mismo código que
 devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
 
-**El estado de la alerta se lee con bloqueo compartido** (`SELECT … FOR SHARE`, el mismo de registrar
-un avistamiento), y la propiedad se comprueba antes y sin bloqueo: un desconocido recibe su `403` sin
-frenar al dueño ni al administrador. El bloqueo cierra la carrera con el cierre y la moderación: un
-match ya no puede confirmarse a la vez que el cierre y dejar al testigo sin el aviso
-`ALERTA_ENCONTRADA`, que se calcula con los matches confirmados. Si la espera supera el límite,
-`409 RECURSO_OCUPADO` (§1).
+**Los estados se leen con bloqueo compartido** (`SELECT … FOR SHARE`): primero el de la alerta —el
+mismo bloqueo de registrar un avistamiento— y después el del propio avistamiento. La propiedad se
+comprueba antes y sin bloqueo: un desconocido recibe su `403` sin frenar al dueño ni al
+administrador. El bloqueo de la alerta cierra la carrera con su cierre y su moderación: un match ya
+no puede confirmarse a la vez que el cierre y dejar al testigo sin el aviso `ALERTA_ENCONTRADA`, que
+se calcula con los matches confirmados. El del avistamiento cierra la misma carrera con la
+moderación del avistamiento: si el administrador lo retira mientras el dueño hace match, uno de los
+dos espera al otro, y nunca queda un chat abierto sobre contenido que ya estaba retirado. Si la
+espera supera el límite, `409 RECURSO_OCUPADO` (§1).
 
 **`400` con código `ANIMAL_NO_DISPONIBLE`** si el animal en adopción deslizado ya no está
 `DISPONIBLE`, sea porque está `ADOPTADO` o porque la protectora lo `RETIRADO` del catálogo. Es el
@@ -510,13 +513,26 @@ El permiso va antes que el estado: a quien desliza algo que no puede deslizar ya
 que no puede, no que está cerrado. Y la cuota se consume en último lugar: al revés, un swipe
 repetido —que acaba en `409`— le habría gastado al usuario un match del día.
 
-**Orden de bloqueo.** En un avistamiento, la fila de su alerta con `FOR SHARE`; en una adopción, la
-fila del contador diario del usuario con el `UPDATE` condicional. Después, en los dos, los `INSERT`
-de `MATCH_REGISTRO`, `CHAT` y `NOTIFICACION`, que sobre sus filas padre solo toman el `FOR KEY SHARE`
-de comprobar la clave ajena. Cada tipo toma un solo bloqueo de fila antes de los `INSERT` —la alerta
-o el contador, nunca los dos—, y las operaciones de la alerta (editar, retirar, cerrar, moderar,
-registrar un avistamiento) bloquean solo la alerta, así que no hay dos bloqueos pedidos en orden
-contrario ni, por tanto, ciclo posible. Está documentado también en `MatchService.deslizar`.
+**Orden de bloqueo.** En un avistamiento, la fila de su alerta y después la del avistamiento, las
+dos con `FOR SHARE`; en una adopción, la fila del contador diario del usuario con el `UPDATE`
+condicional. Después, en los dos, los `INSERT` de `MATCH_REGISTRO`, `CHAT` y `NOTIFICACION`, que
+sobre sus filas padre solo toman el `FOR KEY SHARE` de comprobar la clave ajena. Las demás
+operaciones que tocan esas filas son estas:
+
+| Operación | Filas que bloquea, en orden |
+|---|---|
+| Editar, retirar o cerrar una alerta | La alerta (`FOR NO KEY UPDATE`) |
+| Moderar una alerta | La alerta (`FOR NO KEY UPDATE`) y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra |
+| Registrar un avistamiento | La alerta (`FOR SHARE`); el avistamiento es una fila nueva |
+| Moderar un avistamiento | Solo el avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`): ni la alerta ni su foto, que se conserva |
+| Match de adopción | El contador diario del usuario |
+
+Nadie bloquea un avistamiento y pide después su alerta: la única espera de una alerta hacia un
+avistamiento es la del propio match, y la moderación del avistamiento no pide nada más. La fila de
+`FOTO` que borra la moderación de una alerta es lo último que esa operación toma, y el match no la
+toca; el contador solo lo toca la adopción, que no bloquea alertas ni avistamientos. Sin dos
+bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
+`MatchService.deslizar`.
 
 ### Los dos tipos de publicación
 
@@ -2479,3 +2495,15 @@ este cambio se conservan: no se migra nada, y solo existían en la base de datos
 `ALERTA_ENCONTRADA` los tiene en cuenta: avisa a los dos extremos de cada chat.
 
 **`V17`** solo rehace `notificacion_tipo_check` con los dos tipos nuevos, como `V6`.
+
+### Nota posterior: lo que corrigió la revisión del feed del dueño
+
+La revisión del bloque terminado —una revisión del código y una prueba de humo de la API entera—
+encontró varios problemas, que se corrigieron antes de fusionarlo:
+
+- **Un avistamiento retirado podía colarse en un match.** El match leía el estado del avistamiento
+  sin bloqueo, así que una moderación que confirmara entre esa lectura y el commit del match dejaba
+  un chat abierto sobre contenido retirado. Ahora lo lee con `FOR SHARE`, después del de la alerta,
+  y la moderación y el match se esperan el uno al otro (§6). La tabla de §6 recoge el orden de
+  bloqueo completo: la moderación de un avistamiento no toca nada más que esa fila, y la de una
+  alerta borra además la fila de su foto, lo último que toma.

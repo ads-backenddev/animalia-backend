@@ -12,11 +12,15 @@ import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.model.enums.TipoContenido;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.service.AdminService;
 import com.rescateanimal.backend.service.AlertaService;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 import com.rescateanimal.backend.service.AvistamientoService;
 import com.rescateanimal.backend.service.MatchService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,16 +52,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Las carreras sobre una misma alerta —el dueño, el administrador, quien
- * registra un avistamiento y el dueño que desliza uno—, con transacciones de
- * verdad en PostgreSQL.
+ * Las carreras sobre una misma alerta y sus avistamientos —el dueño, el
+ * administrador, quien registra un avistamiento y el dueño que desliza uno—,
+ * con transacciones de verdad en PostgreSQL.
  *
  * Una operación se queda a medias con su transacción abierta (retener), y la
  * otra se lanza en otro hilo. La prueba espera a ver que la segunda está
  * bloqueada POR LA PRIMERA —así se sabe que ya leyó, o lo intentó, antes de que
  * la primera confirme—, la deja confirmar y comprueba en qué estado queda todo.
- * Sin los bloqueos de AlertaRepository la segunda no espera nunca, y la prueba
- * falla por tiempo.
+ * Sin los bloqueos de AlertaRepository y AvistamientoRepository la segunda no
+ * espera nunca, y la prueba falla por tiempo.
  *
  * LA SONDA SOLO RECONOCE A ESTA PRUEBA. La base de datos es compartida: otra
  * prueba o la aplicación arrancada desde el IDE pueden tener sus propias
@@ -91,6 +95,10 @@ class AlertaBloqueoTest {
     private AvistamientoService avistamientoService;
     @Autowired
     private MatchService matchService;
+    @Autowired
+    private AdminService adminService;
+    @PersistenceContext
+    private EntityManager entityManager;
     @Autowired
     private FotoRepository fotoRepository;
     @Autowired
@@ -279,6 +287,54 @@ class AlertaBloqueoTest {
                 .isInstanceOf(ExecutionException.class)
                 .hasCauseInstanceOf(OperacionNoPermitidaException.class);
         assertThat(deslizamientos()).as("ni registro ni chat sobre una alerta cerrada").isZero();
+    }
+
+    @Test
+    @DisplayName("Un match del dueño durante la moderación del avistamiento espera, ve el ELIMINADO y no abre chat")
+    void matchDuranteLaModeracionDelAvistamiento() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        // La moderación escribe el estado al hacer flush, justo antes del
+        // commit; se fuerza aquí para retenerla con el UPDATE ya hecho y la
+        // fila tomada, que es la ventana en la que el match no debe colarse.
+        Retenida moderacion = retener(() -> {
+            adminService.retirarPublicacion(TipoContenido.AVISTAMIENTO, avistamiento, ADMIN);
+            entityManager.flush();
+        });
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(moderacion);
+        assertThat(match).as("el match espera a la moderación del avistamiento").isNotDone();
+
+        moderacion.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class)
+                .satisfies(e -> assertThat(((OperacionNoPermitidaException) e.getCause()).getCodigo())
+                        .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+        assertThat(deslizamientos()).as("ni registro ni chat sobre contenido retirado").isZero();
+    }
+
+    @Test
+    @DisplayName("Una moderación del avistamiento durante un match del dueño espera a que confirme, y se aplica después")
+    void moderacionDelAvistamientoDuranteUnMatch() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida match = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<Void> moderacion = CompletableFuture.runAsync(() ->
+                adminService.retirarPublicacion(TipoContenido.AVISTAMIENTO, avistamiento, ADMIN), hilos);
+        esperarAQueLaBloquee(match);
+        assertThat(moderacion).as("la moderación espera al match").isNotDone();
+
+        match.confirmar();
+
+        moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(jdbc.queryForObject("SELECT estado FROM avistamiento WHERE id = ?", String.class, avistamiento))
+                .isEqualTo("ELIMINADO");
+        assertThat(deslizamientos()).as("el match confirmó antes que la moderación").isEqualTo(1);
     }
 
     @Test

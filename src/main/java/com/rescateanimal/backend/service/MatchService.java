@@ -116,19 +116,30 @@ public class MatchService {
      * cuándo sale. El porqué completo está en el javadoc de aquel método.
      *
      * ORDEN DE BLOQUEO, de principio a fin de la transacción:
-     * 1. En un avistamiento, la fila de su ALERTA con FOR SHARE
-     *    (autorDelAvistamiento). Antes no se toma ningún bloqueo: el 404 y los
-     *    dos 403 se resuelven con lecturas simples.
+     * 1. En un avistamiento, la fila de su ALERTA y después la del propio
+     *    AVISTAMIENTO, las dos con FOR SHARE (autorDelAvistamiento). Antes no
+     *    se toma ningún bloqueo: el 404 y los dos 403 se resuelven con
+     *    lecturas simples.
      * 2. En un match de adopción, la fila del CONTADOR DIARIO del usuario, con
      *    el UPDATE condicional de consumirCuotaDiaria. Un avistamiento no la
      *    toca: no consume cuota.
      * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, de CHAT y
      *    de NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE
      *    de comprobar la clave ajena.
-     * Así que cada tipo toma un solo bloqueo de fila antes de los INSERT: el de
-     * la alerta o el del contador, nunca los dos. Las operaciones de la alerta
-     * (editar, retirar, cerrar, moderar, registrar un avistamiento) bloquean
-     * solo la alerta y no tocan el contador. Sin un par de bloqueos pedidos en
+     * Quién más toma esas filas, y por qué no hay ciclo:
+     * - La ALERTA la bloquean en exclusiva editarla, retirarla, cerrarla y
+     *   moderarla (FOR NO KEY UPDATE), y en compartido registrar un
+     *   avistamiento. Ninguna toca después un avistamiento ya registrado ni el
+     *   contador. La moderación borra además la fila de FOTO de la alerta, que
+     *   es lo último que toma; el match no toca FOTO.
+     * - El AVISTAMIENTO solo lo escribe su moderación
+     *   (AdminService.retirarAvistamiento): el UPDATE de su estado y nada más,
+     *   ni la alerta, ni FOTO —su foto no se borra—, ni el contador.
+     * - El CONTADOR solo lo toca un match de adopción, que no bloquea alertas
+     *   ni avistamientos.
+     * La única espera de una alerta hacia un avistamiento es la del propio
+     * match, y nadie espera en sentido contrario: quien tiene un avistamiento
+     * bloqueado no pide después su alerta. Sin un par de bloqueos pedidos en
      * orden contrario no hay ciclo posible.
      */
     @Transactional
@@ -219,29 +230,37 @@ public class MatchService {
      * primero: a un desconocido se le dice que la alerta no es suya aunque el
      * avistamiento sí lo sea.
      *
-     * LA PROPIEDAD SE COMPRUEBA SIN BLOQUEO, y el estado de la alerta se lee
-     * después con bloqueo compartido (FOR SHARE, el de registrar un
-     * avistamiento). Mismo patrón que AlertaService.exigirAlertaPropia, por lo
-     * mismo: el dueño de una alerta no cambia nunca, así que comprobarlo sin
-     * bloqueo es seguro, y bloquear antes dejaría a cualquier usuario frenar al
-     * dueño y al administrador con un swipe condenado al 403.
+     * LOS PERMISOS SE COMPRUEBAN SIN BLOQUEO, con tres escalares: de qué alerta
+     * cuelga el avistamiento, quién lo registró y quién publicó la alerta.
+     * Ninguno cambia nunca, así que comprobarlos sin bloqueo es seguro, y
+     * bloquear antes dejaría a cualquier usuario frenar al dueño y al
+     * administrador con un swipe condenado al 403. Mismo patrón que
+     * AlertaService.exigirAlertaPropia.
      *
-     * El bloqueo cierra la carrera con el cierre y la moderación: sin él, un
-     * match podía confirmarse a la vez que el cierre, abrir un chat sobre una
-     * alerta ENCONTRADA y dejar al testigo sin el aviso de ALERTA_ENCONTRADA,
-     * porque sus destinatarios se calculan con los matches ya confirmados.
+     * LOS ESTADOS SE LEEN CON BLOQUEO COMPARTIDO (FOR SHARE), primero el de la
+     * alerta y después el del avistamiento, y solo cuando ya se sabe que quien
+     * desliza es el dueño:
+     * - El de la alerta cierra la carrera con su cierre y su moderación: sin
+     *   él, un match podía confirmarse a la vez que el cierre, abrir un chat
+     *   sobre una alerta ENCONTRADA y dejar al testigo sin el aviso de
+     *   ALERTA_ENCONTRADA, porque sus destinatarios se calculan con los
+     *   matches ya confirmados.
+     * - El del avistamiento cierra la misma carrera con la moderación del
+     *   avistamiento: sin él, un administrador que lo retirara entre la lectura
+     *   del estado y el commit del match dejaba un chat abierto sobre contenido
+     *   retirado.
      *
-     * El dueño se pide como escalar (buscarAutorId) y no navegando
-     * avistamiento.getAlerta(): cargar la alerta aquí la dejaría en el contexto
-     * de persistencia, y la lectura bloqueada devolvería esa copia anterior al
+     * NINGUNA DE LAS DOS SE CARGA ANTES DE SU BLOQUEO. Por eso los permisos van
+     * con escalares (buscarAlertaYAutor, buscarAutorId) y no navegando
+     * entidades: una entidad cargada antes quedaría en el contexto de
+     * persistencia, y la lectura bloqueada devolvería esa copia anterior al
      * bloqueo (ver AlertaRepository.buscarAutorId).
      */
     private Usuario autorDelAvistamiento(Long avistamientoId, Long usuarioId) {
-        Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
+        AvistamientoRepository.AlertaYAutor ids = avistamientoRepository.buscarAlertaYAutor(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El avistamiento " + avistamientoId + " no existe"));
-        // La alerta es una asociación perezosa: pedirle el id no la carga.
-        Long alertaId = avistamiento.getAlerta().getId();
+        Long alertaId = ids.getAlertaId();
 
         Long duenoId = alertaRepository.buscarAutorId(alertaId)
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
@@ -250,20 +269,24 @@ public class MatchService {
                     "Solo quien publicó la alerta puede hacer match con sus avistamientos");
         }
 
-        exigirQueNoSeaPropia(avistamiento.getUsuario(), usuarioId);
+        exigirQueNoSeaPropia(ids.getAutorId(), usuarioId);
+
+        // Los dos bloqueos, y en este orden: la alerta antes que el avistamiento
+        // (ver ORDEN DE BLOQUEO en deslizar).
+        Alerta alerta = alertaRepository.bloquearParaAvistar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
+        Avistamiento avistamiento = avistamientoRepository.bloquearParaDeslizar(avistamientoId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El avistamiento " + avistamientoId + " no existe"));
 
         if (avistamiento.getEstado() != EstadoAvistamiento.VISIBLE) {
             // Retirado por el administrador (RF-11). El feed ya lo excluye, pero
             // nada impide llamar al endpoint con el id de un avistamiento que se
             // retiró después de mostrarse la tarjeta. Sin esto se abriría un chat
-            // sobre contenido que incumplía las normas, y encima le costaría al
-            // ciudadano un match del día.
+            // sobre contenido que incumplía las normas.
             throw new OperacionNoPermitidaException("AVISTAMIENTO_ELIMINADO",
                     "Este avistamiento fue retirado por incumplir las normas");
         }
-
-        Alerta alerta = alertaRepository.bloquearParaAvistar(alertaId)
-                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
         if (alerta.getEstado() != EstadoAlerta.ACTIVA) {
             // El feed solo existe para una alerta ACTIVA, pero nada impide llamar
             // al endpoint con el id de un avistamiento cuya alerta se cerró
@@ -286,7 +309,7 @@ public class MatchService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El animal " + animalId + " no existe"));
 
-        exigirQueNoSeaPropia(animal.getProtectora().getUsuario(), usuarioId);
+        exigirQueNoSeaPropia(animal.getProtectora().getUsuario().getId(), usuarioId);
 
         if (animal.getEstado() != EstadoAnimal.DISPONIBLE) {
             // Equivalente a la alerta ya cerrada: el animal ya no se ofrece, así
@@ -311,8 +334,8 @@ public class MatchService {
      * adopción, además, es lo que impide que una protectora se deslice a sus
      * propios animales. El feed ya los excluye: esto cubre la llamada directa.
      */
-    private void exigirQueNoSeaPropia(Usuario autor, Long usuarioId) {
-        if (autor.getId().equals(usuarioId)) {
+    private void exigirQueNoSeaPropia(Long autorId, Long usuarioId) {
+        if (autorId.equals(usuarioId)) {
             throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
         }
     }

@@ -3,14 +3,17 @@ package com.rescateanimal.backend.repository;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
 import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Capa de datos de Avistamiento. Sin lógica de negocio: qué se considera
@@ -18,6 +21,48 @@ import java.util.List;
  */
 @Repository
 public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long> {
+
+    /**
+     * De qué alerta cuelga un avistamiento y quién lo registró, sin cargarlo ni
+     * bloquearlo. Es la comprobación de permisos previa a bloquearParaDeslizar.
+     *
+     * Devuelve dos escalares, y no la entidad, por lo mismo que
+     * AlertaRepository.buscarAutorId: un avistamiento cargado aquí quedaría en
+     * el contexto de persistencia, y la lectura bloqueada que viene después
+     * devolvería esa misma instancia, con el estado leído ANTES de tener el
+     * bloqueo. Así el avistamiento se carga por primera vez ya bloqueado.
+     */
+    @Query("SELECT a.alerta.id AS alertaId, a.usuario.id AS autorId FROM Avistamiento a WHERE a.id = :id")
+    Optional<AlertaYAutor> buscarAlertaYAutor(@Param("id") Long id);
+
+    /** Una fila de buscarAlertaYAutor. */
+    interface AlertaYAutor {
+        Long getAlertaId();
+
+        Long getAutorId();
+    }
+
+    /**
+     * El avistamiento con un bloqueo COMPARTIDO de su fila (SELECT ... FOR
+     * SHARE), para deslizarlo: el dueño decide según su estado y necesita que
+     * nadie lo cambie hasta que confirme.
+     *
+     * Lo único que escribe un avistamiento ya registrado es su moderación
+     * (AdminService.retirarAvistamiento), con un UPDATE que en PostgreSQL toma
+     * la fila con FOR NO KEY UPDATE y choca con este FOR SHARE: un match espera
+     * a una moderación en curso y ve el ELIMINADO, y una moderación espera a
+     * que el match en curso confirme. Sin él, una moderación que confirmara
+     * entre la lectura del estado y el commit del match dejaba un chat abierto
+     * sobre contenido retirado.
+     *
+     * Compartido y no exclusivo porque el match no escribe el avistamiento,
+     * solo lo lee, igual que AlertaRepository.bloquearParaAvistar con la
+     * alerta. Se toma siempre DESPUÉS del de la alerta (ver el orden de
+     * bloqueo en MatchService.deslizar).
+     */
+    @Lock(LockModeType.PESSIMISTIC_READ)
+    @Query("SELECT a FROM Avistamiento a WHERE a.id = :id")
+    Optional<Avistamiento> bloquearParaDeslizar(@Param("id") Long id);
 
     /**
      * Avistamientos de UNA alerta que su dueño todavía no ha revisado, para su
