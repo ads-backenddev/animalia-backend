@@ -68,13 +68,17 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
      * Avistamientos de UNA alerta que su dueño todavía no ha revisado, para su
      * feed de swipe.
      *
-     * Tres filtros, cada uno por su motivo:
+     * Cuatro filtros, cada uno por su motivo:
      * - el avistamiento debe estar VISIBLE: uno retirado por el administrador
      *   (RF-11) no se ofrece. Se compara con VISIBLE en lugar de excluir
      *   ELIMINADO, como el catálogo de adopción con DISPONIBLE, para que
      *   cualquier estado que se añada al enum nazca fuera del feed;
      * - se excluyen los que registró el propio dueño, porque no hay nada que
      *   reconocer en lo que uno mismo vio;
+     * - se excluyen los de cuentas bloqueadas o dadas de baja (activo = false):
+     *   el match con ellos se rechaza (AUTOR_NO_DISPONIBLE, ver MatchService),
+     *   así que su tarjeta no llevaría a ninguna parte. Es el mismo criterio de
+     *   los avisos, que nunca van a una cuenta inactiva;
      * - y se excluye lo que el dueño ya deslizó, en cualquiera de los dos
      *   sentidos. Lo que deslicen otros no cuenta: revisar es cosa del dueño.
      *   El NOT EXISTS se apoya en el índice único (usuario_id, publicacion_id,
@@ -93,6 +97,7 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
             WHERE a.alerta.id = :alertaId
               AND a.estado = :estadoVisible
               AND u.id <> :duenoId
+              AND u.activo = true
               AND NOT EXISTS (
                     SELECT 1 FROM MatchRegistro m
                     WHERE m.usuario.id = :duenoId

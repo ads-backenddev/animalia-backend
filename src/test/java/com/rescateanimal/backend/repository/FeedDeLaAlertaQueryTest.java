@@ -115,6 +115,18 @@ class FeedDeLaAlertaQueryTest {
     }
 
     @Test
+    @DisplayName("Sin los avistamientos de cuentas bloqueadas o dadas de baja: el match con ellos se rechaza")
+    void sinCuentasInactivas() {
+        long deUnaCuentaActiva = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 1, true);
+        avistamiento(alerta, otro, EstadoAvistamiento.VISIBLE, 2, true);
+        // Bloquear y dar de baja dejan los dos activo = false; para el feed es lo mismo.
+        otro.setActivo(false);
+        usuarioRepository.save(otro);
+
+        assertThat(ids(feed())).containsExactly(deUnaCuentaActiva);
+    }
+
+    @Test
     @DisplayName("Dos del mismo instante salen por id descendente, siempre en el mismo orden")
     void desempatePorId() {
         long primero = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 1, true);

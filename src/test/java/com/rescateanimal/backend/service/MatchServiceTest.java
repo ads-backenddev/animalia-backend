@@ -553,6 +553,59 @@ class MatchServiceTest {
     }
 
     /**
+     * El autor del avistamiento se ha dado de baja o lo ha bloqueado el
+     * administrador (RF-19, RF-11): las dos cosas dejan su cuenta inactiva.
+     */
+    @Nested
+    @DisplayName("Autor no disponible")
+    class AutorNoDisponible {
+
+        @Test
+        @DisplayName("Con la cuenta del autor inactiva no hay match -> 400 AUTOR_NO_DISPONIBLE, sin registro, chat ni aviso")
+        void sinMatchConUnaCuentaInactiva() {
+            desactivarAlAutor();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AUTOR_NO_DISPONIBLE"));
+
+            verify(matchRegistroRepository, never()).save(any());
+            verifyNoInteractions(chatRepository, notificacionService);
+        }
+
+        @Test
+        @DisplayName("Tampoco se descarta: la tarjeta ya no está en el feed, como la de un avistamiento retirado")
+        void tampocoSeDescarta() {
+            desactivarAlAutor();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AUTOR_NO_DISPONIBLE"));
+        }
+
+        @Test
+        @DisplayName("Va después de AVISTAMIENTO_ELIMINADO y antes de ALERTA_NO_ACTIVA")
+        void suLugarEnElOrden() {
+            Avistamiento retiradoYDeUnaCuentaInactiva = avistamiento();
+            retiradoYDeUnaCuentaInactiva.setEstado(EstadoAvistamiento.ELIMINADO);
+            retiradoYDeUnaCuentaInactiva.getUsuario().setActivo(false);
+            when(avistamientoRepository.bloquearParaDeslizar(ID_AVISTAMIENTO))
+                    .thenReturn(Optional.of(retiradoYDeUnaCuentaInactiva));
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+
+            desactivarAlAutor();
+            cerrarLaAlerta();
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AUTOR_NO_DISPONIBLE"));
+        }
+    }
+
+    /**
      * Swipe sobre un animal en adopción (RF-09).
      *
      * Lo único que cambia respecto al avistamiento es de dónde sale el otro
@@ -797,6 +850,14 @@ class MatchServiceTest {
         Avistamiento retirado = avistamiento();
         retirado.setEstado(EstadoAvistamiento.ELIMINADO);
         when(avistamientoRepository.bloquearParaDeslizar(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
+    }
+
+    /** El autor del avistamiento ya no está activo: así lo ve la lectura bloqueada. */
+    private void desactivarAlAutor() {
+        Avistamiento deUnaCuentaInactiva = avistamiento();
+        deUnaCuentaInactiva.getUsuario().setActivo(false);
+        when(avistamientoRepository.bloquearParaDeslizar(ID_AVISTAMIENTO))
+                .thenReturn(Optional.of(deUnaCuentaInactiva));
     }
 
     /** Los escalares con que se comprueban los permisos, sin cargar el avistamiento. */

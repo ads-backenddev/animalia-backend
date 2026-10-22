@@ -227,10 +227,12 @@ public class MatchService {
      *
      * ORDEN DE LAS COMPROBACIONES: 404 si el avistamiento no existe; 403
      * ALERTA_AJENA; 403 PUBLICACION_PROPIA si el dueño desliza un avistamiento
-     * que registró él; 400 AVISTAMIENTO_ELIMINADO; 400 ALERTA_NO_ACTIVA. El
-     * permiso va antes que el estado, y de los dos permisos, el de la alerta
-     * primero: a un desconocido se le dice que la alerta no es suya aunque el
-     * avistamiento sí lo sea.
+     * que registró él; 400 AVISTAMIENTO_ELIMINADO; 400 AUTOR_NO_DISPONIBLE; 400
+     * ALERTA_NO_ACTIVA. El permiso va antes que el estado, y de los dos
+     * permisos, el de la alerta primero: a un desconocido se le dice que la
+     * alerta no es suya aunque el avistamiento sí lo sea. De los estados, va
+     * primero lo propio de la tarjeta —el avistamiento y su autor— y después
+     * la alerta de la que cuelga.
      *
      * LOS PERMISOS SE COMPRUEBAN SIN BLOQUEO, con tres escalares: de qué alerta
      * cuelga el avistamiento, quién lo registró y quién publicó la alerta.
@@ -257,6 +259,13 @@ public class MatchService {
      * entidades: una entidad cargada antes quedaría en el contexto de
      * persistencia, y la lectura bloqueada devolvería esa copia anterior al
      * bloqueo (ver AlertaRepository.buscarAutorId).
+     *
+     * LA CUENTA DEL AUTOR SE LEE SIN BLOQUEAR SU FILA, a diferencia de las otras
+     * dos. Si el administrador la bloquea —o su dueño se da de baja— en el mismo
+     * instante en que se hace el match, el chat puede abrirse igualmente, y el
+     * resultado es el mismo que si el match hubiera llegado un momento antes:
+     * un chat con una cuenta que ya no responde, como los que ya existían antes
+     * del bloqueo. Cerrarlo pediría un tercer bloqueo en cada match.
      */
     private Usuario autorDelAvistamiento(Long avistamientoId, Long usuarioId) {
         AvistamientoRepository.AlertaYAutor ids = avistamientoRepository.buscarAlertaYAutor(avistamientoId)
@@ -289,6 +298,16 @@ public class MatchService {
             throw new OperacionNoPermitidaException("AVISTAMIENTO_ELIMINADO",
                     "Este avistamiento fue retirado por incumplir las normas");
         }
+        Usuario autor = avistamiento.getUsuario();
+        if (!Boolean.TRUE.equals(autor.getActivo())) {
+            // Bloqueado por el administrador o dado de baja (RF-11, RF-19). El
+            // feed ya no lo ofrece, pero la tarjeta pudo mostrarse antes, y el
+            // match abriría un chat con alguien que no puede responder. El
+            // mensaje no distingue los dos casos: que una cuenta esté bloqueada
+            // no es asunto de quien desliza.
+            throw new OperacionNoPermitidaException("AUTOR_NO_DISPONIBLE",
+                    "Quien registró este avistamiento ya no está disponible");
+        }
         if (alerta.getEstado() != EstadoAlerta.ACTIVA) {
             // El feed solo existe para una alerta ACTIVA, pero nada impide llamar
             // al endpoint con el id de un avistamiento cuya alerta se cerró
@@ -297,7 +316,7 @@ public class MatchService {
             throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
                     "La alerta de este avistamiento ya no está activa: el animal ya apareció");
         }
-        return avistamiento.getUsuario();
+        return autor;
     }
 
     /**

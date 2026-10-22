@@ -293,7 +293,7 @@ RF-03, RF-04, RF-14, RF-25.
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA` desde §22, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
 | `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14), y se avisa con `ALERTA_ENCONTRADA` a quienes tienen un chat por uno de sus avistamientos (§12). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada ni vuelve a avisar, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
-| `GET` | `/api/alertas/{id}/avistamientos/feed` | **Feed de swipe del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que todavía no ha revisado —sin los que registró él y sin los que ya deslizó, en cualquier sentido—, más recientes primero, en una tanda acotada. Cada tarjeta lleva `distanciaMetros` a la última ubicación de la alerta. Ver §5 | Propietario | — | Lista de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/alertas/{id}/avistamientos/feed` | **Feed de swipe del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que todavía no ha revisado —sin los que registró él, sin los que ya deslizó, en cualquier sentido, y sin los de cuentas bloqueadas o dadas de baja—, más recientes primero, en una tanda acotada. Cada tarjeta lleva `distanciaMetros` a la última ubicación de la alerta. Ver §5 | Propietario | — | Lista de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
 
 ### Estados de una alerta
 
@@ -416,6 +416,9 @@ En ese orden: el permiso va antes que el estado. Qué entra en el feed:
 - **Sin los que registró el propio dueño**: no hay nada que reconocer en lo que uno mismo vio.
 - **Sin los que el dueño ya deslizó**, en cualquiera de los dos sentidos. Lo que deslicen otros
   usuarios no cuenta.
+- **Sin los de cuentas bloqueadas o dadas de baja** (RF-11, RF-19): el match con ellos abriría un
+  chat con alguien que no puede responder, y se rechaza (`400 AUTOR_NO_DISPONIBLE`, §6). Es el mismo
+  criterio de los avisos, que nunca van a una cuenta inactiva.
 
 **Más recientes primero** (`createdAt` descendente, `id` como desempate), en una tanda acotada por
 `app.avistamientos.tamanyo-feed`. No se ordena por cercanía a propósito: la última ubicación de la
@@ -494,6 +497,16 @@ cualquiera de los dos sentidos. Lo garantiza la restricción única
 `(usuario_id, publicacion_id, tipo_publicacion)`, que es la misma que permite a los feeds de
 `/api/alertas/{id}/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto.
 
+**`400` con código `AVISTAMIENTO_ELIMINADO`** si el administrador retiró el avistamiento (RF-11), y
+**`400` con código `AUTOR_NO_DISPONIBLE`** si la cuenta de quien lo registró está bloqueada o se ha
+dado de baja (RF-11, RF-19), en los dos sentidos del deslizamiento. El feed ya no ofrece ninguno de
+los dos, pero el dueño puede tener la tarjeta en pantalla desde antes; sin estas comprobaciones se
+abriría un chat sobre contenido retirado o con alguien que no puede responder. El mensaje de
+`AUTOR_NO_DISPONIBLE` no distingue el bloqueo de la baja: que una cuenta esté bloqueada no es asunto
+de quien desliza. La cuenta del autor se lee sin bloquear su fila: si se bloquea en el mismo instante
+del match, el chat puede abrirse igualmente, con el mismo resultado que si el match hubiera llegado
+un momento antes.
+
 **`400` con código `ALERTA_NO_ACTIVA`** si la alerta de la que cuelga el avistamiento ya se cerró,
 en cualquiera de los dos sentidos del deslizamiento. El feed solo existe para una alerta `ACTIVA`,
 pero el dueño puede cerrarla en otra pestaña mientras tiene la tarjeta en pantalla; sin esta
@@ -525,7 +538,7 @@ El orden de las comprobaciones importa, y es este:
 | 1 | `404` si no existe | `404` si no existe |
 | 2 | `403 ALERTA_AJENA` | — |
 | 3 | `403 PUBLICACION_PROPIA` | `403 PUBLICACION_PROPIA` |
-| 4 | `400 AVISTAMIENTO_ELIMINADO`, `400 ALERTA_NO_ACTIVA` | `400 ANIMAL_NO_DISPONIBLE` |
+| 4 | `400 AVISTAMIENTO_ELIMINADO`, `400 AUTOR_NO_DISPONIBLE`, `400 ALERTA_NO_ACTIVA` | `400 ANIMAL_NO_DISPONIBLE` |
 | 5 | `409 SWIPE_DUPLICADO` | `409 SWIPE_DUPLICADO` |
 | 6 | — | `429 LIMITE_MATCHES_ALCANZADO`, solo con `interesado: true` |
 
@@ -2573,6 +2586,11 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   con un `UPDATE` condicional, sin carreras. Esa fila es un bloqueo más al registrar, después del de
   la alerta (§6): dos avistamientos de la misma persona a la vez se esperan; los de personas
   distintas, no.
+- **Se podía hacer match con el avistamiento de una cuenta bloqueada o dada de baja.** El feed seguía
+  ofreciéndolo, y el match abría un chat con alguien que no podía responder y le creaba un aviso que
+  nunca iba a leer; `ALERTA_ENCONTRADA`, en cambio, ya excluía esas cuentas. Ahora el feed no los
+  ofrece y el match se rechaza con `400 AUTOR_NO_DISPONIBLE`, después de `AVISTAMIENTO_ELIMINADO` y
+  antes de `ALERTA_NO_ACTIVA` (§6).
 
 **Limitaciones que deja la revisión, aceptadas:**
 

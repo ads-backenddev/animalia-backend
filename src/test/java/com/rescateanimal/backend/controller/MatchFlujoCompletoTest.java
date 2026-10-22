@@ -439,6 +439,38 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("Los avistamientos de una cuenta bloqueada o dada de baja salen del feed, y el swipe sobre ellos da 400 AUTOR_NO_DISPONIBLE")
+    void avistamientosDeCuentasNoDisponibles() throws Exception {
+        // El curioso también registra uno, y después el administrador lo bloquea.
+        HttpResponse<String> delCurioso = avistar(tokenCurioso, alertaId);
+        assertThat(delCurioso.statusCode()).isEqualTo(201);
+        long deUnaCuentaBloqueada = numero(delCurioso.body(), "$.id");
+        String tokenAdmin = crearAdministradorYEntrar();
+        assertThat(enviar("PUT", "/api/admin/usuarios/" + idCurioso + "/bloquear", tokenAdmin, """
+                {"motivo":"Avistamientos falsos"}
+                """).statusCode()).isEqualTo(200);
+
+        // Y el testigo, el de los otros cuatro, se da de baja (RF-19).
+        assertThat(enviar("DELETE", "/api/usuarios/me", tokenTestigo, """
+                {"password":"passw0rd123"}
+                """).statusCode()).isEqualTo(204);
+
+        // 1. El feed del dueño se queda sin ninguno.
+        assertThat(idsDelFeed(tokenDuenyo)).isEmpty();
+
+        // 2. Y el swipe sobre cualquiera, en los dos sentidos, da 400 sin dejar rastro.
+        for (long deUnaCuentaInactiva : List.of(avistamientos.get(0), deUnaCuentaBloqueada)) {
+            for (boolean interesado : new boolean[]{true, false}) {
+                HttpResponse<String> swipe = deslizar(tokenDuenyo, deUnaCuentaInactiva, interesado);
+                assertThat(swipe.statusCode()).isEqualTo(400);
+                assertThat(JsonPath.<String>read(swipe.body(), "$.codigo")).isEqualTo("AUTOR_NO_DISPONIBLE");
+            }
+        }
+        assertThat(matchRegistroRepository.findAll().stream()
+                .filter(m -> m.getUsuario().getId().equals(idDuenyo))).isEmpty();
+    }
+
+    @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);
