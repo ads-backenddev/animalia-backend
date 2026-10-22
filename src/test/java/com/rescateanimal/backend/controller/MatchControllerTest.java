@@ -188,6 +188,18 @@ class MatchControllerTest {
     }
 
     @Test
+    @DisplayName("Avistamiento retirado por el administrador -> 400 AVISTAMIENTO_ELIMINADO")
+    void avistamientoRetiradoDevuelve400() throws Exception {
+        when(matchService.deslizar(any(), any())).thenThrow(new OperacionNoPermitidaException(
+                "AVISTAMIENTO_ELIMINADO", "Este avistamiento fue retirado por incumplir las normas"));
+
+        mockMvc.perform(post("/api/matches")
+                        .contentType(MediaType.APPLICATION_JSON).content(MATCH))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.codigo").value("AVISTAMIENTO_ELIMINADO"));
+    }
+
+    @Test
     @DisplayName("Segundo swipe sobre la misma publicación -> 409")
     void dobleSwipeDevuelve409() throws Exception {
         when(matchService.deslizar(any(), any()))

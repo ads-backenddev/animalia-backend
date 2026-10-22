@@ -480,6 +480,55 @@ class MatchServiceTest {
     }
 
     /**
+     * Un avistamiento que el administrador retiró (RF-11) sigue existiendo, y el
+     * dueño puede tener su tarjeta en pantalla: es el paso 4 del orden de §6,
+     * después de los dos 403 y antes que el estado de la alerta.
+     */
+    @Nested
+    @DisplayName("Avistamiento retirado por el administrador (RF-11)")
+    class AvistamientoRetirado {
+
+        @Test
+        @DisplayName("El dueño no hace match con él -> 400 AVISTAMIENTO_ELIMINADO, sin registro, chat ni aviso")
+        void elDuenoNoHaceMatch() {
+            retirarElAvistamiento();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+
+            verify(matchRegistroRepository, never()).save(any());
+            verifyNoInteractions(chatRepository, notificacionService);
+        }
+
+        @Test
+        @DisplayName("Tampoco lo descarta: la tarjeta está retirada en los dos sentidos")
+        void tampocoLoDescarta() {
+            retirarElAvistamiento();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+
+            verify(matchRegistroRepository, never()).save(any());
+        }
+
+        @Test
+        @DisplayName("Retirado y con la alerta cerrada: manda AVISTAMIENTO_ELIMINADO, no ALERTA_NO_ACTIVA")
+        void elRetiroVaAntesQueLaAlertaCerrada() {
+            retirarElAvistamiento();
+            cerrarLaAlerta();
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(OperacionNoPermitidaException.class)
+                    .satisfies(e -> assertThat(((OperacionNoPermitidaException) e).getCodigo())
+                            .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+        }
+    }
+
+    /**
      * Swipe sobre un animal en adopción (RF-09).
      *
      * Lo único que cambia respecto al avistamiento es de dónde sale el otro
@@ -717,6 +766,13 @@ class MatchServiceTest {
         alerta.setEstado(estado);
         alerta.setUsuario(usuario(ID_USUARIO));
         return alerta;
+    }
+
+    /** El administrador ha retirado el avistamiento: pasa a ELIMINADO. */
+    private void retirarElAvistamiento() {
+        Avistamiento retirado = avistamiento();
+        retirado.setEstado(EstadoAvistamiento.ELIMINADO);
+        when(avistamientoRepository.findById(ID_AVISTAMIENTO)).thenReturn(Optional.of(retirado));
     }
 
     /** La alerta se ha cerrado: así lo ve la lectura bloqueada. */

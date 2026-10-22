@@ -28,6 +28,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.boot.test.web.server.LocalServerPort;
 
@@ -108,6 +109,8 @@ class MatchFlujoCompletoTest {
     private ProtectoraRepository protectoraRepository;
     @Autowired
     private AnimalAdopcionRepository animalAdopcionRepository;
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -125,6 +128,9 @@ class MatchFlujoCompletoTest {
 
     private long alertaId;
     private final List<Long> avistamientos = new ArrayList<>();
+
+    /** Solo para las pruebas que moderan: quien retira un avistamiento. */
+    private Long idAdministrador;
 
     /** Solo para la prueba del límite: una protectora con sus animales. */
     private Usuario cuentaProtectora;
@@ -168,6 +174,9 @@ class MatchFlujoCompletoTest {
         List<Long> usuarios = new ArrayList<>(List.of(idDuenyo, idTestigo, idCurioso));
         if (cuentaProtectora != null) {
             usuarios.add(cuentaProtectora.getId());
+        }
+        if (idAdministrador != null) {
+            usuarios.add(idAdministrador);
         }
         // En orden de dependencia: el chat apunta al match, el match al usuario.
         List<Long> matches = matchRegistroRepository.findAll().stream()
@@ -358,6 +367,36 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("Un avistamiento retirado por el administrador no se desliza: 400 AVISTAMIENTO_ELIMINADO, también con la alerta cerrada")
+    void avistamientoRetiradoNoSeDesliza() throws Exception {
+        long retirado = avistamientos.get(0);
+        String tokenAdmin = crearAdministradorYEntrar();
+        assertThat(enviar("DELETE", "/api/admin/publicaciones/" + retirado + "?tipo=AVISTAMIENTO",
+                tokenAdmin, null).statusCode()).isEqualTo(204);
+
+        // 1. El dueño puede tener aún la tarjeta en pantalla: ni match ni descarte.
+        for (boolean interesado : new boolean[]{true, false}) {
+            HttpResponse<String> swipe = deslizar(tokenDuenyo, retirado, interesado);
+            assertThat(swipe.statusCode()).isEqualTo(400);
+            assertThat(JsonPath.<String>read(swipe.body(), "$.codigo")).isEqualTo("AVISTAMIENTO_ELIMINADO");
+        }
+
+        // Sin rastro: ni registro, ni chat, ni aviso al testigo.
+        assertThat(matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                idDuenyo, retirado, com.rescateanimal.backend.model.enums.TipoPublicacion.AVISTAMIENTO))
+                .isFalse();
+        assertThat(notificacionesDeMatch(idTestigo)).isEmpty();
+
+        // 2. Con la alerta ya cerrada manda el retiro, que es lo propio de la
+        //    tarjeta: va antes que el estado de la alerta (§6, paso 4).
+        assertThat(enviar("PUT", "/api/alertas/" + alertaId + "/cerrar", tokenDuenyo, null)
+                .statusCode()).isEqualTo(200);
+        HttpResponse<String> tardio = deslizar(tokenDuenyo, retirado, true);
+        assertThat(tardio.statusCode()).isEqualTo(400);
+        assertThat(JsonPath.<String>read(tardio.body(), "$.codigo")).isEqualTo("AVISTAMIENTO_ELIMINADO");
+    }
+
+    @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);
@@ -471,6 +510,26 @@ class MatchFlujoCompletoTest {
             animal.setEstado(EstadoAnimal.DISPONIBLE);
             animales.add(animalAdopcionRepository.save(animal).getId());
         }
+    }
+
+    /**
+     * Un administrador directo a la base de datos, que es la única forma de
+     * crearlo, y su token. Lo que se prueba es lo que hace al moderar.
+     */
+    private String crearAdministradorYEntrar() throws Exception {
+        Usuario admin = new Usuario();
+        admin.setNombre("Administrador");
+        admin.setEmail("admin-" + sufijo + "@test.es");
+        admin.setPasswordHash(passwordEncoder.encode("passw0rd123"));
+        admin.setRol(Rol.ADMIN);
+        admin.setActivo(true);
+        idAdministrador = usuarioRepository.save(admin).getId();
+
+        HttpResponse<String> login = enviar("POST", "/api/auth/login", null, """
+                {"email":"%s","password":"passw0rd123"}
+                """.formatted(admin.getEmail()));
+        assertThat(login.statusCode()).isEqualTo(200);
+        return JsonPath.read(login.body(), "$.token");
     }
 
     /** Registra un usuario nuevo, inicia sesión y guarda su token. Devuelve su id. */
