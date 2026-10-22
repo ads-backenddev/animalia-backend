@@ -1,5 +1,8 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.dto.response.NotificacionResponse;
+import com.rescateanimal.backend.dto.response.PaginaResponse;
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Notificacion;
 import com.rescateanimal.backend.model.Usuario;
@@ -8,6 +11,11 @@ import com.rescateanimal.backend.model.enums.TipoPublicacion;
 import com.rescateanimal.backend.repository.NotificacionRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -25,6 +33,9 @@ import java.util.Optional;
 @Slf4j
 @Service
 public class NotificacionService {
+
+    /** Tope de tamaño de página del listado, el mismo que el del resto de listados. */
+    static final int MAXIMO_POR_PAGINA = 100;
 
     private final NotificacionRepository notificacionRepository;
     private final UsuarioRepository usuarioRepository;
@@ -265,6 +276,63 @@ public class NotificacionService {
                     crear(usuarioRepository.getReferenceById(destinatarioId), tipo, referenciaId));
             log.info("Creada notificación {} para el usuario {}", tipo, destinatarioId);
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // Lectura (GET y PATCH de /api/notificaciones)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Las notificaciones de un usuario, más recientes primero, en páginas de
+     * como mucho MAXIMO_POR_PAGINA (GET /api/notificaciones).
+     *
+     * Solo las suyas: la consulta filtra siempre por el usuario del token, y no
+     * hay forma de pedir las de otro. El orden lo fija el servicio, con el id
+     * como desempate para que una página no repita ni se salte filas; el que
+     * pida el cliente no se aplica.
+     *
+     * @param leida null para todas; true o false para solo las leídas o solo las
+     *              pendientes
+     */
+    @Transactional(readOnly = true)
+    public PaginaResponse<NotificacionResponse> listar(Long usuarioId, Boolean leida, Pageable paginacion) {
+        PageRequest peticion = PageRequest.of(
+                Math.max(0, paginacion.getPageNumber()),
+                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+                Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
+
+        Page<Notificacion> pagina = leida == null
+                ? notificacionRepository.findByUsuarioId(usuarioId, peticion)
+                : notificacionRepository.findByUsuarioIdAndLeida(usuarioId, leida, peticion);
+        return PaginaResponse.de(pagina, NotificacionService::aResponse);
+    }
+
+    /**
+     * Marca como leída una notificación propia (PATCH /api/notificaciones/{id}/leida).
+     *
+     * 404 si no existe y 403 si es de otro, que es lo que dice el contrato: los
+     * ids son secuenciales y distinguir los dos casos no revela nada que un
+     * usuario pueda aprovechar, porque nunca llega a ver el contenido ajeno.
+     * Marcar una ya leída no cambia nada.
+     */
+    @Transactional
+    public void marcarLeida(Long notificacionId, Long usuarioId) {
+        Notificacion notificacion = notificacionRepository.findById(notificacionId)
+                .orElseThrow(() -> new ResourceNotFoundException("La notificación no existe"));
+        if (!notificacion.getUsuario().getId().equals(usuarioId)) {
+            throw new AccessDeniedException("Solo puedes marcar tus propias notificaciones");
+        }
+        notificacion.setLeida(true);
+    }
+
+    private static NotificacionResponse aResponse(Notificacion notificacion) {
+        return NotificacionResponse.builder()
+                .id(notificacion.getId())
+                .tipo(notificacion.getTipo())
+                .referenciaId(notificacion.getReferenciaId())
+                .leida(notificacion.getLeida())
+                .createdAt(notificacion.getCreatedAt())
+                .build();
     }
 
     private Notificacion crear(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {

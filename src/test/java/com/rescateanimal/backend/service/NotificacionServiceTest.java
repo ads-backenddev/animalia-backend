@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.service;
 
+import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Notificacion;
 import com.rescateanimal.backend.model.Usuario;
@@ -17,6 +18,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -27,6 +32,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -326,6 +332,74 @@ class NotificacionServiceTest {
                     .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
 
             verifyNoInteractions(notificacionRepository);
+        }
+    }
+
+    @Nested
+    @DisplayName("Listado y marcado (GET y PATCH de /api/notificaciones)")
+    class Lectura {
+
+        private static final Sort ORDEN = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+
+        @Test
+        @DisplayName("Sin filtro pide las del usuario con el orden fijo del servicio, no el del cliente")
+        void listarSinFiltro() {
+            when(notificacionRepository.findByUsuarioId(any(), any())).thenReturn(new PageImpl<>(List.of()));
+
+            notificacionService.listar(7L, null, PageRequest.of(2, 20, Sort.by("tipo")));
+
+            verify(notificacionRepository).findByUsuarioId(7L, PageRequest.of(2, 20, ORDEN));
+        }
+
+        @Test
+        @DisplayName("Con leida filtra por ella, y la página no pasa de 100")
+        void listarConFiltroYTope() {
+            when(notificacionRepository.findByUsuarioIdAndLeida(any(), any(), any()))
+                    .thenReturn(new PageImpl<>(List.of()));
+
+            notificacionService.listar(7L, false, PageRequest.of(0, 500));
+
+            verify(notificacionRepository).findByUsuarioIdAndLeida(7L, false, PageRequest.of(0, 100, ORDEN));
+        }
+
+        @Test
+        @DisplayName("Marcar una propia la deja leída")
+        void marcarPropia() {
+            Notificacion propia = notificacionDe(7L);
+            when(notificacionRepository.findById(9L)).thenReturn(Optional.of(propia));
+
+            notificacionService.marcarLeida(9L, 7L);
+
+            assertThat(propia.getLeida()).isTrue();
+        }
+
+        @Test
+        @DisplayName("Marcar una ajena es 403 y no la toca")
+        void marcarAjena() {
+            Notificacion ajena = notificacionDe(8L);
+            when(notificacionRepository.findById(9L)).thenReturn(Optional.of(ajena));
+
+            assertThatThrownBy(() -> notificacionService.marcarLeida(9L, 7L))
+                    .isInstanceOf(AccessDeniedException.class);
+            assertThat(ajena.getLeida()).isFalse();
+        }
+
+        @Test
+        @DisplayName("Marcar una que no existe es 404")
+        void marcarInexistente() {
+            when(notificacionRepository.findById(9L)).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> notificacionService.marcarLeida(9L, 7L))
+                    .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        private Notificacion notificacionDe(Long usuarioId) {
+            Notificacion notificacion = new Notificacion();
+            notificacion.setId(9L);
+            notificacion.setUsuario(usuario(usuarioId));
+            notificacion.setTipo(TipoNotificacion.NUEVO_AVISTAMIENTO);
+            notificacion.setLeida(false);
+            return notificacion;
         }
     }
 

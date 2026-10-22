@@ -366,6 +366,40 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("El dueño ve un NUEVO_AVISTAMIENTO por avistamiento en /api/notificaciones y los marca leídos")
+    void avisosDeAvistamientoEnLasNotificaciones() throws Exception {
+        // 1. Un aviso por cada avistamiento del escenario, apuntando a la alerta.
+        HttpResponse<String> avisos = enviar("GET", "/api/notificaciones", tokenDuenyo, null);
+        assertThat(avisos.statusCode()).isEqualTo(200);
+        assertThat(numero(avisos.body(), "$.totalElements")).isEqualTo(avistamientos.size());
+        assertThat(JsonPath.<List<String>>read(avisos.body(), "$.content[*].tipo"))
+                .containsOnly("NUEVO_AVISTAMIENTO");
+        assertThat(JsonPath.<List<Integer>>read(avisos.body(), "$.content[*].referenciaId"))
+                .containsOnly((int) alertaId);
+        long primero = numero(avisos.body(), "$.content[0].id");
+
+        // 2. Marcar uno: 204, y deja de salir entre los pendientes.
+        assertThat(enviar("PATCH", "/api/notificaciones/" + primero + "/leida", tokenDuenyo, null)
+                .statusCode()).isEqualTo(204);
+        assertThat(numero(enviar("GET", "/api/notificaciones?leida=false", tokenDuenyo, null).body(),
+                "$.totalElements")).isEqualTo(avistamientos.size() - 1);
+
+        // 3. Los avisos de otro no se ven ni se marcan.
+        assertThat(numero(enviar("GET", "/api/notificaciones", tokenCurioso, null).body(), "$.totalElements"))
+                .isZero();
+        HttpResponse<String> ajena = enviar("PATCH", "/api/notificaciones/" + primero + "/leida", tokenCurioso, null);
+        assertThat(ajena.statusCode()).isEqualTo(403);
+        assertThat(JsonPath.<String>read(ajena.body(), "$.codigo")).isEqualTo("ACCESO_DENEGADO");
+        assertThat(enviar("PATCH", "/api/notificaciones/999999999/leida", tokenDuenyo, null).statusCode())
+                .isEqualTo(404);
+
+        // 4. Y sin token, nada.
+        assertThat(enviar("GET", "/api/notificaciones", null, null).statusCode()).isEqualTo(401);
+        assertThat(enviar("PATCH", "/api/notificaciones/" + primero + "/leida", null, null).statusCode())
+                .isEqualTo(401);
+    }
+
+    @Test
     @DisplayName("El feed global de avistamientos ya no existe: 404 también para un usuario autenticado")
     void elFeedGlobalYaNoExiste() throws Exception {
         HttpResponse<String> global = enviar("GET", "/api/avistamientos/feed", tokenCurioso, null);
