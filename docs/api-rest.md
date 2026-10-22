@@ -1270,6 +1270,15 @@ solo sitio (`trasConfirmar`):
   las peticiones esperando su segunda conexión, Tomcat atiende a la vez una petición menos de las
   conexiones que tiene el pool —19 hilos y 20 conexiones— y la aplicación no arranca si se
   configuran al revés. Los valores se justifican en la nota de §22 sobre la revisión del feed.
+- **Un aviso puede perderse, y no se reintenta.** Si el proceso cae entre el commit de la operación
+  y la escritura del aviso, o esa escritura falla —una conexión que no llega, un error de la base de
+  datos—, la operación queda hecha y el aviso no existe: lo único que queda es una línea de error en
+  el log (`No se pudo crear el aviso …`). No hay tabla de salida (*outbox*) ni reintentos; a cambio,
+  un aviso nunca se duplica. Se acepta mientras los avisos sean una ayuda y no la única forma de
+  enterarse: el dueño ve sus avistamientos en el feed aunque se pierda el `NUEVO_AVISTAMIENTO`, y el
+  cierre se ve en el detalle de la alerta. Si RF-05 llegara a depender de ellos —con la push—, la
+  salida sería una tabla de salida escrita en la misma transacción de la operación y un proceso que
+  la vacíe.
 
 `NUEVO_MATCH` es la excepción, y a propósito: match, chat y aviso son una sola operación, y un match
 del que el destinatario nunca se entera no sirve de nada (§6).
@@ -2603,3 +2612,5 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
 | Limitación | Por qué se acepta |
 |---|---|
 | `ALERTA_CERCANA` no está acotado: carga enteras todas las cuentas activas del área del autor, inserta los avisos uno a uno y, aunque va tras el commit, corre en el hilo de la petición, que no responde hasta terminar. El área se compara sin distinguir mayúsculas con `upper()`, y no hay índice que lo sostenga | Con los usuarios previstos, un área tiene pocas cuentas. Si llegara a miles, la salida sería un único `INSERT … SELECT`, un índice sobre `lower(area_geografica)` y crear los avisos fuera del hilo de la petición |
+| Un aviso tras el commit puede perderse si el proceso cae antes de escribirlo o si la escritura falla; solo queda el error en el log, sin reintento (§12) | Los avisos son una ayuda: el feed y el detalle de la alerta dicen lo mismo aunque el aviso falte. No perderlo exigiría una tabla de salida |
+| `PATCH /api/notificaciones/{id}/leida` distingue `403` de `404`, así que recorriendo ids se puede saber cuáles existen | Es lo que fija el contrato (§12), y no se ve nada del contenido ajeno |

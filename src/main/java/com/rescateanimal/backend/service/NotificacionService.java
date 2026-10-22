@@ -131,6 +131,13 @@ public class NotificacionService {
      * Sin una transacción activa —una llamada desde fuera de cualquier
      * transacción, o una prueba unitaria— no hay commit que esperar y se crea en
      * el momento.
+     *
+     * UN AVISO PUEDE PERDERSE, Y NO SE REINTENTA. Si el proceso cae entre el
+     * commit y este momento, o la escritura falla, la operación queda hecha y
+     * el aviso no existe: solo queda el error en el log. A cambio, nunca se
+     * duplica. Lo que haría falta para no perderlo —una tabla de salida escrita
+     * en la transacción de la operación y un proceso que la vacíe— está en
+     * docs/api-rest.md §12.
      */
     private void trasConfirmar(String aviso, Runnable escritura) {
         Runnable protegida = () -> {
