@@ -298,7 +298,7 @@ avistamientos.
 
 | Bloque | Estado |
 |---|---|
-| Estructura por capas, 15 entidades JPA, esquema versionado con Flyway (`V1`–`V17`), `JPA_DDL_AUTO=validate`, Docker, contrato en `docs/api-rest.md` | Terminado |
+| Estructura por capas, 16 entidades JPA, esquema versionado con Flyway (`V1`–`V19`), `JPA_DDL_AUTO=validate`, Docker, contrato en `docs/api-rest.md` | Terminado |
 | Autenticación y seguridad: JWT con revocación, registro de ciudadano y de protectora, login, logout y recuperación de contraseña (RF-01, RF-13, RF-16, RF-17) | Terminado |
 | Perfil, idioma y baja de cuenta con anonimización (RF-02, RF-18, RF-19) | Terminado |
 | Alertas: publicación, listado y detalle, edición, cierre, retirada por el dueño y moderación, mapa en tiempo real por STOMP, detección de duplicados y bloqueo de fila contra operaciones simultáneas (RF-03, RF-04, RF-11, RF-14, RF-25; §22) | Terminado |
