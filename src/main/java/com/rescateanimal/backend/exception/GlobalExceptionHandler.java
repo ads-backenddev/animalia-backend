@@ -201,7 +201,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "ALERTA_AJENA", ex.getMessage(), request);
     }
 
-    /** 403 — rol insuficiente para el endpoint, lanzado por @PreAuthorize. */
+    /**
+     * 403 — sin permiso, por dos caminos que el cliente ve igual:
+     * - rol insuficiente para el endpoint, lo que lanza @PreAuthorize;
+     * - un recurso de otro usuario sin código propio, lo que lanzan los
+     *   services: una alerta ajena al editarla, retirarla, cerrarla o pedir su
+     *   feed (AlertaService, AvistamientoService) y la notificación de otro al
+     *   marcarla leída (NotificacionService).
+     * Los recursos ajenos que el cliente necesita distinguir tienen excepción
+     * y código propios (ALERTA_AJENA, CHAT_AJENO, ANIMAL_AJENO).
+     */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> accesoDenegado(AccessDeniedException ex, WebRequest request) {
         return respuesta(HttpStatus.FORBIDDEN, "ACCESO_DENEGADO",

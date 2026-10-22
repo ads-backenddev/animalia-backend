@@ -245,6 +245,12 @@ public class AnimalAdopcionService {
      * de modo que ningún controller pueda vaciarle el catálogo a una protectora
      * sin pasar por un service que lo justifique.
      *
+     * LOS RETIRA EN ORDEN DE ID. Hay tres vías que llegan aquí —la baja, el
+     * bloqueo y el rechazo— y dos a la vez sobre la misma protectora tocan los
+     * mismos animales: en el mismo orden, la segunda espera a la primera; en
+     * órdenes distintos, podrían interbloquearse (ver
+     * AnimalAdopcionRepository.findByProtectoraIdAndEstadoOrderByIdAsc).
+     *
      * @param protectoraId a quién se le retira
      * @param motivo       para el log; no viaja a ninguna respuesta
      * @return cuántos animales se han retirado
@@ -252,7 +258,7 @@ public class AnimalAdopcionService {
     @Transactional
     int retirarTodosLosDisponibles(Long protectoraId, String motivo) {
         List<AnimalAdopcion> disponibles = animalAdopcionRepository
-                .findByProtectoraIdAndEstado(protectoraId, EstadoAnimal.DISPONIBLE);
+                .findByProtectoraIdAndEstadoOrderByIdAsc(protectoraId, EstadoAnimal.DISPONIBLE);
 
         disponibles.forEach(animal -> animal.setEstado(EstadoAnimal.RETIRADO));
 

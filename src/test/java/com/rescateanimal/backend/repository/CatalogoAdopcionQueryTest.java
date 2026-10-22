@@ -15,10 +15,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 import java.util.UUID;
@@ -53,6 +56,10 @@ class CatalogoAdopcionQueryTest {
 
     @Autowired
     private AnimalAdopcionRepository animalAdopcionRepository;
+    @Autowired
+    private JdbcTemplate jdbc;
+    @Autowired
+    private PlatformTransactionManager transacciones;
     @Autowired
     private ProtectoraRepository protectoraRepository;
     @Autowired
@@ -93,6 +100,38 @@ class CatalogoAdopcionQueryTest {
 
         // Los tres filtros ausentes: el caso que antes rompía el recuento.
         assertThat(mios(pagina)).containsExactlyInAnyOrder("Luna", "Nube", "Sol", "Coco");
+    }
+
+    @Test
+    @DisplayName("Los disponibles de una protectora, para retirarlos, salen por id aunque en disco vayan en otro orden")
+    void losDisponiblesParaRetirarSalenPorId() {
+        // Dos animales con ids nuevos, insertado antes el mayor: en disco va
+        // delante, y una consulta sin ORDER BY los devolvería al revés.
+        Long tope = jdbc.queryForObject("SELECT COALESCE(max(id), 0) FROM animal_adopcion", Long.class);
+        long mayor = tope + 1001;
+        long menor = tope + 1000;
+        for (long id : new long[]{mayor, menor}) {
+            jdbc.update("""
+                    INSERT INTO animal_adopcion (id, created_at, especie, estado, nombre, protectora_id)
+                    VALUES (?, now(), 'perro', 'DISPONIBLE', 'Orden', ?)
+                    """, id, protectora.getId());
+            animalesCreados.add(id);
+        }
+
+        // Solo recorridos de la tabla, como con pocas filas: un índice devolvería
+        // las filas en su propio orden y taparía la falta del ORDER BY.
+        List<Long> enOrden = new TransactionTemplate(transacciones).execute(estado -> {
+            jdbc.execute("SET LOCAL enable_indexscan = off");
+            jdbc.execute("SET LOCAL enable_bitmapscan = off");
+            return animalAdopcionRepository
+                    .findByProtectoraIdAndEstadoOrderByIdAsc(protectora.getId(), EstadoAnimal.DISPONIBLE)
+                    .stream()
+                    .map(AnimalAdopcion::getId)
+                    .filter(id -> id == mayor || id == menor)
+                    .toList();
+        });
+
+        assertThat(enOrden).containsExactly(menor, mayor);
     }
 
     @Test

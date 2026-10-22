@@ -1,6 +1,5 @@
 package com.rescateanimal.backend.service;
 
-import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.ProtectoraAdminResponse;
 import com.rescateanimal.backend.dto.response.ReporteResponse;

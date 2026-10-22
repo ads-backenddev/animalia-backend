@@ -23,8 +23,9 @@ import java.time.Instant;
 
 /**
  * Notificación dirigida a un usuario (RF-05).
- * Se entrega por el canal WebSocket /ws/notificaciones y queda persistida para
- * poder listarla y marcarla como leída.
+ * Queda persistida para que su destinatario la liste y la marque como leída
+ * (GET y PATCH de /api/notificaciones). La entrega en vivo por WebSocket y la
+ * push siguen sin construir (docs/api-rest.md §12).
  */
 @Entity
 @Table(name = "notificacion", indexes = {

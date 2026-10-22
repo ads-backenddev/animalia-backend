@@ -2591,6 +2591,12 @@ encontró varios problemas, que se corrigieron antes de fusionarlo:
   nunca iba a leer; `ALERTA_ENCONTRADA`, en cambio, ya excluía esas cuentas. Ahora el feed no los
   ofrece y el match se rechaza con `400 AUTOR_NO_DISPONIBLE`, después de `AVISTAMIENTO_ELIMINADO` y
   antes de `ALERTA_NO_ACTIVA` (§6).
+- **Detalles menores.** Al retirar el catálogo de una protectora —por su baja, su bloqueo o su
+  rechazo— sus animales se cargan ahora en orden de id: Hibernate escribe los `UPDATE` en ese orden,
+  así que dos de esas operaciones a la vez sobre la misma protectora toman las filas igual y la
+  segunda espera a la primera, sin posibilidad de interbloqueo. Y varios comentarios del código que se
+  habían quedado atrás dicen ya lo que hace: los códigos de `POST /api/avistamientos`, qué lanza el
+  `403 ACCESO_DENEGADO`, la ruta del feed y cómo se entregan las notificaciones.
 
 **Limitaciones que deja la revisión, aceptadas:**
 
