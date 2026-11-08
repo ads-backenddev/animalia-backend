@@ -138,6 +138,13 @@ public class NotificacionService {
      * duplica. Lo que haría falta para no perderlo —una tabla de salida escrita
      * en la transacción de la operación y un proceso que la vacíe— está en
      * docs/api-rest.md §12.
+     *
+     * SOLO DEBE LLEGAR AQUÍ UN HILO DE TOMCAT. La escritura pide una segunda
+     * conexión mientras el hilo conserva la primera, y lo que impide que eso
+     * agote el pool es que haya menos hilos de Tomcat que conexiones
+     * (ComprobacionPoolConexiones). Un aviso creado desde un mensaje STOMP o
+     * una tarea @Async o @Scheduled quedaría fuera de esa cuenta: antes de
+     * añadir uno, hay que sumar esos hilos a ella o darles su propio límite.
      */
     private void trasConfirmar(String aviso, Runnable escritura) {
         Runnable protegida = () -> {

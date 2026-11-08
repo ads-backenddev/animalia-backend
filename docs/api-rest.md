@@ -1316,6 +1316,12 @@ solo sitio (`trasConfirmar`):
   las peticiones esperando su segunda conexión, Tomcat atiende a la vez una petición menos de las
   conexiones que tiene el pool —19 hilos y 20 conexiones— y la aplicación no arranca si se
   configuran al revés. Los valores se justifican en la nota de §22 sobre la revisión del feed.
+  **La cuenta solo vale si los avisos salen de peticiones REST**, que son los hilos que acota
+  Tomcat: hoy es así. Un aviso creado desde un mensaje STOMP o una tarea en segundo plano
+  necesitaría también dos conexiones sin entrar en la cuenta, y habría que sumarlo a ella o darle su
+  propio límite. Por lo mismo, la aplicación tampoco arranca con los hilos virtuales activados
+  (`spring.threads.virtual.enabled=true`): con ellos Tomcat crea un hilo por petición, deja de
+  aplicar `server.tomcat.threads.max` y las peticiones a la vez dejan de tener techo.
 - **Un aviso puede perderse, y no se reintenta.** Si el proceso cae entre el commit de la operación
   y la escritura del aviso, o esa escritura falla —una conexión que no llega, un error de la base de
   datos—, la operación queda hecha y el aviso no existe: lo único que queda es una línea de error en
