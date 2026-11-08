@@ -521,6 +521,25 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("En /mios un descarte recuperado sale el primero: el orden es el de apertura del chat, no la fecha del registro")
+    void misMatchesPorAperturaDelChat() throws Exception {
+        long recuperado = avistamientos.get(0);
+        long normal = avistamientos.get(1);
+        assertThat(deslizar(tokenDuenyo, recuperado, false).statusCode()).isEqualTo(201);
+        assertThat(deslizar(tokenDuenyo, normal, true).statusCode()).isEqualTo(201);
+        assertThat(deslizar(tokenDuenyo, recuperado, true).statusCode()).isEqualTo(201);
+
+        HttpResponse<String> mios = enviar("GET", "/api/matches/mios", tokenDuenyo, null);
+        assertThat(mios.statusCode()).isEqualTo(200);
+        assertThat(JsonPath.<List<Integer>>read(mios.body(), "$[*].publicacionId"))
+                .containsExactly((int) recuperado, (int) normal);
+        // El registro recuperado es el más antiguo de los dos: por createdAt
+        // saldría el segundo.
+        assertThat(Instant.parse(JsonPath.read(mios.body(), "$[0].createdAt")))
+                .isBefore(Instant.parse(JsonPath.read(mios.body(), "$[1].createdAt")));
+    }
+
+    @Test
     @DisplayName("Sin token, ni feed ni swipe")
     void sinTokenNoHayNada() throws Exception {
         assertThat(feed(null).statusCode()).isEqualTo(401);

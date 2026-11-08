@@ -473,7 +473,7 @@ RF-08, RF-09, RF-15, RF-24.
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
 | `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: abre el chat asociado (RF-12), avisa a quien publicó lo deslizado y, **solo si es de adopción**, consume cupo diario. Con `false` es un descarte (RF-15). Un avistamiento solo lo desliza el dueño de su alerta | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
-| `GET` | `/api/matches/mios` | Matches del usuario autenticado, más recientes primero. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
+| `GET` | `/api/matches/mios` | Matches del usuario autenticado, por la apertura de su chat: el más reciente primero (`id` como desempate). Un descarte recuperado sale arriba aunque su `createdAt` sea el del descarte. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
 | `GET` | `/api/matches/limite` | Estado del límite diario, para que el cliente lo muestre antes de agotarlo | Autenticado | — | `LimiteMatchResponse` | `200`, `401` |
 
 ### Los dos sentidos del swipe van por el mismo endpoint
@@ -527,7 +527,8 @@ restricción única lo impediría— y, en la misma transacción, se abre el cha
 mismos bloqueos, con el `UPDATE` de ese registro en el lugar del `INSERT`. El `UPDATE` solo cambia un
 descarte, así que dos conversiones a la vez abren un solo chat y la segunda recibe
 `409 SWIPE_DUPLICADO`. La respuesta es `201`, con el `id` del registro de siempre y su `createdAt`
-original —cuándo se deslizó por primera vez—; el chat lleva la fecha de su apertura. Todo lo demás
+original —cuándo se deslizó por primera vez—; el chat lleva la fecha de su apertura, y es esa la que
+ordena `/api/matches/mios`, así que el match recuperado sale el primero de la lista. Todo lo demás
 sigue siendo `409`: repetir un match, repetir un descarte, descartar lo que ya era match y cualquier
 repetición en adopción, que no tiene lista de descartados.
 

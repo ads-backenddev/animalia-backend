@@ -851,7 +851,7 @@ class MatchServiceTest {
         void cadaMatchLlevaSuChat() {
             MatchRegistro uno = registro(1L);
             MatchRegistro dos = registro(2L);
-            when(matchRegistroRepository.findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(ID_USUARIO))
+            when(matchRegistroRepository.buscarMisMatchesPorAperturaDelChat(ID_USUARIO))
                     .thenReturn(List.of(uno, dos));
             when(chatRepository.findByMatchIdIn(List.of(1L, 2L)))
                     .thenReturn(List.of(chat(11L, uno), chat(22L, dos)));
@@ -868,7 +868,7 @@ class MatchServiceTest {
         @Test
         @DisplayName("Sin matches no se consultan los chats")
         void sinMatchesNoSeConsultanChats() {
-            when(matchRegistroRepository.findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(ID_USUARIO))
+            when(matchRegistroRepository.buscarMisMatchesPorAperturaDelChat(ID_USUARIO))
                     .thenReturn(List.of());
 
             assertThat(matchService.listarMisMatches(ID_USUARIO)).isEmpty();

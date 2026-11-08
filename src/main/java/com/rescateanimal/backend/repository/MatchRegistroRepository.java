@@ -61,11 +61,26 @@ public interface MatchRegistroRepository extends JpaRepository<MatchRegistro, Lo
                                  @Param("tipoPublicacion") TipoPublicacion tipoPublicacion);
 
     /**
-     * Matches del usuario, más recientes primero. Solo los positivos: los
-     * descartes viven en la misma tabla pero no son matches y no interesan al
-     * listado (RF-08).
+     * Matches del usuario, del chat abierto más recientemente al más antiguo.
+     * Solo los positivos: los descartes viven en la misma tabla pero no son
+     * matches y no interesan al listado (RF-08).
+     *
+     * El orden es el de apertura del chat y no el createdAt del registro porque
+     * un descarte recuperado conserva la fecha del descarte: ordenado por ella,
+     * el chat que se acaba de abrir saldría detrás de matches de días después.
+     * En un match normal el registro y su chat nacen en la misma transacción y
+     * los dos órdenes coinciden. El COALESCE deja en su sitio un match sin chat,
+     * que no debería existir, en lugar de mandarlo al final por un NULL; m.id
+     * desempata.
      */
-    List<MatchRegistro> findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(Long usuarioId);
+    @Query("""
+            SELECT m FROM MatchRegistro m
+            LEFT JOIN Chat c ON c.match = m
+            WHERE m.usuario.id = :usuarioId
+              AND m.interesado = true
+            ORDER BY COALESCE(c.createdAt, m.createdAt) DESC, m.id DESC
+            """)
+    List<MatchRegistro> buscarMisMatchesPorAperturaDelChat(@Param("usuarioId") Long usuarioId);
 
     /**
      * Solicitudes de adopción recibidas por una protectora (RF-10): los

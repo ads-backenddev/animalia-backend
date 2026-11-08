@@ -481,13 +481,14 @@ public class MatchService {
     // ---------------------------------------------------------------------
 
     /**
-     * Matches del usuario autenticado (RF-08). Solo los positivos: los descartes
-     * comparten tabla pero no son matches.
+     * Matches del usuario autenticado (RF-08), del chat abierto más recientemente
+     * al más antiguo: así un descarte recuperado sale arriba aunque su registro
+     * lleve la fecha del descarte. Solo los positivos: los descartes comparten
+     * tabla pero no son matches.
      */
     @Transactional(readOnly = true)
     public List<MatchResponse> listarMisMatches(Long usuarioId) {
-        List<MatchRegistro> matches =
-                matchRegistroRepository.findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(usuarioId);
+        List<MatchRegistro> matches = matchRegistroRepository.buscarMisMatchesPorAperturaDelChat(usuarioId);
 
         if (matches.isEmpty()) {
             return List.of();
