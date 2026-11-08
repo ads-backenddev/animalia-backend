@@ -128,8 +128,12 @@ recuperación de contraseña (RF-17) sin escribir a una dirección real.
 - Bandeja de entrada: <http://localhost:8025>
 
 Sin él, la aplicación arranca igual; el envío falla en segundo plano y solo queda registrado en el
-log, porque `EmailService` no propaga el error (si lo hiciera, el flujo de recuperación revelaría
-qué correos están registrados).
+log —el tipo de correo y la clase del error, nunca la dirección—, porque el envío no propaga el
+error (si lo hiciera, el flujo de recuperación revelaría qué correos están registrados).
+
+Fuera de producción el correo sale por SMTP (`SmtpEmailSender`, contra Mailpit); en el perfil `prod`
+sale por la API de Resend (`ResendEmailSender`), que necesita `RESEND_API_KEY` y `MAIL_FROM`. Las dos
+implementaciones cumplen la misma interfaz, `EmailSender`, y el perfil decide cuál se usa.
 
 ### Comandos útiles de Docker
 
@@ -189,7 +193,9 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `TOMCAT_HILOS_MAX` | `19` | Peticiones que Tomcat atiende a la vez; las demás esperan en cola. Siempre por debajo de `DB_POOL_MAX` |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
-| `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
+| `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña, **solo fuera de producción** (Mailpit) |
+| `MAIL_FROM` | `no-reply@rescateanimal.es` | Remitente de los correos. **Obligatoria en producción**: una dirección de un dominio verificado en Resend |
+| `RESEND_API_KEY` | — | Clave de la API de Resend, con permiso solo de envío. **Solo y obligatoria en producción**; sin ella, o sin `MAIL_FROM`, la aplicación no arranca |
 | `SERVER_PORT` | `8080` | Puerto de la API |
 | `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción |
 | `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
