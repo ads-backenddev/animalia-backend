@@ -318,9 +318,7 @@ public class NotificacionService {
      */
     @Transactional(readOnly = true)
     public PaginaResponse<NotificacionResponse> listar(Long usuarioId, Boolean leida, Pageable paginacion) {
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<Notificacion> pagina = leida == null

@@ -318,9 +318,7 @@ public class ChatService {
     public PaginaResponse<MensajeResponse> historico(Long chatId, Long usuarioId, Pageable paginacion) {
         exigirParticipante(chatId, usuarioId);
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_MENSAJES_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_MENSAJES_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<Mensaje> pagina = mensajeRepository.buscarPorChat(chatId, peticion);

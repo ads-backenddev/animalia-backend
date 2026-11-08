@@ -294,9 +294,7 @@ public class AnimalAdopcionService {
     public PaginaResponse<AnimalAdopcionResponse> catalogo(String especie, Tamanyo tamanyo,
                                                            String zona, Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(
@@ -342,9 +340,7 @@ public class AnimalAdopcionService {
     PaginaResponse<AnimalAdopcionResponse> listarDeLaProtectora(Long protectoraId,
                                                                 Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(
@@ -384,9 +380,7 @@ public class AnimalAdopcionService {
     PaginaResponse<AnimalAdopcionResponse> listarDisponiblesDeLaProtectora(Long protectoraId,
                                                                            Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(

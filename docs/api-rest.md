@@ -87,6 +87,13 @@ Los listados admiten los parámetros estándar de Spring Data: `page` (desde 0),
 { "content": [], "page": 0, "size": 20, "totalElements": 0, "totalPages": 0, "last": true }
 ```
 
+**`page` llega como mucho a 10 000**, en todos los listados: por encima, `400 PARAMETRO_INVALIDO`.
+Antes, un `page` desmesurado como `2147483647` daba un desplazamiento que Spring Data no admite y
+la petición acababa en `500`. Ningún listado tiene tantas páginas —con el tamaño por defecto serían
+200 000 elementos—, y servir una tan profunda obligaría a PostgreSQL a leer y descartar todas las
+filas anteriores. `size`, en cambio, se ajusta sin error al máximo de cada listado, y la respuesta
+dice el tamaño aplicado.
+
 ### Coordenadas
 
 En la base de datos la geolocalización es un `Point` de PostGIS (SRID 4326). En la API viaja como

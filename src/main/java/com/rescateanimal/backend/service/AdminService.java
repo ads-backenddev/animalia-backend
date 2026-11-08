@@ -93,9 +93,7 @@ public class AdminService {
     public PaginaResponse<UsuarioAdminResponse> listarUsuarios(Rol rol, Boolean activo,
                                                                Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<Usuario> pagina = usuarioRepository.findAll(UsuarioAdminSpec.de(rol, activo), peticion);

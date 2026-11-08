@@ -221,9 +221,7 @@ public class AvistamientoService {
                                                                           Pageable paginacion) {
         exigirAlertaActivaDelDueno(alertaId, usuarioId);
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA));
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA);
         Page<Avistamiento> pagina = avistamientoRepository.buscarDescartados(
                 alertaId, usuarioId, EstadoAvistamiento.VISIBLE, TipoPublicacion.AVISTAMIENTO, peticion);
         return PaginaResponse.de(pagina, aTarjetas(pagina.getContent()));
