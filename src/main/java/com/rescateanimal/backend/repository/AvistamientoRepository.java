@@ -91,6 +91,17 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
      * Más recientes primero, con el id como desempate para que dos del mismo
      * instante no cambien de orden entre llamadas. El autor viene con JOIN FETCH
      * porque cada tarjeta lo enseña; la alerta no hace falta, ya está cargada.
+     *
+     * UN CRITERIO VA ESCRITO EN LA CONSULTA, u.activo = true, mientras que el
+     * estado y el tipo llegan por parámetro; en buscarDescartados le acompaña
+     * m.interesado = false. No sigue la regla de contarSolicitudesPendientes
+     * (MatchRegistroRepository), que recibe el estado "pendiente" porque
+     * decidirlo es negocio, y es a sabiendas: los dos son booleanos sin más
+     * valores posibles, y pasarlos por parámetro solo permitiría pedir lo
+     * contrario —tarjetas de cuentas inactivas, matches en la lista de
+     * descartes—, que ningún service pide. El estado, en cambio, es un enum que
+     * puede crecer. Si alguno de los dos pasara a depender de una decisión de
+     * negocio, tendría que llegar por parámetro como él.
      */
     @Query("""
             SELECT a FROM Avistamiento a
@@ -133,6 +144,9 @@ public interface AvistamientoRepository extends JpaRepository<Avistamiento, Long
      * MATCH_REGISTRO se une por publicación Y tipo, nunca solo por el id: la
      * referencia es polimórfica, y el descarte de un animal con el mismo id no
      * es el de este avistamiento (ver MatchRegistro).
+     *
+     * u.activo = true y m.interesado = false van escritos en la consulta, y no
+     * por parámetro, por lo que se explica en buscarPendientesDeRevisar.
      */
     @Query(value = """
             SELECT a FROM Avistamiento a
