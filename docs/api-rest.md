@@ -696,7 +696,7 @@ RF-12.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/chats` | Conversaciones del usuario, con último mensaje y número de no leídos | Autenticado | — | Lista de `ChatResumenResponse` | `200`, `401` |
 | `GET` | `/api/chats/{id}` | Detalle de una conversación: interlocutor y publicación que la originó | Participante | — | `ChatDetalleResponse` | `200`, `401`, `403`, `404` |
-| `GET` | `/api/chats/{id}/mensajes` | Histórico paginado de mensajes, del más reciente al más antiguo | Participante | — | Página de `MensajeResponse` | `200`, `401`, `403`, `404` |
+| `GET` | `/api/chats/{id}/mensajes` | Histórico paginado de mensajes, del más reciente al más antiguo | Participante | — | Página de `MensajeResponse` | `200`, `400`, `401`, `403`, `404` |
 | `POST` | `/api/chats/{id}/mensajes` | Envía un mensaje. Alternativa REST al WebSocket, para clientes sin conexión STOMP activa | Participante | `EnviarMensajeRequest`: `contenido` | `MensajeResponse` | `201`, `400`, `401`, `403`, `404` |
 | `PUT` | `/api/chats/{id}/mensajes/leidos` | Marca como leídos todos los mensajes recibidos en la conversación | Participante | — | — | `204`, `401`, `403`, `404` |
 
@@ -855,7 +855,7 @@ RF-06, RF-10, RF-23.
 | ~~`POST`~~ | ~~`/api/protectoras/{id}/contactar`~~ | **Diseñado, no construido.** Abrir un contacto con una protectora al encontrar un animal perdido | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | — |
 | ~~`POST`~~ | ~~`/api/protectoras/local/contactar`~~ | **Diseñado, no construido.** Contactar con la protectora de la localidad resolviéndola desde `areaGeografica` | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | — |
 | `PUT` | `/api/protectoras/{id}/valoracion` | Crea o actualiza la valoración de 1 a 5 estrellas de quien ha tratado con la protectora (RF-23) | Autenticado | `ValorarProtectoraRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `200`, `400`, `401`, `403`, `404` |
-| `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `400`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/solicitudes` | Ciudadanos que han querido ponerse en contacto por alguno de sus animales (RF-10) | `PROTECTORA` `ACTIVA` | — | Lista de `SolicitudAdopcionResponse` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/valoraciones` | Valoraciones recibidas, con la media calculada (RF-10, RF-23) | `PROTECTORA` `ACTIVA` | — | `ValoracionesPanelResponse`: `valoraciones[]`, `media?`, `total` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/resumen` | Contadores agregados para la pantalla principal del panel (RF-10) | `PROTECTORA` `ACTIVA` | — | `ResumenPanelResponse` | `200`, `401`, `403` |
