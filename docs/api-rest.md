@@ -621,6 +621,15 @@ fila del cupo de avistamientos solo la toma el registro, siempre después de la 
 bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
 `MatchService.deslizar`.
 
+**`USUARIO` no está en la tabla porque nadie espera por él.** Los `INSERT` de `MATCH_REGISTRO`,
+`CHAT` y `NOTIFICACION` toman sobre su fila el `FOR KEY SHARE` de la clave ajena, que solo choca con
+un borrado o con un `UPDATE` que cambie una columna clave, y ninguno lo hace: a un usuario no se le
+borra (la baja lo anonimiza) y la baja, el bloqueo y el perfil cambian columnas que no lo son. La
+única columna única además del `id` es el email, y su unicidad es un índice sobre `lower(email)`
+(`V5`), que PostgreSQL no cuenta como clave; así que anonimizarlo toma `FOR NO KEY UPDATE`, que
+convive con esos `FOR KEY SHARE`. Un `UNIQUE` normal sobre una columna que cambiara la baja
+añadiría esperas —no un ciclo— y obligaría a meter `USUARIO` en esta tabla.
+
 ### Los dos tipos de publicación
 
 `tipoPublicacion` decide en qué tabla vive `publicacionId` —es una referencia polimórfica sin clave
