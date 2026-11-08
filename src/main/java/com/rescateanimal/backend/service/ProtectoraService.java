@@ -156,9 +156,7 @@ public class ProtectoraService {
 
         // Sin Sort: el orden lo fija la consulta, que ordena por lower(nombre) para
         // no depender de la intercalación y poder apoyarse en el índice de V13.
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA));
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA);
 
         Page<Protectora> pagina = protectoraRepository.buscarParaDirectorio(
                 ESTADOS_VISIBLES, patronDeZona(zona), peticion);

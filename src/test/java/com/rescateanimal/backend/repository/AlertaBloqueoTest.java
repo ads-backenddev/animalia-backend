@@ -2,16 +2,27 @@ package com.rescateanimal.backend.repository;
 
 import com.rescateanimal.backend.dto.request.ActualizarAlertaRequest;
 import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
+import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.request.UbicacionRequest;
+import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
+import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.Foto;
 import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.Rol;
+import com.rescateanimal.backend.model.enums.TipoContenido;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.service.AdminService;
 import com.rescateanimal.backend.service.AlertaService;
 import com.rescateanimal.backend.service.AlmacenFotosService;
 import com.rescateanimal.backend.service.AvistamientoService;
+import com.rescateanimal.backend.service.MatchService;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -43,15 +54,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Las carreras sobre una misma alerta —el dueño, el administrador y quien
- * registra un avistamiento—, con transacciones de verdad en PostgreSQL.
+ * Las carreras sobre una misma alerta y sus avistamientos —el dueño, el
+ * administrador, quien registra un avistamiento y el dueño que desliza uno—,
+ * con transacciones de verdad en PostgreSQL.
  *
  * Una operación se queda a medias con su transacción abierta (retener), y la
  * otra se lanza en otro hilo. La prueba espera a ver que la segunda está
  * bloqueada POR LA PRIMERA —así se sabe que ya leyó, o lo intentó, antes de que
  * la primera confirme—, la deja confirmar y comprueba en qué estado queda todo.
- * Sin los bloqueos de AlertaRepository la segunda no espera nunca, y la prueba
- * falla por tiempo.
+ * Sin los bloqueos de AlertaRepository y AvistamientoRepository la segunda no
+ * espera nunca, y la prueba falla por tiempo.
  *
  * LA SONDA SOLO RECONOCE A ESTA PRUEBA. La base de datos es compartida: otra
  * prueba o la aplicación arrancada desde el IDE pueden tener sus propias
@@ -69,6 +81,8 @@ class AlertaBloqueoTest {
     private static final double LNG = -3.90;
     /** Solo va al log de la moderación: no hace falta que exista. */
     private static final long ADMIN = 1L;
+    /** El cupo diario de avistamientos por alerta de application.properties. */
+    private static final int LIMITE_POR_ALERTA = 5;
     private static final Duration ESPERA_MAXIMA = Duration.ofSeconds(10);
 
     private final GeometryFactory geometrias = new GeometryFactory(new PrecisionModel(), 4326);
@@ -84,6 +98,12 @@ class AlertaBloqueoTest {
     @Autowired
     private AvistamientoService avistamientoService;
     @Autowired
+    private MatchService matchService;
+    @Autowired
+    private AdminService adminService;
+    @PersistenceContext
+    private EntityManager entityManager;
+    @Autowired
     private FotoRepository fotoRepository;
     @Autowired
     private AlmacenFotosService almacenFotos;
@@ -95,6 +115,9 @@ class AlertaBloqueoTest {
     private Usuario duenyo;
     private Usuario testigo;
     private String fotoDelTestigo;
+    /** Un segundo testigo, con su propio cupo, para lo que no debe esperarse. */
+    private Usuario otroTestigo;
+    private String fotoDelOtroTestigo;
     private Long alertaId;
     private String especie;
 
@@ -103,14 +126,9 @@ class AlertaBloqueoTest {
         especie = "bloqueo-" + UUID.randomUUID().toString().substring(0, 8);
         duenyo = usuario("Dueño");
         testigo = usuario("Testigo");
-
-        // registrar exige que la foto sea del testigo; para eso basta la fila.
-        Foto foto = new Foto();
-        foto.setNombre(UUID.randomUUID() + ".jpg");
-        foto.setUsuario(testigo);
-        foto.setTamanyo(1);
-        fotoRepository.save(foto);
-        fotoDelTestigo = almacenFotos.urlDe(foto.getNombre());
+        otroTestigo = usuario("Otro testigo");
+        fotoDelTestigo = fotoDe(testigo);
+        fotoDelOtroTestigo = fotoDe(otroTestigo);
 
         Alerta alerta = new Alerta();
         alerta.setUsuario(duenyo);
@@ -138,11 +156,24 @@ class AlertaBloqueoTest {
             }
         }
         hilos.shutdownNow();
+        // Lo que dejen los swipes, también si una prueba falla con el match ya
+        // hecho. Por usuario, y son los tres de esta prueba.
+        Object[] usuarios = {duenyo.getId(), testigo.getId(), otroTestigo.getId()};
+        jdbc.update("DELETE FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id IN (?, ?, ?))", usuarios);
+        jdbc.update("DELETE FROM match_registro WHERE usuario_id IN (?, ?, ?)", usuarios);
+        jdbc.update("DELETE FROM notificacion WHERE usuario_id IN (?, ?, ?)", usuarios);
+        jdbc.update("DELETE FROM limite_match_diario WHERE usuario_id IN (?, ?, ?)", usuarios);
         // Directo por alerta_id: la tabla es de la base de datos compartida, y
         // cargarla entera para filtrar en memoria crece con todo lo que haya.
+        jdbc.update("DELETE FROM limite_avistamiento_diario WHERE alerta_id = ?", alertaId);
         jdbc.update("DELETE FROM avistamiento WHERE alerta_id = ?", alertaId);
         alertaRepository.deleteById(alertaId);
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
+        fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelOtroTestigo).orElseThrow());
+        // La foto de la alerta, si una prueba se la puso y no llegó a moderarse.
+        jdbc.update("DELETE FROM foto WHERE usuario_id = ?", duenyo.getId());
+        usuarioRepository.delete(otroTestigo);
         usuarioRepository.delete(testigo);
         usuarioRepository.delete(duenyo);
     }
@@ -233,20 +264,263 @@ class AlertaBloqueoTest {
     }
 
     @Test
-    @DisplayName("Dos avistamientos sobre la misma alerta no se esperan: el bloqueo es compartido")
+    @DisplayName("Una moderación que borra la foto de la alerta hace esperar a un avistamiento, y la foto del testigo se conserva")
+    void avistamientoDuranteLaModeracionDeUnaAlertaConFoto() throws Exception {
+        String fotoDeLaAlerta = fotoDe(duenyo);
+        jdbc.update("UPDATE alerta SET foto_url = ? WHERE id = ?", fotoDeLaAlerta, alertaId);
+        // El DELETE de FOTO sale al hacer flush; se fuerza para retener la
+        // moderación con la fila de la foto ya tomada, lo último que bloquea.
+        Retenida moderacion = retener(() -> {
+            alertaService.retirarPorModeracion(alertaId, ADMIN);
+            entityManager.flush();
+        });
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_locks WHERE pid = ? AND locktype = 'relation' "
+                + "AND relation = 'foto'::regclass AND mode = 'RowExclusiveLock'", Integer.class, moderacion.pid))
+                .as("la moderación retenida ya ha borrado la fila de la foto").isEqualTo(1);
+
+        CompletableFuture<Void> avistamiento = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(moderacion);
+        assertThat(avistamiento).as("el avistamiento espera a la moderación").isNotDone();
+
+        moderacion.confirmar();
+
+        assertThatThrownBy(() -> avistamiento.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(fotoRepository.existsById(almacenFotos.nombreDe(fotoDeLaAlerta).orElseThrow()))
+                .as("la foto de la alerta moderada, borrada").isFalse();
+        assertThat(fotoRepository.existsById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow()))
+                .as("la del testigo no era de la alerta").isTrue();
+        assertThat(avistamientos()).isZero();
+    }
+
+    @Test
+    @DisplayName("Dos avistamientos de personas distintas sobre la misma alerta no se esperan: bloqueo compartido y un cupo cada una")
     void dosAvistamientosALaVez() throws Exception {
         Retenida primero = retener(this::avistar);
 
-        // El primero sigue con su transacción abierta, y su bloqueo, mientras
+        // El primero sigue con su transacción abierta, y sus bloqueos, mientras
         // el segundo se registra y confirma entero.
-        CompletableFuture.runAsync(this::avistar, hilos).get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        CompletableFuture.runAsync(() -> avistarComo(otroTestigo, fotoDelOtroTestigo), hilos)
+                .get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
         assertThat(primero.transaccion).as("el primero sigue sin confirmar").isNotDone();
 
         primero.confirmar();
         assertThat(avistamientos()).isEqualTo(2);
     }
 
+    @Test
+    @DisplayName("Dos avistamientos de la misma persona a la vez se esperan en su fila del cupo, y entran los dos")
+    void dosAvistamientosDelMismoTestigoSeEsperan() throws Exception {
+        Retenida primero = retener(this::avistar);
+
+        CompletableFuture<Void> segundo = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(primero);
+        assertThat(segundo).as("el segundo espera al cupo del primero").isNotDone();
+
+        primero.confirmar();
+
+        segundo.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(avistamientos()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("Con un solo hueco en el cupo y dos avistamientos a la vez, entra uno y el otro recibe el 429")
+    void elCupoNoSePasaConDosALaVez() throws Exception {
+        for (int i = 0; i < LIMITE_POR_ALERTA - 1; i++) {
+            avistar();
+        }
+        Retenida ultimoHueco = retener(this::avistar);
+
+        CompletableFuture<Void> deMas = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(ultimoHueco);
+
+        ultimoHueco.confirmar();
+
+        // Al soltarse la fila, el UPDATE condicional del segundo vuelve a mirar
+        // el contador, ya en el límite, y no suma.
+        assertThatThrownBy(() -> deMas.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(LimiteAvistamientosAlcanzadoException.class);
+        assertThat(avistamientos()).isEqualTo(LIMITE_POR_ALERTA);
+    }
+
+    @Test
+    @DisplayName("Un match del dueño durante el cierre espera, ve la ENCONTRADA y no abre chat")
+    void matchDuranteElCierre() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida cierre = retener(() -> alertaService.cerrar(alertaId, duenyo.getId()));
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(cierre);
+        assertThat(match).as("el match espera al cierre").isNotDone();
+
+        cierre.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(deslizamientos()).as("ni registro ni chat sobre una alerta cerrada").isZero();
+    }
+
+    @Test
+    @DisplayName("Un match del dueño durante la moderación del avistamiento espera, ve el ELIMINADO y no abre chat")
+    void matchDuranteLaModeracionDelAvistamiento() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        // La moderación escribe el estado al hacer flush, justo antes del
+        // commit; se fuerza aquí para retenerla con el UPDATE ya hecho y la
+        // fila tomada, que es la ventana en la que el match no debe colarse.
+        Retenida moderacion = retener(() -> {
+            adminService.retirarPublicacion(TipoContenido.AVISTAMIENTO, avistamiento, ADMIN);
+            entityManager.flush();
+        });
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(moderacion);
+        assertThat(match).as("el match espera a la moderación del avistamiento").isNotDone();
+
+        moderacion.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class)
+                .satisfies(e -> assertThat(((OperacionNoPermitidaException) e.getCause()).getCodigo())
+                        .isEqualTo("AVISTAMIENTO_ELIMINADO"));
+        assertThat(deslizamientos()).as("ni registro ni chat sobre contenido retirado").isZero();
+    }
+
+    @Test
+    @DisplayName("Una moderación del avistamiento durante un match del dueño espera a que confirme, y se aplica después")
+    void moderacionDelAvistamientoDuranteUnMatch() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida match = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<Void> moderacion = CompletableFuture.runAsync(() ->
+                adminService.retirarPublicacion(TipoContenido.AVISTAMIENTO, avistamiento, ADMIN), hilos);
+        esperarAQueLaBloquee(match);
+        assertThat(moderacion).as("la moderación espera al match").isNotDone();
+
+        match.confirmar();
+
+        moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(jdbc.queryForObject("SELECT estado FROM avistamiento WHERE id = ?", String.class, avistamiento))
+                .isEqualTo("ELIMINADO");
+        assertThat(deslizamientos()).as("el match confirmó antes que la moderación").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Dos conversiones a la vez del mismo descarte abren un solo chat: la segunda espera y recibe SWIPE_DUPLICADO")
+    void dosConversionesALaVez() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        matchService.deslizar(new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false),
+                duenyo.getId());
+        Retenida primera = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<MatchResponse> segunda = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(primera);
+        assertThat(segunda).as("la segunda espera a la fila del registro").isNotDone();
+
+        primera.confirmar();
+
+        assertThatThrownBy(() -> segunda.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PublicacionYaDeslizadaException.class);
+        assertThat(deslizamientos()).as("un solo registro").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id = ?)", Integer.class, duenyo.getId()))
+                .as("un solo chat").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Un cierre durante la recuperación de un descarte espera a que se abra el chat, y avisa también a ese testigo")
+    void cierreDuranteLaRecuperacionDeUnDescarte() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        matchService.deslizar(new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false),
+                duenyo.getId());
+        Retenida conversion = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<Void> cierre = CompletableFuture.runAsync(() ->
+                alertaService.cerrar(alertaId, duenyo.getId()), hilos);
+        esperarAQueLaBloquee(conversion);
+        assertThat(cierre).as("el cierre espera a la conversión").isNotDone();
+
+        conversion.confirmar();
+
+        cierre.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(estado()).isEqualTo(EstadoAlerta.ENCONTRADA);
+        assertThat(jdbc.queryForList("SELECT usuario_id FROM notificacion WHERE tipo = 'ALERTA_ENCONTRADA' "
+                + "AND referencia_id = ?", Long.class, alertaId))
+                .as("el testigo recuperado tiene chat, y recibe el aviso").containsExactly(testigo.getId());
+    }
+
+    @Test
+    @DisplayName("Un match durante el descarte de la misma tarjeta espera en el índice único y recibe SWIPE_DUPLICADO, no CONFLICTO")
+    void matchDuranteElDescarte() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida descarte = retener(() -> matchService.deslizar(
+                new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false), duenyo.getId()));
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(descarte);
+        assertThat(match).as("el match no ve el descarte sin confirmar y espera en el índice único").isNotDone();
+
+        descarte.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PublicacionYaDeslizadaException.class);
+        assertThat(jdbc.queryForList("SELECT interesado FROM match_registro WHERE usuario_id = ?",
+                Boolean.class, duenyo.getId()))
+                .as("queda el descarte, y nada más").containsExactly(false);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id = ?)", Integer.class, duenyo.getId()))
+                .as("ningún chat").isZero();
+    }
+
+    @Test
+    @DisplayName("Quien no es el dueño recibe ALERTA_AJENA al momento: su swipe no espera ni bloquea")
+    void unSwipeAjenoNoEspera() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida moderacion = retener(() -> alertaService.retirarPorModeracion(alertaId, ADMIN));
+
+        CompletableFuture<MatchResponse> ajeno = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), testigo.getId()), hilos);
+        assertThatThrownBy(() -> ajeno.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(AlertaAjenaException.class);
+        assertThat(moderacion.transaccion).as("la moderación sigue abierta").isNotDone();
+
+        moderacion.confirmar();
+    }
+
     // ---------------------------------------------------------------------
+
+    private static CrearMatchRequest swipeA(long avistamientoId) {
+        return new CrearMatchRequest(avistamientoId, TipoPublicacion.AVISTAMIENTO, true);
+    }
+
+    private long idDelAvistamiento() {
+        Long id = jdbc.queryForObject("SELECT id FROM avistamiento WHERE alerta_id = ?", Long.class, alertaId);
+        return id == null ? 0 : id;
+    }
+
+    private int deslizamientos() {
+        Integer total = jdbc.queryForObject("SELECT count(*) FROM match_registro WHERE tipo_publicacion = "
+                + "'AVISTAMIENTO' AND publicacion_id IN (SELECT id FROM avistamiento WHERE alerta_id = ?)",
+                Integer.class, alertaId);
+        return total == null ? 0 : total;
+    }
 
     /** Una operación que ya tiene la fila y no confirma hasta que se le dice. */
     private static final class Retenida {
@@ -318,8 +592,22 @@ class AlertaBloqueoTest {
     }
 
     private void avistar() {
+        avistarComo(testigo, fotoDelTestigo);
+    }
+
+    private void avistarComo(Usuario quien, String foto) {
         avistamientoService.registrar(new CrearAvistamientoRequest(alertaId, "Visto en la esquina",
-                fotoDelTestigo, new UbicacionRequest(LAT, LNG)), testigo.getId());
+                foto, new UbicacionRequest(LAT, LNG)), quien.getId());
+    }
+
+    /** registrar exige que la foto sea de quien avista; para eso basta la fila. */
+    private String fotoDe(Usuario usuario) {
+        Foto foto = new Foto();
+        foto.setNombre(UUID.randomUUID() + ".jpg");
+        foto.setUsuario(usuario);
+        foto.setTamanyo(1);
+        fotoRepository.save(foto);
+        return almacenFotos.urlDe(foto.getNombre());
     }
 
     private int avistamientos() {

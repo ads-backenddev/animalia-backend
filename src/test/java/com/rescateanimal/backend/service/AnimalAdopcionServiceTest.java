@@ -536,7 +536,7 @@ class AnimalAdopcionServiceTest {
         void losDisponiblesPasanARetirado() {
             AnimalAdopcion uno = animal(EstadoAnimal.DISPONIBLE);
             AnimalAdopcion otro = animal(EstadoAnimal.DISPONIBLE);
-            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+            when(animalAdopcionRepository.findByProtectoraIdAndEstadoOrderByIdAsc(
                     ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of(uno, otro));
 
             int retirados = animalAdopcionService.retirarTodosLosDisponibles(
@@ -550,7 +550,7 @@ class AnimalAdopcionServiceTest {
         @Test
         @DisplayName("Solo se piden los DISPONIBLE: un ADOPTADO es un desenlace, no una oferta")
         void losAdoptadosNoSeTocan() {
-            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+            when(animalAdopcionRepository.findByProtectoraIdAndEstadoOrderByIdAsc(
                     ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of());
 
             animalAdopcionService.retirarTodosLosDisponibles(ID_PROTECTORA, "motivo de prueba");
@@ -558,17 +558,17 @@ class AnimalAdopcionServiceTest {
             // Pasarlos a RETIRADO borraría el hecho de que ese animal encontró
             // casa, que es el dato que da sentido al histórico que se conserva.
             verify(animalAdopcionRepository)
-                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.DISPONIBLE);
+                    .findByProtectoraIdAndEstadoOrderByIdAsc(ID_PROTECTORA, EstadoAnimal.DISPONIBLE);
             verify(animalAdopcionRepository, never())
-                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.ADOPTADO);
+                    .findByProtectoraIdAndEstadoOrderByIdAsc(ID_PROTECTORA, EstadoAnimal.ADOPTADO);
             verify(animalAdopcionRepository, never())
-                    .findByProtectoraIdAndEstado(ID_PROTECTORA, EstadoAnimal.RETIRADO);
+                    .findByProtectoraIdAndEstadoOrderByIdAsc(ID_PROTECTORA, EstadoAnimal.RETIRADO);
         }
 
         @Test
         @DisplayName("Sin nada que retirar no falla y devuelve cero")
         void sinNadaQueRetirarDevuelveCero() {
-            when(animalAdopcionRepository.findByProtectoraIdAndEstado(
+            when(animalAdopcionRepository.findByProtectoraIdAndEstadoOrderByIdAsc(
                     ID_PROTECTORA, EstadoAnimal.DISPONIBLE)).thenReturn(List.of());
 
             assertThat(animalAdopcionService.retirarTodosLosDisponibles(

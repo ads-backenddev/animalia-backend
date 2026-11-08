@@ -313,8 +313,8 @@ class AdminServiceTest {
         void elFalloDelAvisoNoDeshaceElBloqueo() {
             Usuario usuario = usuario(ID_USUARIO, Rol.CIUDADANO, true);
             when(usuarioRepository.findById(ID_USUARIO)).thenReturn(Optional.of(usuario));
-            when(notificacionService.notificarDecisionAdministrativa(any(), any(), any()))
-                    .thenThrow(new IllegalStateException("la base de datos se cayó"));
+            doThrow(new IllegalStateException("la base de datos se cayó"))
+                    .when(notificacionService).notificarDecisionAdministrativa(any(), any(), any());
 
             UsuarioAdminResponse respuesta = admin.bloquear(ID_USUARIO, "Spam", ID_ADMIN);
 

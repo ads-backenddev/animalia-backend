@@ -44,7 +44,10 @@ public class ErrorResponse {
      */
     private AlertaDuplicadaResponse alertaExistente;
 
-    /** Solo en el 429 por cuota diaria agotada (RF-24). */
+    /**
+     * Solo en los 429 por un cupo diario agotado: el de matches de adopción
+     * (RF-24), el de fotos y el de avistamientos por alerta.
+     */
     private Integer limiteDiario;
 
     /**

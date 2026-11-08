@@ -245,6 +245,12 @@ public class AnimalAdopcionService {
      * de modo que ningún controller pueda vaciarle el catálogo a una protectora
      * sin pasar por un service que lo justifique.
      *
+     * LOS RETIRA EN ORDEN DE ID. Hay tres vías que llegan aquí —la baja, el
+     * bloqueo y el rechazo— y dos a la vez sobre la misma protectora tocan los
+     * mismos animales: en el mismo orden, la segunda espera a la primera; en
+     * órdenes distintos, podrían interbloquearse (ver
+     * AnimalAdopcionRepository.findByProtectoraIdAndEstadoOrderByIdAsc).
+     *
      * @param protectoraId a quién se le retira
      * @param motivo       para el log; no viaja a ninguna respuesta
      * @return cuántos animales se han retirado
@@ -252,7 +258,7 @@ public class AnimalAdopcionService {
     @Transactional
     int retirarTodosLosDisponibles(Long protectoraId, String motivo) {
         List<AnimalAdopcion> disponibles = animalAdopcionRepository
-                .findByProtectoraIdAndEstado(protectoraId, EstadoAnimal.DISPONIBLE);
+                .findByProtectoraIdAndEstadoOrderByIdAsc(protectoraId, EstadoAnimal.DISPONIBLE);
 
         disponibles.forEach(animal -> animal.setEstado(EstadoAnimal.RETIRADO));
 
@@ -288,9 +294,7 @@ public class AnimalAdopcionService {
     public PaginaResponse<AnimalAdopcionResponse> catalogo(String especie, Tamanyo tamanyo,
                                                            String zona, Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(
@@ -336,9 +340,7 @@ public class AnimalAdopcionService {
     PaginaResponse<AnimalAdopcionResponse> listarDeLaProtectora(Long protectoraId,
                                                                 Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(
@@ -378,9 +380,7 @@ public class AnimalAdopcionService {
     PaginaResponse<AnimalAdopcionResponse> listarDisponiblesDeLaProtectora(Long protectoraId,
                                                                            Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<AnimalAdopcion> pagina = animalAdopcionRepository.findAll(

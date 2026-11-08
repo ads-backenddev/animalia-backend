@@ -195,7 +195,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return respuesta(HttpStatus.FORBIDDEN, "ANIMAL_AJENO", ex.getMessage(), request);
     }
 
-    /** 403 — rol insuficiente para el endpoint, lanzado por @PreAuthorize. */
+    /** 403 — el avistamiento cuelga de una alerta de otro: solo su dueño lo desliza. */
+    @ExceptionHandler(AlertaAjenaException.class)
+    public ResponseEntity<ErrorResponse> alertaAjena(AlertaAjenaException ex, WebRequest request) {
+        return respuesta(HttpStatus.FORBIDDEN, "ALERTA_AJENA", ex.getMessage(), request);
+    }
+
+    /**
+     * 403 — sin permiso, por dos caminos que el cliente ve igual:
+     * - rol insuficiente para el endpoint, lo que lanza @PreAuthorize;
+     * - un recurso de otro usuario sin código propio, lo que lanzan los
+     *   services: una alerta ajena al editarla, retirarla, cerrarla o pedir su
+     *   feed o sus descartados (AlertaService, AvistamientoService) y la
+     *   notificación de otro al marcarla leída (NotificacionService).
+     * Los recursos ajenos que el cliente necesita distinguir tienen excepción
+     * y código propios (ALERTA_AJENA, CHAT_AJENO, ANIMAL_AJENO).
+     */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> accesoDenegado(AccessDeniedException ex, WebRequest request) {
         return respuesta(HttpStatus.FORBIDDEN, "ACCESO_DENEGADO",
@@ -267,6 +282,20 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * 429 — cupo diario de avistamientos de un usuario en una misma alerta
+     * agotado. Mismo cuerpo que el de matches.
+     */
+    @ExceptionHandler(LimiteAvistamientosAlcanzadoException.class)
+    public ResponseEntity<ErrorResponse> limiteAvistamientosAlcanzado(LimiteAvistamientosAlcanzadoException ex,
+                                                                     WebRequest request) {
+        ErrorResponse cuerpo = base(HttpStatus.TOO_MANY_REQUESTS, "LIMITE_AVISTAMIENTOS_ALCANZADO",
+                ex.getMessage(), ruta(request));
+        cuerpo.setLimiteDiario(ex.getLimiteDiario());
+        cuerpo.setReiniciaEn(ex.getReiniciaEn());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(cuerpo);
+    }
+
+    /**
      * 409 — choque contra una restricción única de la base de datos.
      *
      * Cubre la ventana entre comprobar que un email está libre e insertarlo: con
@@ -298,8 +327,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      * los demás 409 (duplicados), que no se arreglan reintentando.
      *
      * AL CLIENTE LE DA IGUAL, AL LOG NO. Una espera vencida es carga normal:
-     * warn. Un interbloqueo no debería pasar nunca —ninguna ruta toma los
-     * bloqueos de alerta en orden inverso (docs/api-rest.md §22)—, así que si
+     * warn. Un interbloqueo no debería pasar nunca —ninguna ruta pide en orden
+     * contrario los bloqueos de una alerta, sus avistamientos y los cupos
+     * (tabla de orden de bloqueo de docs/api-rest.md §6)—, así que si
      * pasa es un error de orden de bloqueos que hay que ir a buscar: error, con
      * la traza. Se distinguen por el SQLState de PostgreSQL y no por la clase de
      * la excepción, porque la clase depende de cómo la traduzcan Hibernate y

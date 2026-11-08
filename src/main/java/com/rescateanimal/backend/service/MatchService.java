@@ -3,11 +3,13 @@ package com.rescateanimal.backend.service;
 import com.rescateanimal.backend.dto.request.CrearMatchRequest;
 import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionPropiaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
+import com.rescateanimal.backend.model.Alerta;
 import com.rescateanimal.backend.model.AnimalAdopcion;
 import com.rescateanimal.backend.model.Avistamiento;
 import com.rescateanimal.backend.model.Chat;
@@ -17,6 +19,8 @@ import com.rescateanimal.backend.model.Usuario;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.model.enums.EstadoAnimal;
 import com.rescateanimal.backend.model.enums.EstadoAvistamiento;
+import com.rescateanimal.backend.model.enums.TipoPublicacion;
+import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AnimalAdopcionRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
@@ -24,7 +28,9 @@ import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +61,7 @@ public class MatchService {
     private final ChatRepository chatRepository;
     private final AvistamientoRepository avistamientoRepository;
     private final AnimalAdopcionRepository animalAdopcionRepository;
+    private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
     private final NotificacionService notificacionService;
 
@@ -65,6 +72,7 @@ public class MatchService {
                         ChatRepository chatRepository,
                         AvistamientoRepository avistamientoRepository,
                         AnimalAdopcionRepository animalAdopcionRepository,
+                        AlertaRepository alertaRepository,
                         UsuarioRepository usuarioRepository,
                         NotificacionService notificacionService,
                         @Value("${app.matches.limite-diario}") int limiteDiario) {
@@ -73,6 +81,7 @@ public class MatchService {
         this.chatRepository = chatRepository;
         this.avistamientoRepository = avistamientoRepository;
         this.animalAdopcionRepository = animalAdopcionRepository;
+        this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.limiteDiario = limiteDiario;
@@ -90,6 +99,12 @@ public class MatchService {
      * segundo swipe sobre la misma publicación —que acaba en 409— le habría
      * gastado al usuario un match del día.
      *
+     * LA CUOTA DIARIA (RF-24) ES SOLO DE ADOPCIÓN. El límite existe para que
+     * nadie haga match en masa con publicaciones ajenas; sobre los avistamientos
+     * ya no hay ese riesgo, porque solo los desliza el dueño de su propia
+     * alerta, y un dueño con muchos avistamientos en un día no debe quedarse sin
+     * poder revisarlos. Ver consumeCuota.
+     *
      * Todo lo que sigue al consumo de cuota ocurre en la misma transacción:
      * registro, chat y notificación son las tres partes de "hacer match" y no
      * tiene sentido que exista una sin las otras. Es distinto del caso de las
@@ -101,21 +116,63 @@ public class MatchService {
      * escrituras sí pueden ser atómicas entre sí, mientras que una difusión por
      * WebSocket no lo es —ningún rollback la retira— y lo único elegible allí es
      * cuándo sale. El porqué completo está en el javadoc de aquel método.
+     *
+     * ORDEN DE BLOQUEO, de principio a fin de la transacción:
+     * 1. En un avistamiento, la fila de su ALERTA y después la del propio
+     *    AVISTAMIENTO, las dos con FOR SHARE (autorDelAvistamiento). Antes no
+     *    se toma ningún bloqueo: el 404 y los dos 403 se resuelven con
+     *    lecturas simples.
+     * 2. En un match de adopción, la fila del CONTADOR DIARIO del usuario, con
+     *    el UPDATE condicional de consumirCuotaDiaria. Un avistamiento no la
+     *    toca: no consume cuota.
+     * 3. Los INSERT de MATCH_REGISTRO —la clave de su índice único—, o el
+     *    UPDATE de su fila si se recupera un descarte, y los de CHAT y de
+     *    NOTIFICACION, que sobre sus filas padre solo toman el FOR KEY SHARE de
+     *    comprobar la clave ajena.
+     * Quién más toma esas filas, y por qué no hay ciclo:
+     * - La ALERTA la bloquean en exclusiva editarla, retirarla, cerrarla y
+     *   moderarla (FOR NO KEY UPDATE), y en compartido registrar un
+     *   avistamiento, que después toma la fila de su cupo diario en esa alerta
+     *   (LimiteAvistamientoDiario), una fila que el match no toca. Ninguna toca
+     *   después un avistamiento ya registrado ni el contador. La moderación
+     *   borra además la fila de FOTO de la alerta, que es lo último que toma;
+     *   el match no toca FOTO.
+     * - El AVISTAMIENTO solo lo escribe su moderación
+     *   (AdminService.retirarAvistamiento): el UPDATE de su estado y nada más,
+     *   ni la alerta, ni FOTO —su foto no se borra—, ni el contador.
+     * - El CONTADOR solo lo toca un match de adopción, que no bloquea alertas
+     *   ni avistamientos.
+     * La única espera de una alerta hacia un avistamiento es la del propio
+     * match, y nadie espera en sentido contrario: quien tiene un avistamiento
+     * bloqueado no pide después su alerta. Sin un par de bloqueos pedidos en
+     * orden contrario no hay ciclo posible.
+     *
+     * UN DESCARTE DE AVISTAMIENTO SE PUEDE CONVERTIR EN MATCH, una vez: así
+     * recupera el dueño, desde su lista de descartados, el que descartó por
+     * error (AvistamientoService.descartadosDeLaAlerta). El registro existente
+     * cambia de sentido —la restricción única no admitiría otro— y lo demás es
+     * un match normal, en la misma transacción: chat y aviso. Las comprobaciones
+     * y los bloqueos son los mismos porque se hacen antes de mirar si ya había
+     * registro; el UPDATE de ese registro ocupa el lugar del INSERT. Ver
+     * recuperarDescarte.
      */
     @Transactional
     public MatchResponse deslizar(CrearMatchRequest peticion, Long usuarioId) {
         Usuario autorDeLaPublicacion = resolverAutor(peticion, usuarioId);
+        boolean interesado = Boolean.TRUE.equals(peticion.getInteresado());
 
         if (matchRegistroRepository.existsByUsuarioIdAndPublicacionIdAndTipoPublicacion(
                 usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion())) {
+            if (interesado && admiteRecuperarDescarte(peticion.getTipoPublicacion())) {
+                return recuperarDescarte(peticion, usuarioId, autorDeLaPublicacion);
+            }
             throw new PublicacionYaDeslizadaException("Ya habías deslizado esta publicación");
         }
 
         Usuario usuario = usuarioRepository.findById(usuarioId)
                 .orElseThrow(() -> new ResourceNotFoundException("El usuario no existe"));
 
-        boolean interesado = Boolean.TRUE.equals(peticion.getInteresado());
-        if (interesado) {
+        if (interesado && consumeCuota(peticion.getTipoPublicacion())) {
             consumirCuotaDiaria(usuario);
         }
 
@@ -124,7 +181,7 @@ public class MatchService {
         registro.setPublicacionId(peticion.getPublicacionId());
         registro.setTipoPublicacion(peticion.getTipoPublicacion());
         registro.setInteresado(interesado);
-        MatchRegistro guardado = matchRegistroRepository.save(registro);
+        MatchRegistro guardado = guardarDeslizamiento(registro);
 
         if (!interesado) {
             // Un descarte solo deja constancia para que el feed no lo repita:
@@ -134,23 +191,96 @@ public class MatchService {
             return aMatchResponse(guardado, null);
         }
 
+        return abrirChatYAvisar(guardado, autorDeLaPublicacion, usuarioId);
+    }
+
+    /**
+     * Guarda un deslizamiento nuevo y traduce a SWIPE_DUPLICADO el choque con
+     * la restricción única.
+     *
+     * Ese choque es un doble swipe que existsBy no llegó a ver: el mismo
+     * usuario desliza la misma publicación dos veces a la vez —un descarte y el
+     * "deshacer" que lo sigue sin esperar a su 201, por ejemplo—, las dos
+     * peticiones pasan la comprobación porque ninguna ha confirmado todavía, y
+     * el INSERT de la segunda espera en el índice único hasta que la primera
+     * confirma y entonces falla. Es el mismo caso que existsBy responde con
+     * SWIPE_DUPLICADO, y se responde igual; la transacción se deshace entera,
+     * cupo incluido. El INSERT sale dentro de save porque el id es IDENTITY.
+     *
+     * La restricción se reconoce por su nombre, que Hibernate saca del mensaje
+     * de PostgreSQL. Cualquier otra violación sigue su camino hasta el 409
+     * CONFLICTO genérico de GlobalExceptionHandler.
+     */
+    private MatchRegistro guardarDeslizamiento(MatchRegistro registro) {
+        try {
+            return matchRegistroRepository.save(registro);
+        } catch (DataIntegrityViolationException ex) {
+            if (chocaConElDeslizamientoUnico(ex)) {
+                throw new PublicacionYaDeslizadaException("Ya habías deslizado esta publicación");
+            }
+            throw ex;
+        }
+    }
+
+    private static boolean chocaConElDeslizamientoUnico(DataIntegrityViolationException ex) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa instanceof ConstraintViolationException violacion) {
+                return MatchRegistro.RESTRICCION_UN_DESLIZAMIENTO.equals(violacion.getConstraintName());
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Convierte en match el descarte que el usuario hizo de esta publicación, y
+     * abre el chat y avisa, en la transacción del deslizamiento.
+     *
+     * La conversión es un UPDATE condicional (convertirDescarteEnMatch): si dos
+     * peticiones del mismo dueño llegan a la vez, la segunda espera a la fila y
+     * ya no la encuentra en descarte, así que recibe el mismo 409 que repetir un
+     * match y solo se abre un chat.
+     *
+     * El registro se lee después del UPDATE y por primera vez en esta
+     * transacción —existsBy no lo carga—, así que llega ya convertido. Conserva
+     * su createdAt: es cuándo se deslizó, y el registro es el mismo.
+     */
+    private MatchResponse recuperarDescarte(CrearMatchRequest peticion, Long usuarioId,
+                                            Usuario autorDeLaPublicacion) {
+        if (matchRegistroRepository.convertirDescarteEnMatch(
+                usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion()) == 0) {
+            throw new PublicacionYaDeslizadaException("Ya habías hecho match con esta publicación");
+        }
+        MatchRegistro recuperado = matchRegistroRepository
+                .findByUsuarioIdAndPublicacionIdAndTipoPublicacion(
+                        usuarioId, peticion.getPublicacionId(), peticion.getTipoPublicacion())
+                .orElseThrow(() -> new IllegalStateException("El descarte recién convertido no aparece"));
+
+        log.info("Usuario {} recupera su descarte {} de la publicación {} de tipo {}",
+                usuarioId, recuperado.getId(), peticion.getPublicacionId(), peticion.getTipoPublicacion());
+        return abrirChatYAvisar(recuperado, autorDeLaPublicacion, usuarioId);
+    }
+
+    /**
+     * Las otras dos partes de un match, comunes al nuevo y al recuperado de un
+     * descarte: el chat entre los dos extremos y el aviso al otro.
+     */
+    private MatchResponse abrirChatYAvisar(MatchRegistro match, Usuario autorDeLaPublicacion, Long usuarioId) {
         Chat chat = new Chat();
-        chat.setMatch(guardado);
+        chat.setMatch(match);
         Chat chatGuardado = chatRepository.save(chat);
 
         // Avisa a quien publicó lo deslizado de que alguien ha mostrado interés.
         // El destinatario es siempre el OTRO extremo del chat que se acaba de
         // abrir, nunca quien deslizó: en los avistamientos es su autor y no el
-        // dueño de la alerta —que suele ser el propio deslizador—, y en las
+        // dueño de la alerta —que es siempre quien desliza—, y en las
         // adopciones es la cuenta de la protectora dueña del animal.
-        notificacionService.notificarNuevoMatch(
-                autorDeLaPublicacion, guardado.getId(), usuarioId);
+        notificacionService.notificarNuevoMatch(autorDeLaPublicacion, match.getId(), usuarioId);
 
         log.info("Match {} del usuario {} sobre la publicación {} de tipo {}; chat {}",
-                guardado.getId(), usuarioId, peticion.getPublicacionId(),
-                peticion.getTipoPublicacion(), chatGuardado.getId());
+                match.getId(), usuarioId, match.getPublicacionId(),
+                match.getTipoPublicacion(), chatGuardado.getId());
 
-        return aMatchResponse(guardado, chatGuardado.getId());
+        return aMatchResponse(match, chatGuardado.getId());
     }
 
     /**
@@ -160,7 +290,8 @@ public class MatchService {
      * Es lo único que cambia entre tipos de publicación (RF-08 y RF-09): cada
      * uno vive en su tabla, tiene su propio dueño y su propia regla de cuándo
      * deja de admitir matches. Todo lo que viene después —swipe duplicado,
-     * cuota diaria, registro, chat y notificación— es común y no se duplica.
+     * registro, chat y notificación— es común y no se duplica; la cuota diaria
+     * también, pero solo la consume la adopción (consumeCuota).
      *
      * El orden dentro de cada rama importa y es el mismo en las dos: primero se
      * rechaza deslizar lo propio y solo después se mira el estado. Al revés, a
@@ -174,33 +305,106 @@ public class MatchService {
         };
     }
 
+    /**
+     * El otro extremo de un match de avistamiento es quien lo registró, y solo
+     * puede deslizarlo el DUEÑO DE LA ALERTA (403 ALERTA_AJENA para cualquier
+     * otro, en los dos sentidos del swipe). Él es quien reconoce a su animal en
+     * la foto; un desconocido no tiene nada que reconocer ni motivo para abrir
+     * un chat con el testigo. Se comprueba aquí y no solo en el feed porque el
+     * feed no impide llamar a la API con cualquier id.
+     *
+     * ORDEN DE LAS COMPROBACIONES: 404 si el avistamiento no existe; 403
+     * ALERTA_AJENA; 403 PUBLICACION_PROPIA si el dueño desliza un avistamiento
+     * que registró él; 400 AVISTAMIENTO_ELIMINADO; 400 AUTOR_NO_DISPONIBLE; 400
+     * ALERTA_NO_ACTIVA. El permiso va antes que el estado, y de los dos
+     * permisos, el de la alerta primero: a un desconocido se le dice que la
+     * alerta no es suya aunque el avistamiento sí lo sea. De los estados, va
+     * primero lo propio de la tarjeta —el avistamiento y su autor— y después
+     * la alerta de la que cuelga.
+     *
+     * LOS PERMISOS SE COMPRUEBAN SIN BLOQUEO, con tres escalares: de qué alerta
+     * cuelga el avistamiento, quién lo registró y quién publicó la alerta.
+     * Ninguno cambia nunca, así que comprobarlos sin bloqueo es seguro, y
+     * bloquear antes dejaría a cualquier usuario frenar al dueño y al
+     * administrador con un swipe condenado al 403. Mismo patrón que
+     * AlertaService.exigirAlertaPropia.
+     *
+     * LOS ESTADOS SE LEEN CON BLOQUEO COMPARTIDO (FOR SHARE), primero el de la
+     * alerta y después el del avistamiento, y solo cuando ya se sabe que quien
+     * desliza es el dueño:
+     * - El de la alerta cierra la carrera con su cierre y su moderación: sin
+     *   él, un match podía confirmarse a la vez que el cierre, abrir un chat
+     *   sobre una alerta ENCONTRADA y dejar al testigo sin el aviso de
+     *   ALERTA_ENCONTRADA, porque sus destinatarios se calculan con los
+     *   matches ya confirmados.
+     * - El del avistamiento cierra la misma carrera con la moderación del
+     *   avistamiento: sin él, un administrador que lo retirara entre la lectura
+     *   del estado y el commit del match dejaba un chat abierto sobre contenido
+     *   retirado.
+     *
+     * NINGUNA DE LAS DOS SE CARGA ANTES DE SU BLOQUEO. Por eso los permisos van
+     * con escalares (buscarAlertaYAutor, buscarAutorId) y no navegando
+     * entidades: una entidad cargada antes quedaría en el contexto de
+     * persistencia, y la lectura bloqueada devolvería esa copia anterior al
+     * bloqueo (ver AlertaRepository.buscarAutorId).
+     *
+     * LA CUENTA DEL AUTOR SE LEE SIN BLOQUEAR SU FILA, a diferencia de las otras
+     * dos. Si el administrador la bloquea —o su dueño se da de baja— en el mismo
+     * instante en que se hace el match, el chat puede abrirse igualmente, y el
+     * resultado es el mismo que si el match hubiera llegado un momento antes:
+     * un chat con una cuenta que ya no responde, como los que ya existían antes
+     * del bloqueo. Cerrarlo pediría un tercer bloqueo en cada match.
+     */
     private Usuario autorDelAvistamiento(Long avistamientoId, Long usuarioId) {
-        Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
+        AvistamientoRepository.AlertaYAutor ids = avistamientoRepository.buscarAlertaYAutor(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El avistamiento " + avistamientoId + " no existe"));
+        Long alertaId = ids.getAlertaId();
 
-        exigirQueNoSeaPropia(avistamiento.getUsuario(), usuarioId);
+        Long duenoId = alertaRepository.buscarAutorId(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
+        if (!duenoId.equals(usuarioId)) {
+            throw new AlertaAjenaException(
+                    "Solo quien publicó la alerta puede hacer match con sus avistamientos");
+        }
+
+        exigirQueNoSeaPropia(ids.getAutorId(), usuarioId);
+
+        // Los dos bloqueos, y en este orden: la alerta antes que el avistamiento
+        // (ver ORDEN DE BLOQUEO en deslizar).
+        Alerta alerta = alertaRepository.bloquearParaAvistar(alertaId)
+                .orElseThrow(() -> new ResourceNotFoundException("La alerta del avistamiento no existe"));
+        Avistamiento avistamiento = avistamientoRepository.bloquearParaDeslizar(avistamientoId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "El avistamiento " + avistamientoId + " no existe"));
 
         if (avistamiento.getEstado() != EstadoAvistamiento.VISIBLE) {
             // Retirado por el administrador (RF-11). El feed ya lo excluye, pero
             // nada impide llamar al endpoint con el id de un avistamiento que se
             // retiró después de mostrarse la tarjeta. Sin esto se abriría un chat
-            // sobre contenido que incumplía las normas, y encima le costaría al
-            // ciudadano un match del día.
+            // sobre contenido que incumplía las normas.
             throw new OperacionNoPermitidaException("AVISTAMIENTO_ELIMINADO",
                     "Este avistamiento fue retirado por incumplir las normas");
         }
-
-        if (avistamiento.getAlerta().getEstado() != EstadoAlerta.ACTIVA) {
-            // El feed filtra por alerta ACTIVA, pero nada impide llamar al
-            // endpoint con el id de un avistamiento cuya alerta se cerró después
-            // de mostrarse la tarjeta. Sin esta comprobación se abriría un chat y
-            // se avisaría al dueño por un animal que ya apareció, gastándole
-            // además un match del día.
+        Usuario autor = avistamiento.getUsuario();
+        if (!Boolean.TRUE.equals(autor.getActivo())) {
+            // Bloqueado por el administrador o dado de baja (RF-11, RF-19). El
+            // feed ya no lo ofrece, pero la tarjeta pudo mostrarse antes, y el
+            // match abriría un chat con alguien que no puede responder. El
+            // mensaje no distingue los dos casos: que una cuenta esté bloqueada
+            // no es asunto de quien desliza.
+            throw new OperacionNoPermitidaException("AUTOR_NO_DISPONIBLE",
+                    "Quien registró este avistamiento ya no está disponible");
+        }
+        if (alerta.getEstado() != EstadoAlerta.ACTIVA) {
+            // El feed solo existe para una alerta ACTIVA, pero nada impide llamar
+            // al endpoint con el id de un avistamiento cuya alerta se cerró
+            // después de mostrarse la tarjeta. Sin esta comprobación se abriría
+            // un chat con el testigo por un animal que ya apareció.
             throw new OperacionNoPermitidaException("ALERTA_NO_ACTIVA",
                     "La alerta de este avistamiento ya no está activa: el animal ya apareció");
         }
-        return avistamiento.getUsuario();
+        return autor;
     }
 
     /**
@@ -214,7 +418,7 @@ public class MatchService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "El animal " + animalId + " no existe"));
 
-        exigirQueNoSeaPropia(animal.getProtectora().getUsuario(), usuarioId);
+        exigirQueNoSeaPropia(animal.getProtectora().getUsuario().getId(), usuarioId);
 
         if (animal.getEstado() != EstadoAnimal.DISPONIBLE) {
             // Equivalente a la alerta ya cerrada: el animal ya no se ofrece, así
@@ -239,14 +443,42 @@ public class MatchService {
      * adopción, además, es lo que impide que una protectora se deslice a sus
      * propios animales. El feed ya los excluye: esto cubre la llamada directa.
      */
-    private void exigirQueNoSeaPropia(Usuario autor, Long usuarioId) {
-        if (autor.getId().equals(usuarioId)) {
+    private void exigirQueNoSeaPropia(Long autorId, Long usuarioId) {
+        if (autorId.equals(usuarioId)) {
             throw new PublicacionPropiaException("No puedes deslizar una publicación tuya");
         }
     }
 
     /**
-     * Consume un match de la cuota del día o falla con 429 (RF-24).
+     * Si un match de este tipo gasta cuota diaria (RF-24): solo los de adopción.
+     *
+     * Con un switch y no con una comparación para que un tipo de publicación
+     * nuevo no compile hasta que alguien decida si consume cuota, en vez de
+     * heredar en silencio una de las dos respuestas.
+     */
+    private static boolean consumeCuota(TipoPublicacion tipo) {
+        return switch (tipo) {
+            case ADOPCION -> true;
+            case AVISTAMIENTO -> false;
+        };
+    }
+
+    /**
+     * Si un descarte de este tipo se puede convertir después en match: solo los
+     * de avistamiento, que el dueño recupera desde su lista de descartados. La
+     * adopción no tiene esa lista, y convertirlo por la API sin ella sería una
+     * funcionalidad que nadie ha pedido y que tendría que decidir qué hace con
+     * el cupo. Con un switch por lo mismo que consumeCuota.
+     */
+    private static boolean admiteRecuperarDescarte(TipoPublicacion tipo) {
+        return switch (tipo) {
+            case AVISTAMIENTO -> true;
+            case ADOPCION -> false;
+        };
+    }
+
+    /**
+     * Consume un match de adopción de la cuota del día o falla con 429 (RF-24).
      *
      * Son dos sentencias atómicas en vez de leer-decidir-guardar: con el
      * contador en memoria, dos peticiones simultáneas leerían el mismo valor y
@@ -277,7 +509,8 @@ public class MatchService {
         limiteMatchDiarioRepository.crearContadorSiNoExiste(usuario.getId(), hoy);
 
         if (limiteMatchDiarioRepository.incrementarSiHayCupo(usuario.getId(), hoy, limiteDiario) == 0) {
-            log.info("Usuario {} ha agotado sus {} matches diarios", usuario.getId(), limiteDiario);
+            log.info("Usuario {} ha agotado sus {} matches de adopción diarios",
+                    usuario.getId(), limiteDiario);
             throw new LimiteMatchesAlcanzadoException(limiteDiario, reinicioDelContador(hoy));
         }
     }
@@ -287,13 +520,14 @@ public class MatchService {
     // ---------------------------------------------------------------------
 
     /**
-     * Matches del usuario autenticado (RF-08). Solo los positivos: los descartes
-     * comparten tabla pero no son matches.
+     * Matches del usuario autenticado (RF-08), del chat abierto más recientemente
+     * al más antiguo: así un descarte recuperado sale arriba aunque su registro
+     * lleve la fecha del descarte. Solo los positivos: los descartes comparten
+     * tabla pero no son matches.
      */
     @Transactional(readOnly = true)
     public List<MatchResponse> listarMisMatches(Long usuarioId) {
-        List<MatchRegistro> matches =
-                matchRegistroRepository.findByUsuarioIdAndInteresadoTrueOrderByCreatedAtDesc(usuarioId);
+        List<MatchRegistro> matches = matchRegistroRepository.buscarMisMatchesPorAperturaDelChat(usuarioId);
 
         if (matches.isEmpty()) {
             return List.of();

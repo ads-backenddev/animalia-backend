@@ -9,6 +9,7 @@ import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
+import jakarta.persistence.Index;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
@@ -26,9 +27,10 @@ import java.time.Instant;
  * avistamiento (RF-08) o un animal en adopción (RF-09).
  *
  * El campo interesado distingue los dos sentidos del swipe: un match positivo,
- * que genera el chat de coordinación (RF-12) y consume cuota diaria (RF-24), y un
- * descarte, que solo sirve para no volver a mostrar la publicación en el feed
- * (RF-15).
+ * que genera el chat de coordinación (RF-12) y, si es de adopción, consume cuota
+ * diaria (RF-24), y un descarte, que solo sirve para no volver a mostrar la
+ * publicación en el feed (RF-15). Un descarte de avistamiento puede convertirse
+ * después en match: el mismo registro cambia de sentido.
  *
  * La restricción única (usuario_id, publicacion_id, tipo_publicacion) garantiza
  * un solo deslizamiento por usuario y publicación, de modo que el feed puede
@@ -58,9 +60,12 @@ import java.time.Instant;
  * y el riesgo no está compensado: la suite entera depende de la forma actual de
  * AVISTAMIENTO y ANIMAL_ADOPCION, y la debilidad está contenida por dos cosas
  * que sí existen. La primera es que la referencia va SIEMPRE emparejada con el
- * tipo, sin excepción, en los cuatro sitios donde se lee —ChatRepository,
- * CatalogoAdopcionSpec, MatchService.resolverAutor y las consultas del panel de
- * protectora en MatchRegistroRepository—; la segunda es que resolverAutor es un
+ * tipo, sin excepción, en todos los sitios donde se lee: ChatRepository,
+ * CatalogoAdopcionSpec, MatchService.resolverAutor, MatchRegistroRepository (las
+ * búsquedas por usuario, publicación y tipo, la conversión de un descarte y las
+ * consultas del panel de protectora), el feed y los descartados del dueño en
+ * AvistamientoRepository y los destinatarios de ALERTA_ENCONTRADA en
+ * UsuarioRepository. La segunda es que resolverAutor es un
  * switch exhaustivo sobre el enum, sin rama por defecto, de modo que añadir un
  * TipoPublicacion nuevo rompe la compilación en lugar de colarse en tiempo de
  * ejecución.
@@ -77,15 +82,25 @@ import java.time.Instant;
 @Table(
         name = "match_registro",
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_match_usuario_publicacion",
+                name = MatchRegistro.RESTRICCION_UN_DESLIZAMIENTO,
                 columnNames = {"usuario_id", "publicacion_id", "tipo_publicacion"}
-        )
+        ),
+        // Para ir de una publicación a sus deslizamientos, a lo que no sirve la
+        // restricción única porque empieza por usuario_id (V18).
+        indexes = @Index(name = "idx_match_registro_publicacion", columnList = "publicacion_id, tipo_publicacion")
 )
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 public class MatchRegistro {
+
+    /**
+     * Nombre de la restricción única, el mismo que le da V1. MatchService lo
+     * reconoce cuando dos deslizamientos simultáneos de la misma publicación
+     * chocan contra ella.
+     */
+    public static final String RESTRICCION_UN_DESLIZAMIENTO = "uk_match_usuario_publicacion";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -110,7 +125,8 @@ public class MatchRegistro {
     /**
      * Sentido del deslizamiento: true si el usuario mostró interés (match, RF-08
      * y RF-09), false si descartó la publicación (RF-15). Solo los registros con
-     * interesado = true abren chat y cuentan para el límite diario.
+     * interesado = true abren chat, y de ellos solo los de adopción cuentan para
+     * el límite diario: el dueño revisa los avistamientos de su alerta sin cupo.
      */
     @Column(nullable = false)
     private Boolean interesado;

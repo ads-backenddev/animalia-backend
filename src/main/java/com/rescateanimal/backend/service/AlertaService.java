@@ -260,9 +260,7 @@ public class AlertaService {
             validarArea(latitud, longitud, radioMetros);
         }
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<Alerta> pagina = alertaRepository.findAll(
@@ -477,6 +475,13 @@ public class AlertaService {
      * Marca la alerta como ENCONTRADA y la retira del mapa (RF-14).
      * Solo puede cerrarla quien la publicó.
      *
+     * Al cerrarse avisa con ALERTA_ENCONTRADA a los participantes de los chats
+     * abiertos por sus avistamientos —los testigos con los que el dueño hizo
+     * match—, como pide el caso de uso de cerrar alerta del SRS. Los
+     * destinatarios se calculan tras el commit: el match sobre un avistamiento
+     * lee la alerta con FOR SHARE, así que ninguno puede confirmarse después del
+     * cierre sin verla ya ENCONTRADA y quedarse fuera del aviso.
+     *
      * SOLO DESDE ACTIVA. Antes no se miraba el estado, y el dueño de una alerta
      * retirada por el administrador podía marcarla como ENCONTRADA y deshacer la
      * moderación: volvía a verse entera en el detalle y en el listado de
@@ -500,6 +505,10 @@ public class AlertaService {
             alerta = alertaRepository.save(alerta);
             // El cliente necesita saber que debe retirar el marcador del mapa.
             publicarEnMapa(EventoMapaResponse.Accion.CIERRE, alerta);
+            // Y quienes tienen un chat por un avistamiento suyo, que el animal
+            // ha aparecido. Tras el commit, como el mapa; y solo al cerrarse
+            // de verdad, no al repetir el cierre.
+            notificacionService.avisarAlertaEncontrada(alerta.getId(), usuarioId);
         }
 
         return aAlertaResponse(alerta);
@@ -610,16 +619,12 @@ public class AlertaService {
     /**
      * Avisa a la zona sin arriesgar la publicación.
      *
-     * NotificacionService abre su propia transacción (REQUIRES_NEW), de modo que
-     * un fallo suyo no marca como "rollback only" la transacción que acaba de
-     * guardar la alerta; aquí solo queda registrarlo. Sin las dos piezas —la
-     * transacción aparte y este catch— un error creando notificaciones haría
-     * fracasar un RF-03 perfectamente válido por culpa de un RF-05.
-     *
-     * Lo contrario sí puede pasar: las notificaciones se confirman antes que la
-     * alerta, y si la publicación fallara al confirmar quedarían huérfanas. Es
-     * una limitación aceptada; el razonamiento está en
-     * NotificacionService.notificarAlertaCercana.
+     * NotificacionService crea los avisos tras el commit, en su propia
+     * transacción y capturando cualquier fallo de esa escritura, así que ni un
+     * error creándolos puede tumbar un RF-03 perfectamente válido por culpa de
+     * un RF-05, ni una publicación que se deshace deja avisos huérfanos. Este
+     * catch cubre lo único que queda: un fallo al preparar el aviso, antes de
+     * que llegue a programarse.
      */
     private void notificarZona(Alerta alerta) {
         try {

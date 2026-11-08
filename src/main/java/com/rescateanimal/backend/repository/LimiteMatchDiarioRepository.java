@@ -11,7 +11,8 @@ import java.time.LocalDate;
 import java.util.Optional;
 
 /**
- * Capa de datos del contador diario de matches (RF-24).
+ * Capa de datos del contador diario de matches (RF-24). Solo cuenta los de
+ * adopción: los matches sobre avistamientos no consumen cuota.
  *
  * Las dos operaciones de escritura son nativas y sin condición de carrera a
  * propósito: leer el contador, decidir en Java y volver a guardarlo permitiría
@@ -21,7 +22,7 @@ import java.util.Optional;
  *
  * Ninguna de las dos lleva clearAutomatically: vaciar el contexto de
  * persistencia desprendería las entidades que el service ya tiene cargadas
- * (el avistamiento y su alerta) y el siguiente acceso perezoso fallaría. Aquí
+ * (el animal y su protectora) y el siguiente acceso perezoso fallaría. Aquí
  * no hace falta, porque el contador no se maneja como entidad en esa ruta.
  */
 @Repository

@@ -97,13 +97,21 @@ public interface AnimalAdopcionRepository
     }
 
     /**
-     * Animales de una protectora en un estado concreto.
+     * Animales de una protectora en un estado concreto, por orden de id.
      *
-     * La usa la baja de cuenta (RF-19) para retirar del catálogo lo que la
-     * protectora dejaba publicado: quien lo ofrecía se ha ido, así que nadie puede
-     * responder a una solicitud ni confirmar una adopción. Se pide por estado en
-     * vez de traer todos y filtrar en memoria porque solo interesan los
-     * DISPONIBLE; los ADOPTADO son un desenlace que no hay que deshacer.
+     * La usa AnimalAdopcionService.retirarTodosLosDisponibles —la baja de la
+     * cuenta (RF-19), su bloqueo y el rechazo de la protectora— para retirar del
+     * catálogo lo que la protectora dejaba publicado: quien lo ofrecía ya no
+     * está, así que nadie puede responder a una solicitud ni confirmar una
+     * adopción. Se pide por estado en vez de traer todos y filtrar en memoria
+     * porque solo interesan los DISPONIBLE; los ADOPTADO son un desenlace que no
+     * hay que deshacer.
+     *
+     * EL ORDEN NO ES COSMÉTICO. Hibernate escribe los UPDATE en el orden en que
+     * cargó las entidades, y ese es el orden en que se bloquean las filas: con
+     * dos de esas operaciones a la vez sobre la misma protectora, cargarlas en
+     * orden distinto podría dejar a cada una esperando una fila de la otra
+     * (40P01). Sin ORDER BY, el orden es el que PostgreSQL encuentre en disco.
      */
-    List<AnimalAdopcion> findByProtectoraIdAndEstado(Long protectoraId, EstadoAnimal estado);
+    List<AnimalAdopcion> findByProtectoraIdAndEstadoOrderByIdAsc(Long protectoraId, EstadoAnimal estado);
 }

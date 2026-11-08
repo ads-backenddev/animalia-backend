@@ -29,11 +29,13 @@ public class MatchController {
     private final MatchService matchService;
 
     /**
-     * POST /api/matches -> 201, 400, 401, 404, 409, 429
+     * POST /api/matches -> 201, 400, 401, 403, 404, 409, 429
      *
      * Los dos sentidos del swipe entran por aquí: interesado=true es un match
-     * (abre chat y consume cuota) e interesado=false un descarte. El 429 llega
-     * con el límite y la hora de reinicio en el cuerpo.
+     * (abre chat y, en adopción, consume cuota) e interesado=false un descarte.
+     * El 403 es para quien desliza un avistamiento de una alerta ajena o una
+     * publicación propia. El 429, solo en adopción, llega con el límite y la
+     * hora de reinicio en el cuerpo.
      */
     @PostMapping
     public ResponseEntity<MatchResponse> deslizar(

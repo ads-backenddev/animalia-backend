@@ -40,5 +40,26 @@ public enum TipoNotificacion {
     CUENTA_BLOQUEADA,
 
     /** La cuenta vuelve a estar operativa. Esta sí se lee en cuanto entra. */
-    CUENTA_DESBLOQUEADA
+    CUENTA_DESBLOQUEADA,
+
+    // -----------------------------------------------------------------------
+    // Flujo del dueño de la alerta. Añadidos con la migración V17.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Alguien ha registrado un avistamiento en una alerta del destinatario.
+     *
+     * referenciaId es la ALERTA, no el avistamiento: el aviso lleva al feed de
+     * esa alerta (GET /api/alertas/{id}/avistamientos/feed), donde el nuevo sale
+     * el primero, y sigue llevando a un sitio válido aunque el administrador
+     * retire después el avistamiento.
+     */
+    NUEVO_AVISTAMIENTO,
+
+    /**
+     * La alerta de un avistamiento con el que el destinatario tiene un chat se
+     * ha cerrado como ENCONTRADA: el animal ha aparecido. referenciaId es la
+     * alerta.
+     */
+    ALERTA_ENCONTRADA
 }

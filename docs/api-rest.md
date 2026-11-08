@@ -49,7 +49,7 @@ del método.
 | `403 Forbidden` | Autenticado pero sin permiso: rol insuficiente, no es propietario, cuenta bloqueada o protectora no verificada |
 | `404 Not Found` | El recurso no existe |
 | `409 Conflict` | Email ya registrado (RF-01) o alerta duplicada en 500 m / 24 h (RF-25); o `RECURSO_OCUPADO`: otra operación tiene bloqueado el recurso más allá de la espera máxima (5 s por defecto, `JPA_LOCK_TIMEOUT_MS`). Este último es el único `409` que se arregla reintentando |
-| `429 Too Many Requests` | Límite diario de matches alcanzado (RF-24) |
+| `429 Too Many Requests` | Un cupo agotado: matches de adopción del día (RF-24), subidas de fotos del día, avistamientos del día en una misma alerta, o intentos contra `/api/auth` (`DEMASIADOS_INTENTOS`, §2) |
 | `500 Internal Server Error` | Error no previsto |
 
 ### Formato de error
@@ -87,6 +87,13 @@ Los listados admiten los parámetros estándar de Spring Data: `page` (desde 0),
 { "content": [], "page": 0, "size": 20, "totalElements": 0, "totalPages": 0, "last": true }
 ```
 
+**`page` llega como mucho a 10 000**, en todos los listados: por encima, `400 PARAMETRO_INVALIDO`.
+Antes, un `page` desmesurado como `2147483647` daba un desplazamiento que Spring Data no admite y
+la petición acababa en `500`. Ningún listado tiene tantas páginas —con el tamaño por defecto serían
+200 000 elementos—, y servir una tan profunda obligaría a PostgreSQL a leer y descartar todas las
+filas anteriores. `size`, en cambio, se ajusta sin error al máximo de cada listado, y la respuesta
+dice el tamaño aplicado.
+
 ### Coordenadas
 
 En la base de datos la geolocalización es un `Point` de PostGIS (SRID 4326). En la API viaja como
@@ -116,8 +123,8 @@ del cuerpo de error) como para lo que el cliente **envía**: `fechaAvistamiento`
 > entre entornos y se encogía o estiraba en el cambio de hora. El cliente Android tiene que enviar
 > y parsear con zona a partir de aquí.
 
-La única excepción es **`reiniciaEn`**, del `429` por cuota diaria agotada (RF-24), que sigue siendo
-una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
+La única excepción es **`reiniciaEn`**, de los `429` por cupo diario agotado —matches de adopción
+(RF-24), fotos y avistamientos—, que sigue siendo una fecha-hora local sin zona. No es un instante sino una fecha de calendario: la cuota se cuenta
 por día natural y "mañana a las 00:00" depende de qué calendario se mire. Ese calendario es el de
 **`Europe/Madrid`**, fijado explícitamente en el servidor — con sus límites, en §6, *Estado del
 límite diario*.
@@ -292,7 +299,9 @@ RF-03, RF-04, RF-14, RF-25.
 | `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
 | `GET` | `/api/alertas/mis-alertas` | Alertas publicadas por el usuario autenticado, en cualquier estado y enteras, retiradas incluidas; una `ELIMINADA` desde §22, sin la foto que borró la moderación | Autenticado | — | Lista de `AlertaResponse` | `200`, `401` |
-| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
+| `PUT` | `/api/alertas/{id}/cerrar` | Marca la mascota como encontrada: estado `ENCONTRADA`, se emite `CIERRE` por `/topic/mapa` y desaparece del mapa (RF-14), y se avisa con `ALERTA_ENCONTRADA` a quienes tienen un chat por uno de sus avistamientos (§12). **Solo desde `ACTIVA`**; repetirlo sobre una `ENCONTRADA` no cambia nada ni vuelve a avisar, y sobre una `RETIRADA` o `ELIMINADA` es `400 ALERTA_NO_ACTIVA` | Propietario | — | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
+| `GET` | `/api/alertas/{id}/avistamientos/feed` | **Feed de swipe del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que todavía no ha revisado —sin los que registró él, sin los que ya deslizó, en cualquier sentido, y sin los de cuentas bloqueadas o dadas de baja—, más recientes primero, en una tanda acotada. Cada tarjeta lleva `distanciaMetros` a la última ubicación de la alerta. Ver §5 | Propietario | — | Lista de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
+| `GET` | `/api/alertas/{id}/avistamientos/descartados` | **Descartados del dueño** (RF-15): los avistamientos `VISIBLE` de su alerta que descartó, para recuperar uno haciendo match desde aquí con `POST /api/matches`. La misma tarjeta que el feed, el último descarte primero, en páginas (`page`/`size`, 20 por defecto y 100 como máximo). Ver §5 | Propietario | — | Página de `AvistamientoFeedResponse` | `200`, `400`, `401`, `403`, `404` |
 
 ### Estados de una alerta
 
@@ -362,8 +371,7 @@ RF-08, RF-15, RF-21.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21) | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409` |
-| `GET` | `/api/avistamientos/feed` | Feed para el swipe: avistamientos candidatos, excluyendo los propios y los ya deslizados por el usuario (RF-15) | Autenticado | — | Lista de `AvistamientoFeedResponse` | `200`, `401` |
+| `POST` | `/api/avistamientos` | Registra un avistamiento sobre una alerta, con foto para la identificación visual del match (RF-21). Avisa a su dueño con `NUEVO_AVISTAMIENTO` (§12). Como mucho 5 al día por usuario en una misma alerta | Autenticado | `CrearAvistamientoRequest`: `alertaId`, `descripcion`, `fotoUrl`, `ubicacion{latitud,longitud}` | `AvistamientoResponse` | `201`, `400`, `401`, `404`, `409`, `429` |
 | `GET` | `/api/avistamientos/{id}` | Detalle de un avistamiento. **Sin construir: pendiente aceptado** (§20) | Autenticado | — | `AvistamientoResponse` | `200`, `401`, `404` |
 
 `fotoUrl` es obligatoria aunque el modelo la admita nula: el swipe se decide comparando la foto del
@@ -373,12 +381,96 @@ La alerta referenciada debe existir —si no, `404`— y estar en estado `ACTIVA
 respuesta es `400` con código `ALERTA_NO_ACTIVA`: sobre un animal que ya apareció, un avistamiento
 nuevo no aporta nada y solo ensuciaría el feed.
 
-Cada tarjeta del feed lleva, además de los datos del avistamiento, la `alertaId`, la
-`alertaEspecie` y la `alertaFotoUrl`, que son las que permiten la comparación visual.
+Al registrarse, el dueño de la alerta recibe `NUEVO_AVISTAMIENTO` con la **alerta** como
+`referenciaId` —no el avistamiento—, para que el cliente abra su feed. Se crea tras el commit
+(§12). No se avisa al dueño de un avistamiento que registra él mismo.
 
-> **Pendiente**: el feed va ordenado por fecha, más recientes primero, no por proximidad. Ordenar
-> por cercanía exige saber dónde está el usuario, y ni la petición lo trae ni `USUARIO` guarda
-> coordenadas —`areaGeografica` es texto—. Queda decidir de dónde sale ese punto.
+**Como mucho 5 avistamientos al día por usuario en una misma alerta**, contados por día natural de
+`Europe/Madrid` como los cupos de matches y fotos (`app.avistamientos.limite-diario-por-alerta`).
+Sin el cupo, un usuario podía enterrar el feed del dueño —que enseña primero los más recientes— y
+llenarle de avisos con cientos de avistamientos falsos. Es por alerta: el mismo usuario puede
+registrar otros cinco en otra alerta, y otro usuario tiene su propio cupo en esta. Pasado el cupo,
+`429` con el mismo cuerpo que el de matches (§6):
+
+```json
+{
+  "status": 429,
+  "codigo": "LIMITE_AVISTAMIENTOS_ALCANZADO",
+  "mensaje": "Has alcanzado el límite de 5 avistamientos diarios en esta alerta. Podrás registrar más mañana.",
+  "limiteDiario": 5,
+  "reiniciaEn": "2026-03-15T00:00:00"
+}
+```
+
+El cupo se consume después de comprobar la foto y la alerta, así que un avistamiento rechazado con
+`400` o `404` no lo gasta. Se aplica también al dueño sobre su propia alerta.
+
+### El feed de swipe es del dueño de cada alerta
+
+`GET /api/alertas/{id}/avistamientos/feed` (§4) devuelve al **dueño** de la alerta los avistamientos
+que todavía no ha revisado. Es él quien puede reconocer a su animal en la foto: si lo reconoce, hace
+match (§6) y se abre un chat con quien lo vio. Nadie más hace match sobre los avistamientos de una
+alerta ajena (`403 ALERTA_AJENA`, §6).
+
+| Situación | Respuesta |
+|---|---|
+| La alerta no existe | `404 NO_ENCONTRADO` |
+| La alerta no es del usuario | `403 ACCESO_DENEGADO`, como el resto de operaciones del dueño sobre `/api/alertas/{id}` |
+| La alerta no está `ACTIVA` | `400 ALERTA_NO_ACTIVA`: sobre un animal que ya apareció no hay nada que revisar |
+
+En ese orden: el permiso va antes que el estado. Qué entra en el feed:
+
+- **Solo avistamientos `VISIBLE`**: los retirados por el administrador (RF-11) no se ofrecen.
+- **Sin los que registró el propio dueño**: no hay nada que reconocer en lo que uno mismo vio.
+- **Sin los que el dueño ya deslizó**, en cualquiera de los dos sentidos. Lo que deslicen otros
+  usuarios no cuenta.
+- **Sin los de cuentas bloqueadas o dadas de baja** (RF-11, RF-19): el match con ellos abriría un
+  chat con alguien que no puede responder, y se rechaza (`400 AUTOR_NO_DISPONIBLE`, §6). Es el mismo
+  criterio de los avisos, que nunca van a una cuenta inactiva.
+
+**Más recientes primero** (`createdAt` descendente, `id` como desempate), en una tanda acotada por
+`app.avistamientos.tamanyo-feed`. No se ordena por cercanía a propósito: la última ubicación de la
+alerta es dónde se perdió el animal y no se mueve con los avistamientos, así que ordenar por cercanía
+a ella dejaría al final justo los avistamientos que muestran que se ha alejado. Lo que el dueño
+quiere saber es dónde está ahora, y eso lo dice el más reciente. Encaja además con el aviso
+`NUEVO_AVISTAMIENTO`: el avistamiento que lo dispara sale el primero.
+
+Cada tarjeta lleva, además de los datos del avistamiento, la `alertaId`, la `alertaEspecie` y la
+`alertaFotoUrl`, que son las que permiten la comparación visual, y **`distanciaMetros`**: los metros
+entre el avistamiento y la última ubicación de la alerta, calculados por PostGIS sobre `geography`
+y redondeados al metro —el «A 300 m» del prototipo—. Es `null` si el avistamiento no tiene ubicación.
+Es información, no criterio: no afecta al orden.
+
+**El feed global se retiró.** `GET /api/avistamientos/feed` enseñaba a cualquier usuario los
+avistamientos de todas las alertas activas; con el match reservado al dueño, cada tarjeta de ese feed
+habría acabado en un `403`. Ningún cliente lo usaba, y hoy la ruta responde `404`.
+
+### Recuperar un avistamiento descartado
+
+Un descarte no es definitivo. `GET /api/alertas/{id}/avistamientos/descartados` devuelve al dueño los
+avistamientos de su alerta que descartó, y si se equivocó hace match desde ahí con el mismo
+`POST /api/matches` (§6): el registro del descarte pasa a ser un match, se abre el chat y se avisa al
+testigo. Para un animal perdido, el error caro no es el que se nota al momento, sino darse cuenta más
+tarde de que la foto sí era la suya; la lista cubre los dos casos, y la app puede ofrecer el
+«deshacer» del último descarte sobre ella, porque es el primero.
+
+**El cliente espera el `201` del descarte antes de ofrecer «deshacer».** Un match que sale mientras el
+descarte todavía no ha terminado no encuentra descarte que convertir: los dos intentan crear el
+registro, el segundo choca con la restricción única cuando el primero confirma y recibe
+`409 SWIPE_DUPLICADO`, sin chat. No se pierde nada —el descarte queda y se puede recuperar después—,
+pero el «deshacer» habría fallado. Con el `201` en la mano, el match convierte el descarte.
+
+Las comprobaciones son las del feed, en el mismo orden —`404`, `403 ACCESO_DENEGADO`,
+`400 ALERTA_NO_ACTIVA`—, y la tarjeta es la misma, `distanciaMetros` incluida. Qué entra:
+
+- **Lo que el dueño descartó**, y nada más: ni lo que hizo match ni lo que descartaron otros.
+- **Solo avistamientos `VISIBLE` y de cuentas activas**, como en el feed: sobre los demás el match se
+  rechazaría (§6).
+
+**El último descarte primero**, con el id del registro como desempate. Y **en páginas**, a diferencia
+del feed: el feed se vacía a medida que se revisa y basta una tanda, pero los descartes se acumulan y
+a los antiguos también hay que poder llegar. El orden lo fija el servidor; el que pida el cliente no
+se aplica.
 
 Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
 `AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero, con los
@@ -393,8 +485,8 @@ RF-08, RF-09, RF-15, RF-24.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: incrementa el contador diario, abre el chat asociado (RF-12) y avisa a quien publicó lo deslizado. Con `false` es un descarte (RF-15) | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
-| `GET` | `/api/matches/mios` | Matches del usuario autenticado, más recientes primero. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
+| `POST` | `/api/matches` | Registra un deslizamiento. Con `interesado: true` es un match: abre el chat asociado (RF-12), avisa a quien publicó lo deslizado y, **solo si es de adopción**, consume cupo diario. Con `false` es un descarte (RF-15). Un avistamiento solo lo desliza el dueño de su alerta | Autenticado | `CrearMatchRequest`: `publicacionId`, `tipoPublicacion` (`AVISTAMIENTO` \| `ADOPCION`), `interesado` | `MatchResponse`: `id`, `publicacionId`, `tipoPublicacion`, `interesado`, `chatId?`, `createdAt` | `201`, `400`, `401`, `403`, `404`, `409`, `429` |
+| `GET` | `/api/matches/mios` | Matches del usuario autenticado, por la apertura de su chat: el más reciente primero (`id` como desempate). Un descarte recuperado sale arriba aunque su `createdAt` sea el del descarte. Solo los positivos: los descartes comparten tabla pero no son matches | Autenticado | — | Lista de `MatchResponse` | `200`, `401` |
 | `GET` | `/api/matches/limite` | Estado del límite diario, para que el cliente lo muestre antes de agotarlo | Autenticado | — | `LimiteMatchResponse` | `200`, `401` |
 
 ### Los dos sentidos del swipe van por el mismo endpoint
@@ -404,38 +496,83 @@ se distinguen en la tabla `MATCH_REGISTRO`:
 
 | `interesado` | Significado | Abre chat | Notifica | Consume cuota diaria |
 |---|---|---|---|---|
-| `true` | Match (RF-08) | Sí | Sí, `NUEVO_MATCH` al autor del avistamiento | Sí |
+| `true` | Match (RF-08) | Sí | Sí, `NUEVO_MATCH` a quien publicó lo deslizado | Solo en adopción |
 | `false` | Descarte (RF-15) | No | No | No |
 
-**El `NUEVO_MATCH` va al autor del avistamiento, no al dueño de la alerta.** Son los dos extremos del
-chat que el match abre (§7): quien desliza y quien publicó lo deslizado. El dueño de la alerta es
-normalmente quien desliza —el feed solo le esconde sus propios avistamientos, no los que otros
-registran sobre su alerta—, así que notificarle a él era avisar a quien acababa de hacer el match.
+**El `NUEVO_MATCH` de un avistamiento va a su autor, no al dueño de la alerta.** Son los dos extremos
+del chat que el match abre (§7): quien desliza y quien publicó lo deslizado. Quien desliza un
+avistamiento es siempre el dueño de su alerta, así que notificarle a él sería avisar a quien acababa
+de hacer el match. Es el único aviso que se crea dentro de la transacción del match y no tras el
+commit (§12): match, chat y aviso son una sola operación.
 
 `interesado` es obligatorio y no tiene valor por defecto: dejarlo implícito convertiría un cuerpo
 incompleto en un match involuntario. `chatId` solo viaja en la respuesta cuando hay match; en un
 descarte se omite del JSON en lugar de ir a `null`.
 
-Como el descarte no consume cuota, **sigue funcionando con el límite diario agotado**: solo se
-bloquean los matches.
+Ni el descarte ni el match sobre un avistamiento consumen cuota, así que los dos **siguen
+funcionando con el límite diario agotado**: solo se bloquean los matches de adopción.
 
 ### Reglas de acceso y conflicto
 
+**`403` con código `ALERTA_AJENA`** si quien desliza un avistamiento no es el dueño de su alerta,
+tanto para hacer match como para descartarlo. Solo el dueño revisa los avistamientos de su alerta: es
+quien puede reconocer a su animal en la foto, y un desconocido no tiene por qué abrir un chat con el
+testigo. Se comprueba en el servicio y no solo en el feed, porque el feed no impide llamar a la API
+con cualquier id. Tiene código propio, y no `ACCESO_DENEGADO`, para que el cliente lo distinga de
+`PUBLICACION_PROPIA`, que es el otro `403` de este endpoint. El match de adopción no tiene esta regla.
+
 **`403` con código `PUBLICACION_PROPIA`** si el usuario intenta deslizar contenido suyo, tanto para
-hacer match como para descartarlo. No es un `400`: la petición está bien formada y la publicación
-existe, lo que falla es el permiso. Un match sobre lo propio abriría además un chat de un usuario
-consigo mismo. El feed ya excluye las publicaciones propias, así que esto cubre la llamada directa.
+hacer match como para descartarlo: el dueño de una alerta que desliza un avistamiento que registró
+él, o una protectora que desliza uno de sus animales. No es un `400`: la petición está bien formada
+y la publicación existe, lo que falla es el permiso. Un match sobre lo propio abriría además un chat
+de un usuario consigo mismo. Los feeds ya excluyen lo propio, así que esto cubre la llamada directa.
 
 **`409` con código `SWIPE_DUPLICADO`** si el usuario ya había deslizado esa publicación, en
 cualquiera de los dos sentidos. Lo garantiza la restricción única
 `(usuario_id, publicacion_id, tipo_publicacion)`, que es la misma que permite a los feeds de
-`/api/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto.
+`/api/alertas/{id}/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto. También cuando
+las dos peticiones llegan a la vez: la comprobación previa no ve lo que la otra todavía no ha
+confirmado, la segunda choca con la restricción al guardar y recibe el mismo `409 SWIPE_DUPLICADO`
+—no el `409 CONFLICTO` genérico—, con su transacción deshecha entera, cupo incluido.
+
+**Salvo una excepción: un descarte de avistamiento se puede convertir en match**, una vez (§5,
+*Recuperar un avistamiento descartado*). Si el dueño hace match (`interesado: true`) sobre un
+avistamiento que había descartado, el registro existente cambia de sentido —no se inserta otro: la
+restricción única lo impediría— y, en la misma transacción, se abre el chat y se avisa al testigo con
+`NUEVO_MATCH`, igual que en un match normal: las mismas comprobaciones, en el mismo orden, y los
+mismos bloqueos, con el `UPDATE` de ese registro en el lugar del `INSERT`. El `UPDATE` solo cambia un
+descarte, así que dos conversiones a la vez abren un solo chat y la segunda recibe
+`409 SWIPE_DUPLICADO`. La respuesta es `201`, con el `id` del registro de siempre y su `createdAt`
+original —cuándo se deslizó por primera vez—; el chat lleva la fecha de su apertura, y es esa la que
+ordena `/api/matches/mios`, así que el match recuperado sale el primero de la lista. Todo lo demás
+sigue siendo `409`: repetir un match, repetir un descarte, descartar lo que ya era match y cualquier
+repetición en adopción, que no tiene lista de descartados.
+
+**`400` con código `AVISTAMIENTO_ELIMINADO`** si el administrador retiró el avistamiento (RF-11), y
+**`400` con código `AUTOR_NO_DISPONIBLE`** si la cuenta de quien lo registró está bloqueada o se ha
+dado de baja (RF-11, RF-19), en los dos sentidos del deslizamiento. El feed ya no ofrece ninguno de
+los dos, pero el dueño puede tener la tarjeta en pantalla desde antes; sin estas comprobaciones se
+abriría un chat sobre contenido retirado o con alguien que no puede responder. El mensaje de
+`AUTOR_NO_DISPONIBLE` no distingue el bloqueo de la baja: que una cuenta esté bloqueada no es asunto
+de quien desliza. La cuenta del autor se lee sin bloquear su fila: si se bloquea en el mismo instante
+del match, el chat puede abrirse igualmente, con el mismo resultado que si el match hubiera llegado
+un momento antes.
 
 **`400` con código `ALERTA_NO_ACTIVA`** si la alerta de la que cuelga el avistamiento ya se cerró,
-en cualquiera de los dos sentidos del deslizamiento. El feed filtra por alerta `ACTIVA`, pero el
-dueño puede cerrarla mientras el cliente tiene la tarjeta en pantalla; sin esta comprobación se
-abriría un chat y se avisaría al dueño por un animal que ya apareció, gastando además un match del
-día. Es el mismo código que devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
+en cualquiera de los dos sentidos del deslizamiento. El feed solo existe para una alerta `ACTIVA`,
+pero el dueño puede cerrarla en otra pestaña mientras tiene la tarjeta en pantalla; sin esta
+comprobación se abriría un chat con el testigo por un animal que ya apareció. Es el mismo código que
+devuelve `POST /api/avistamientos` sobre una alerta cerrada (§5).
+
+**Los estados se leen con bloqueo compartido** (`SELECT … FOR SHARE`): primero el de la alerta —el
+mismo bloqueo de registrar un avistamiento— y después el del propio avistamiento. La propiedad se
+comprueba antes y sin bloqueo: un desconocido recibe su `403` sin frenar al dueño ni al
+administrador. El bloqueo de la alerta cierra la carrera con su cierre y su moderación: un match ya
+no puede confirmarse a la vez que el cierre y dejar al testigo sin el aviso `ALERTA_ENCONTRADA`, que
+se calcula con los matches confirmados. El del avistamiento cierra la misma carrera con la
+moderación del avistamiento: si el administrador lo retira mientras el dueño hace match, uno de los
+dos espera al otro, y nunca queda un chat abierto sobre contenido que ya estaba retirado. Si la
+espera supera el límite, `409 RECURSO_OCUPADO` (§1).
 
 **`400` con código `ANIMAL_NO_DISPONIBLE`** si el animal en adopción deslizado ya no está
 `DISPONIBLE`, sea porque está `ADOPTADO` o porque la protectora lo `RETIRADO` del catálogo. Es el
@@ -445,10 +582,53 @@ cerrado gastando un match del día. El código es el mismo en los dos casos y el
 distingue, porque para quien lo lee no significan lo mismo: `ADOPTADO` es un final feliz y
 `RETIRADO` puede ser cualquier cosa.
 
-El orden de las comprobaciones importa: la cuota se consume en último lugar, después de validar
-todo lo demás. Al revés, un swipe repetido —que acaba en `409`— le habría gastado al usuario un
-match del día. Dentro de la validación de la publicación, `PUBLICACION_PROPIA` se comprueba antes
-que el estado: a quien desliza algo suyo ya cerrado se le dice que es suyo, no que está cerrado.
+El orden de las comprobaciones importa, y es este:
+
+| Paso | Avistamiento | Adopción |
+|---|---|---|
+| 1 | `404` si no existe | `404` si no existe |
+| 2 | `403 ALERTA_AJENA` | — |
+| 3 | `403 PUBLICACION_PROPIA` | `403 PUBLICACION_PROPIA` |
+| 4 | `400 AVISTAMIENTO_ELIMINADO`, `400 AUTOR_NO_DISPONIBLE`, `400 ALERTA_NO_ACTIVA` | `400 ANIMAL_NO_DISPONIBLE` |
+| 5 | `409 SWIPE_DUPLICADO`, salvo el match sobre un descarte propio, que lo convierte | `409 SWIPE_DUPLICADO` |
+| 6 | — | `429 LIMITE_MATCHES_ALCANZADO`, solo con `interesado: true` |
+
+El permiso va antes que el estado: a quien desliza algo que no puede deslizar ya cerrado se le dice
+que no puede, no que está cerrado. Y la cuota se consume en último lugar: al revés, un swipe
+repetido —que acaba en `409`— le habría gastado al usuario un match del día.
+
+**Orden de bloqueo.** En un avistamiento, la fila de su alerta y después la del avistamiento, las
+dos con `FOR SHARE`; en una adopción, la fila del contador diario del usuario con el `UPDATE`
+condicional. Después, en los dos, los `INSERT` de `MATCH_REGISTRO`, `CHAT` y `NOTIFICACION`, que
+sobre sus filas padre solo toman el `FOR KEY SHARE` de comprobar la clave ajena; al recuperar un
+descarte, el `UPDATE` de su fila de `MATCH_REGISTRO` ocupa el lugar del primer `INSERT`, y es esa
+fila la que hace esperar a una segunda conversión del mismo descarte. Las demás operaciones que tocan
+esas filas son estas:
+
+| Operación | Filas que bloquea, en orden |
+|---|---|
+| Editar, retirar o cerrar una alerta | La alerta (`FOR NO KEY UPDATE`) |
+| Moderar una alerta | La alerta (`FOR NO KEY UPDATE`) y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra |
+| Registrar un avistamiento | La alerta (`FOR SHARE`) y después la fila del cupo del autor en esa alerta y ese día (§5); el avistamiento es una fila nueva |
+| Moderar un avistamiento | Solo el avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`): ni la alerta ni su foto, que se conserva |
+| Match de adopción | El contador diario del usuario |
+
+Nadie bloquea un avistamiento y pide después su alerta: la única espera de una alerta hacia un
+avistamiento es la del propio match, y la moderación del avistamiento no pide nada más. La fila de
+`FOTO` que borra la moderación de una alerta es lo último que esa operación toma, y el match no la
+toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
+fila del cupo de avistamientos solo la toma el registro, siempre después de la alerta. Sin dos
+bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
+`MatchService.deslizar`.
+
+**`USUARIO` no está en la tabla porque nadie espera por él.** Los `INSERT` de `MATCH_REGISTRO`,
+`CHAT` y `NOTIFICACION` toman sobre su fila el `FOR KEY SHARE` de la clave ajena, que solo choca con
+un borrado o con un `UPDATE` que cambie una columna clave, y ninguno lo hace: a un usuario no se le
+borra (la baja lo anonimiza) y la baja, el bloqueo y el perfil cambian columnas que no lo son. La
+única columna única además del `id` es el email, y su unicidad es un índice sobre `lower(email)`
+(`V5`), que PostgreSQL no cuenta como clave; así que anonimizarlo toma `FOR NO KEY UPDATE`, que
+convive con esos `FOR KEY SHARE`. Un `UNIQUE` normal sobre una columna que cambiara la baja
+añadiría esperas —no un ciclo— y obligaría a meter `USUARIO` en esta tabla.
 
 ### Los dos tipos de publicación
 
@@ -456,18 +636,23 @@ que el estado: a quien desliza algo suyo ya cerrado se le dice que es suyo, no q
 ajena, así que el mismo id existe en las dos— y, con ella, quién es el otro extremo del chat que
 abre el match:
 
-| `tipoPublicacion` | Publicación | Otro participante del chat y destinatario del aviso | Estado que la inhabilita |
-|---|---|---|---|
-| `AVISTAMIENTO` | `AVISTAMIENTO` (RF-08) | `AVISTAMIENTO.usuario`, el autor del avistamiento | Su alerta no está `ACTIVA` |
-| `ADOPCION` | `ANIMAL_ADOPCION` (RF-09) | `ANIMAL_ADOPCION.protectora.usuario`, la cuenta de la protectora | El animal no está `DISPONIBLE` (`ADOPTADO` o `RETIRADO`) |
+| `tipoPublicacion` | Publicación | Quién puede deslizarla | Otro participante del chat y destinatario del aviso | Estado que la inhabilita | Consume cuota |
+|---|---|---|---|---|---|
+| `AVISTAMIENTO` | `AVISTAMIENTO` (RF-08) | Solo el dueño de su alerta | `AVISTAMIENTO.usuario`, el autor del avistamiento | Su alerta no está `ACTIVA` | No |
+| `ADOPCION` | `ANIMAL_ADOPCION` (RF-09) | Cualquiera salvo la protectora dueña | `ANIMAL_ADOPCION.protectora.usuario`, la cuenta de la protectora | El animal no está `DISPONIBLE` (`ADOPTADO` o `RETIRADO`) | Sí |
 
 En los dos casos la regla del aviso es la misma: se notifica a quien **no** deslizó. En adopción eso
 significa que una protectora recibe el `NUEVO_MATCH` cuando un ciudadano muestra interés por uno de
 sus animales, y que una protectora no puede deslizar los suyos —lo rechaza `PUBLICACION_PROPIA`,
-igual que cualquier otro contenido propio—. El resto del recorrido es común a los dos tipos: cuota
-diaria, restricción única y apertura del chat no distinguen de qué publicación se trate.
+igual que cualquier otro contenido propio—. La restricción única y la apertura del chat son comunes
+a los dos tipos; quién puede deslizar y la cuota diaria, no.
 
 ### Estado del límite diario
+
+**El límite (RF-24) cuenta solo los matches de adopción.** Existía para que nadie hiciera match en
+masa con publicaciones ajenas; sobre los avistamientos ya no hay ese riesgo, porque solo los desliza
+el dueño de su propia alerta, y un dueño con muchos avistamientos en un día no debe quedarse sin poder
+revisarlos. Los matches sobre avistamientos no aparecen en `consumidos` ni pueden dar `429`.
 
 `GET /api/matches/limite` devuelve:
 
@@ -504,7 +689,7 @@ anotada como pendiente en §16.
 {
   "status": 429,
   "codigo": "LIMITE_MATCHES_ALCANZADO",
-  "mensaje": "Has alcanzado el límite de 20 matches diarios. Podrás continuar mañana.",
+  "mensaje": "Has alcanzado el límite de 20 matches de adopción diarios. Podrás continuar mañana.",
   "limiteDiario": 20,
   "reiniciaEn": "2026-03-15T00:00:00"
 }
@@ -520,7 +705,7 @@ RF-12.
 |---|---|---|---|---|---|---|
 | `GET` | `/api/chats` | Conversaciones del usuario, con último mensaje y número de no leídos | Autenticado | — | Lista de `ChatResumenResponse` | `200`, `401` |
 | `GET` | `/api/chats/{id}` | Detalle de una conversación: interlocutor y publicación que la originó | Participante | — | `ChatDetalleResponse` | `200`, `401`, `403`, `404` |
-| `GET` | `/api/chats/{id}/mensajes` | Histórico paginado de mensajes, del más reciente al más antiguo | Participante | — | Página de `MensajeResponse` | `200`, `401`, `403`, `404` |
+| `GET` | `/api/chats/{id}/mensajes` | Histórico paginado de mensajes, del más reciente al más antiguo | Participante | — | Página de `MensajeResponse` | `200`, `400`, `401`, `403`, `404` |
 | `POST` | `/api/chats/{id}/mensajes` | Envía un mensaje. Alternativa REST al WebSocket, para clientes sin conexión STOMP activa | Participante | `EnviarMensajeRequest`: `contenido` | `MensajeResponse` | `201`, `400`, `401`, `403`, `404` |
 | `PUT` | `/api/chats/{id}/mensajes/leidos` | Marca como leídos todos los mensajes recibidos en la conversación | Participante | — | — | `204`, `401`, `403`, `404` |
 
@@ -650,7 +835,7 @@ pequeño en su zona quiere deslizar sobre eso, no sobre todo lo publicado.
 
 **Devuelve una lista, no una página.** El feed se consume tarjeta a tarjeta, así que ni el cliente
 pide páginas ni le sirve saber cuántas quedan; el servidor manda una tanda acotada
-(`app.adopcion.tamanyo-feed`, 30 por defecto), igual que `GET /api/avistamientos/feed`. Un feed
+(`app.adopcion.tamanyo-feed`, 30 por defecto), igual que el feed de avistamientos del dueño (§5). Un feed
 agotado es `200` con lista vacía, no `404`.
 
 ### Confirmación de la adopción (RF-20)
@@ -679,7 +864,7 @@ RF-06, RF-10, RF-23.
 | ~~`POST`~~ | ~~`/api/protectoras/{id}/contactar`~~ | **Diseñado, no construido.** Abrir un contacto con una protectora al encontrar un animal perdido | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | — |
 | ~~`POST`~~ | ~~`/api/protectoras/local/contactar`~~ | **Diseñado, no construido.** Contactar con la protectora de la localidad resolviéndola desde `areaGeografica` | Autenticado | `ContactarProtectoraRequest` | `ChatResumenResponse` | — |
 | `PUT` | `/api/protectoras/{id}/valoracion` | Crea o actualiza la valoración de 1 a 5 estrellas de quien ha tratado con la protectora (RF-23) | Autenticado | `ValorarProtectoraRequest`: `puntuacion` (1-5) | `ValoracionResponse` | `200`, `400`, `401`, `403`, `404` |
-| `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `401`, `403` |
+| `GET` | `/api/protectoras/panel/animales` | Todos los animales de la protectora autenticada, **en cualquier estado** (RF-10). Paginado | `PROTECTORA` `ACTIVA` | — | Página de `AnimalAdopcionResponse` | `200`, `400`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/solicitudes` | Ciudadanos que han querido ponerse en contacto por alguno de sus animales (RF-10) | `PROTECTORA` `ACTIVA` | — | Lista de `SolicitudAdopcionResponse` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/valoraciones` | Valoraciones recibidas, con la media calculada (RF-10, RF-23) | `PROTECTORA` `ACTIVA` | — | `ValoracionesPanelResponse`: `valoraciones[]`, `media?`, `total` | `200`, `401`, `403` |
 | `GET` | `/api/protectoras/panel/resumen` | Contadores agregados para la pantalla principal del panel (RF-10) | `PROTECTORA` `ACTIVA` | — | `ResumenPanelResponse` | `200`, `401`, `403` |
@@ -1093,38 +1278,94 @@ RF-05.
 
 | Método | Ruta | Descripción | Auth | Body de entrada | Respuesta | Códigos |
 |---|---|---|---|---|---|---|
-| `GET` | `/api/notificaciones` | Notificaciones del usuario, más recientes primero. Filtro `leida` | Autenticado | — | Página de `NotificacionResponse` | `200`, `401` |
-| `PATCH` | `/api/notificaciones/{id}/leida` | Marca una notificación como leída | Propietario | — | — | `204`, `401`, `403`, `404` |
+| `GET` | `/api/notificaciones` | Notificaciones del usuario del token, más recientes primero (`createdAt` descendente, `id` como desempate; el orden que pida el cliente no se aplica). Filtro opcional `leida` (`true` \| `false`). Paginación `page`/`size`, 20 por defecto y 100 como máximo | Autenticado | — | Página de `NotificacionResponse`: `id`, `tipo`, `referenciaId?`, `leida`, `createdAt` | `200`, `400`, `401` |
+| `PATCH` | `/api/notificaciones/{id}/leida` | Marca una notificación propia como leída. Repetirlo no cambia nada y responde igual | Propietario | — | — | `204`, `400`, `401`, `403`, `404` |
 
-Tipos de notificación: `ALERTA_CERCANA`, `NUEVO_MATCH`, `NUEVO_MENSAJE`, `PROTECTORA_VERIFICADA`,
-`ADOPCION_CONFIRMADA`, `REPORTE_RESUELTO`, y desde RF-11 `PROTECTORA_RECHAZADA`, `CUENTA_BLOQUEADA` y
-`CUENTA_DESBLOQUEADA` (§11, migración `V6`).
+Cada usuario lista **solo las suyas**: la consulta filtra siempre por el usuario del token. Marcar la
+de otro es `403 ACCESO_DENEGADO` y no la toca; un id que no existe es `404 NO_ENCONTRADO`.
+
+### Tipos y a qué apunta `referenciaId`
 
 Ninguna lleva texto: `NOTIFICACION` solo guarda `tipo` y `referencia_id`, así que el cliente compone
-el mensaje a partir del tipo. Es lo que impide que el `motivo` de un bloqueo llegue al afectado (§11).
+el mensaje a partir del tipo y abre lo que señala la referencia. Es lo que impide que el `motivo` de
+un bloqueo llegue al afectado (§11).
 
-**Una notificación puede apuntar a algo que no existe** (limitación aceptada). Los avisos derivados
-—`ALERTA_CERCANA` al publicar una alerta y los de las decisiones del administrador (§11)— se crean en
-su propia transacción (`REQUIRES_NEW`), que se confirma **antes** que la operación que los origina.
-Si esa operación fallara justo al confirmarse, el aviso quedaría guardado y su `referencia_id`
-apuntaría a una alerta que nunca llegó a existir. Es remoto —el `INSERT` de la alerta ya se ha
-ejecutado antes de avisar, así que solo queda que falle el propio commit— y nunca apunta a otra
-alerta, porque un id consumido no se reutiliza. Se cerraría creando el aviso tras la confirmación
-(`afterCommit`), como ya se hace con el evento del mapa.
+| Tipo | Destinatario | `referenciaId` | Cuándo se crea |
+|---|---|---|---|
+| `ALERTA_CERCANA` | Usuarios activos del área del autor (§4) | La alerta | Tras el commit |
+| `NUEVO_AVISTAMIENTO` | El dueño de la alerta (§5) | **La alerta**, no el avistamiento: el aviso abre su feed | Tras el commit |
+| `ALERTA_ENCONTRADA` | Quienes tienen un chat por un avistamiento de la alerta (§4) | La alerta | Tras el commit |
+| `NUEVO_MATCH` | Quien publicó lo deslizado (§6) | El match | **Dentro** de la transacción del match |
+| `PROTECTORA_VERIFICADA`, `PROTECTORA_RECHAZADA` | La cuenta de la protectora (§11) | La protectora | Tras el commit |
+| `CUENTA_BLOQUEADA`, `CUENTA_DESBLOQUEADA` | El afectado (§11) | `null` | Tras el commit |
+| `REPORTE_RESUELTO` | Quien denunció (§11) | El reporte | Tras el commit |
+| `NUEVO_MENSAJE`, `ADOPCION_CONFIRMADA` | — | — | Tipos admitidos por el `CHECK`, que hoy no crea nadie |
 
-**Cómo lo distingue el cliente.** Al abrir un aviso `ALERTA_CERCANA`, `GET /api/alertas/{id}` (§4)
-responde `200` con su `estado` para cualquier alerta que haya existido —también una `ENCONTRADA`,
-`RETIRADA` o `ELIMINADA`, que llegan reducidas— y `404 NO_ENCONTRADO` **solo** si nunca existió. Así
-que un `200` con un estado final es un aviso viejo de algo que ya terminó, y un `404` es un aviso
-huérfano que el cliente descarta en silencio. Las alertas no caducan ni se borran, de modo que una
-que terminó con normalidad nunca da `404`.
+`NUEVO_AVISTAMIENTO` y `ALERTA_ENCONTRADA` llegaron con `V17`; `PROTECTORA_RECHAZADA`,
+`CUENTA_BLOQUEADA` y `CUENTA_DESBLOQUEADA`, con `V6`.
 
-> **RF-05 sigue sin implementar** —uno de los dos huecos que quedan, ver §20—. Las dos filas de esta tabla son
-> contrato de diseño, no código: `NotificacionController` es un esqueleto vacío. Lo que **sí** existe
-> es la mitad de escritura —`NotificacionService` persiste notificaciones y los nueve tipos están en la
-> tabla con su `CHECK` (`V6`)—, así que hoy se guardan y nadie puede leerlas. Falta el `GET`, el
-> `PATCH` de marcado y la emisión por `/user/queue/notificaciones`, que hoy **no la envía nadie**: no
-> hay ni una llamada a ese destino en todo el código. Ver §20.
+**`NUEVO_AVISTAMIENTO` apunta a la alerta, y no al avistamiento, a propósito.** El aviso sirve para
+que el dueño abra el feed de esa alerta, donde el avistamiento nuevo sale el primero (§5); no depende
+de `GET /api/avistamientos/{id}`, que no existe (§20); y si el administrador retira después el
+avistamiento, el aviso sigue llevando a un sitio válido. Varios avisos de la misma alerta comparten
+referencia y el cliente puede agruparlos. No se avisa al dueño de un avistamiento suyo.
+
+**`ALERTA_ENCONTRADA` va a los dos extremos de cada chat** nacido de un match positivo sobre un
+avistamiento de la alerta, sin el dueño, sin repetidos y solo a cuentas activas. Con el flujo actual
+son los testigos con los que el dueño hizo match; tomar los dos lados cubre los matches que hicieron
+otros usuarios antes de que el swipe quedara reservado al dueño. Los descartes no cuentan. Solo se
+avisa al pasar de `ACTIVA` a `ENCONTRADA`: repetir el cierre no vuelve a avisar.
+
+### Los avisos se crean tras el commit
+
+Todos los avisos salvo `NUEVO_MATCH` se crean **después** de que se confirme la operación que los
+origina, en una transacción propia, como los eventos del mapa. Lo hace `NotificacionService` en un
+solo sitio (`trasConfirmar`):
+
+- **Sin commit no hay aviso.** Una operación que se deshace no deja avisos que apunten a algo que
+  nunca existió.
+- **Un fallo creando el aviso no deshace la operación** ni le llega a quien la hizo como error: la
+  alerta, el avistamiento, el cierre o la decisión del administrador ya están confirmados y valen por
+  sí solos. El fallo queda en el log.
+- **Cada aviso ocupa una segunda conexión** con la base de datos mientras la petición conserva la
+  primera, que no se suelta hasta que terminan los avisos. Para que el pool no se agote con todas
+  las peticiones esperando su segunda conexión, Tomcat atiende a la vez una petición menos de las
+  conexiones que tiene el pool —19 hilos y 20 conexiones— y la aplicación no arranca si se
+  configuran al revés. Los valores se justifican en la nota de §22 sobre la revisión del feed.
+  **La cuenta solo vale si los avisos salen de peticiones REST**, que son los hilos que acota
+  Tomcat: hoy es así. Un aviso creado desde un mensaje STOMP o una tarea en segundo plano
+  necesitaría también dos conexiones sin entrar en la cuenta, y habría que sumarlo a ella o darle su
+  propio límite. Por lo mismo, la aplicación tampoco arranca con los hilos virtuales activados
+  (`spring.threads.virtual.enabled=true`): con ellos Tomcat crea un hilo por petición, deja de
+  aplicar `server.tomcat.threads.max` y las peticiones a la vez dejan de tener techo.
+- **Un aviso puede perderse, y no se reintenta.** Si el proceso cae entre el commit de la operación
+  y la escritura del aviso, o esa escritura falla —una conexión que no llega, un error de la base de
+  datos—, la operación queda hecha y el aviso no existe: lo único que queda es una línea de error en
+  el log (`No se pudo crear el aviso …`). No hay tabla de salida (*outbox*) ni reintentos; a cambio,
+  un aviso nunca se duplica. Se acepta mientras los avisos sean una ayuda y no la única forma de
+  enterarse: el dueño ve sus avistamientos en el feed aunque se pierda el `NUEVO_AVISTAMIENTO`, y el
+  cierre se ve en el detalle de la alerta. Si RF-05 llegara a depender de ellos —con la push—, la
+  salida sería una tabla de salida escrita en la misma transacción de la operación y un proceso que
+  la vacíe.
+
+`NUEVO_MATCH` es la excepción, y a propósito: match, chat y aviso son una sola operación, y un match
+del que el destinatario nunca se entera no sirve de nada (§6).
+
+> **Corrección.** Hasta este bloque, `ALERTA_CERCANA` y los avisos del administrador se creaban en
+> una transacción propia que se confirmaba **antes** que la operación, y esta sección lo daba como
+> limitación aceptada: si la operación fallaba al confirmarse, el aviso quedaba huérfano, apuntando
+> a una alerta que nunca existió. Con la creación tras el commit esa limitación desaparece; una prueba
+> contra PostgreSQL deshace la publicación de una alerta y comprueba que no queda ningún aviso.
+
+**Cómo distingue el cliente un aviso viejo.** Al abrir un aviso que apunta a una alerta,
+`GET /api/alertas/{id}` (§4) responde `200` con su `estado` para cualquier alerta que haya existido
+—también una `ENCONTRADA`, `RETIRADA` o `ELIMINADA`, que llegan reducidas— y `404 NO_ENCONTRADO`
+**solo** si nunca existió. Así que un `200` con un estado final es un aviso de algo que ya terminó.
+Las alertas no caducan ni se borran, de modo que una que terminó con normalidad nunca da `404`.
+
+> **La entrega en vivo sigue pendiente** (§20). Las notificaciones se guardan y se leen con estos dos
+> endpoints, pero nadie las emite por `/user/queue/notificaciones` —no hay ni una llamada a ese
+> destino en el código— ni existe la push de RF-05, que se diseñará con la app Android delante.
 
 ---
 
@@ -1146,7 +1387,7 @@ ws://<host>/ws?token=<jwt>     prefijo de suscripción: /topic, /queue
 | `/topic/mapa` | Servidor → cliente | Altas, cambios de estado y cierres de alertas para refrescar el mapa sin recargar (RF-04). Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | `EventoMapaResponse`: `accion` (`ALTA` \| `ACTUALIZACION` \| `CIERRE`) + `alerta` (`AlertaMapaResponse`) |
 | `/topic/chat/{chatId}` | Bidireccional (envío a `/app/chat/{chatId}/enviar`) | Mensajería en tiempo real de una conversación (RF-12) | Participante del chat | Envío: `EnviarMensajeRequest`. Recepción: `MensajeResponse` |
 | `/user/queue/errores` | Servidor → cliente | Rechazos de un envío por WebSocket, devueltos solo a la sesión que los provocó | Autenticado | `ErrorResponse` |
-| `/user/queue/notificaciones` | Servidor → cliente | Notificaciones del usuario, incluidas las alertas registradas en su área geográfica (RF-05). **Pendiente de implementar**: hoy las notificaciones solo se persisten, y `GET /api/notificaciones` tampoco existe todavía | Autenticado | `NotificacionResponse` |
+| `/user/queue/notificaciones` | Servidor → cliente | Notificaciones del usuario en vivo (RF-05). **Pendiente de implementar**: hoy las notificaciones se guardan y se leen con `GET /api/notificaciones` (§12), pero nadie emite por este destino | Autenticado | `NotificacionResponse` |
 
 El prefijo `/user/` no es una ruta más: Spring lo resuelve contra el `Principal` de la sesión STOMP
 y entrega el mensaje **solo** a la conexión de ese usuario, aunque todos se suscriban literalmente a
@@ -1211,17 +1452,17 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-02 | `GET` y `PUT /api/usuarios/me`; la foto se sube antes por `POST /api/fotos` (§1) |
 | RF-03 | `POST /api/alertas`; consultarla, editarla y retirarla: `GET /api/alertas`, `GET`, `PUT` y `DELETE /api/alertas/{id}` (§4) |
 | RF-04 | `GET /api/alertas/mapa`, destino `/topic/mapa` |
-| RF-05 | `GET /api/notificaciones`, destino `/user/queue/notificaciones` — **diseñado, sin construir** (§20) |
+| RF-05 | `GET /api/notificaciones` y `PATCH /api/notificaciones/{id}/leida` (§12). La entrega en vivo por `/user/queue/notificaciones` y la push siguen sin construir (§20) |
 | RF-06 | `GET /api/protectoras` y `GET /api/protectoras/{id}` — directorio, ficha y contacto (§9) |
 | RF-07 | `POST`, `PUT` y `DELETE` sobre `/api/adopcion` |
-| RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO` |
+| RF-08 | `POST /api/matches` con `tipoPublicacion=AVISTAMIENTO`, solo el dueño de la alerta |
 | RF-09 | `GET /api/adopcion/feed`, `POST /api/matches` con `tipoPublicacion=ADOPCION` |
 | RF-10 | `GET /api/protectoras/panel/animales`, `/solicitudes`, `/valoraciones`, `/resumen` |
 | RF-11 | Todo `/api/admin` |
 | RF-12 | `/api/chats/**`, destino `/topic/chat/{chatId}` |
 | RF-13 | `POST /api/auth/login` |
-| RF-14 | `PUT /api/alertas/{id}/cerrar` |
-| RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/avistamientos/feed`, `GET /api/adopcion/feed` |
+| RF-14 | `PUT /api/alertas/{id}/cerrar`, con el aviso `ALERTA_ENCONTRADA` |
+| RF-15 | `POST /api/matches` con `interesado: false`, `GET /api/alertas/{id}/avistamientos/feed`, `GET /api/alertas/{id}/avistamientos/descartados`, `GET /api/adopcion/feed` |
 | RF-16 | `POST /api/auth/logout` |
 | RF-17 | `POST /api/auth/recuperar-password`, `POST /api/auth/restablecer-password` |
 | RF-18 | `PUT /api/usuarios/me/idioma` |
@@ -1230,7 +1471,7 @@ al cliente (RNF-10): se responde «Se ha producido un error inesperado» y el de
 | RF-21 | `POST /api/avistamientos` (campo `fotoUrl`, subida antes por `POST /api/fotos`) |
 | RF-22 | `GET /api/adopcion` (filtros `especie`, `tamanyo`, `zona`) |
 | RF-23 | `PUT /api/protectoras/{id}/valoracion`; media en `GET /api/adopcion/{id}` y en `/panel/valoraciones` |
-| RF-24 | `GET /api/matches/limite`, respuesta `429` de `POST /api/matches` |
+| RF-24 | `GET /api/matches/limite`, respuesta `429` de `POST /api/matches`; solo matches de adopción |
 | RF-25 | Respuesta `409` de `POST /api/alertas`, y de `PUT /api/alertas/{id}` si cambian la especie o la ubicación |
 | RF-26 | `POST /api/reportes`, `GET /api/admin/reportes`, `PUT /api/admin/reportes/{id}/resolver` |
 
@@ -1915,9 +2156,9 @@ Aparte de esos dos huecos del SRS queda un endpoint del contrato sin construir,
 
 | Qué falta | Estado |
 |---|---|
-| **RF-05 — notificaciones.** `NotificacionController` es un esqueleto vacío: no existe `GET /api/notificaciones` ni el `PATCH` de marcado, y nadie emite por `/user/queue/notificaciones`. La mitad de escritura sí está: `NotificacionService` persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy las notificaciones se guardan y **nadie puede leerlas** | Requisito entero sin construir |
+| **RF-05 — notificaciones.** Desde el bloque del feed del dueño (nota en §22) existen `GET /api/notificaciones` y el `PATCH` de marcado (§12), y los once tipos tienen su `CHECK` desde `V17`: las notificaciones se guardan, se crean tras el commit y se pueden leer. Falta la entrega en vivo por `/user/queue/notificaciones` y la push real | Lectura construida; falta la entrega en vivo y la push |
 | **RF-06 — contacto con la protectora local.** `POST /api/protectoras/{id}/contactar` y `POST /api/protectoras/local/contactar`, diseñados en §9 desde el principio. Este bloque construyó el directorio y la ficha, que es lo que se pidió, pero no ellos | Parte de RF-06 sin construir |
-| **`GET /api/avistamientos/{id}`, el detalle de un avistamiento** (§5). Ningún requisito lo pide y ninguna pantalla lo necesita hoy: los avistamientos ya llegan enteros por los sitios donde se consultan (ver «Trabajo futuro») | Pendiente conocido y aceptado |
+| **`GET /api/avistamientos/{id}`, el detalle de un avistamiento** (§5). Ningún requisito lo pide y ninguna pantalla lo necesita hoy: los avistamientos ya llegan enteros por los sitios donde se consultan, y el aviso `NUEVO_AVISTAMIENTO` apunta a la alerta, no al avistamiento (ver «Trabajo futuro») | Pendiente conocido y aceptado |
 | ~~**Cuatro endpoints de alerta.** `GET /api/alertas` (listado paginado), `GET /api/alertas/{id}` (detalle con avistamientos), `PUT /api/alertas/{id}` (editar) y `DELETE /api/alertas/{id}` (retirar), diseñados en §4. Ninguna fila de la trazabilidad (§14) los cita, pero el resto del contrato cuenta con ellos: §5 remite al detalle para ver los avistamientos de una alerta, §11 compara su retirada con la del administrador y §12 necesita el detalle para descartar avisos huérfanos. Hoy el dueño de una alerta no puede editarla ni retirarla, solo cerrarla~~ | **Cerrado en el bloque de los endpoints de alerta (§22)** |
 
 Los dos primeros no se resuelven escribiendo un endpoint: RF-05 necesita un servicio de push externo
@@ -1933,7 +2174,7 @@ descritos uno a uno abajo, en «Trabajo futuro».
 
 | Pendiente | Bloque |
 |---|---|
-| **RF-05 entero, con notificación push real** | Ver «Trabajo futuro» |
+| **RF-05: la entrega en vivo y la push real**; la lectura ya está construida | Ver «Trabajo futuro» |
 | **El contacto directo con la protectora (RF-06)**, con la decisión de modelo que arrastra | Ver «Trabajo futuro» |
 | **`GET /api/avistamientos/{id}`**, pendiente aceptado hasta que haga falta enlazar un avistamiento suelto | Ver «Trabajo futuro» |
 | ~~**Los cuatro endpoints de alerta sin construir** (§4)~~ | **Hecho en §22** |
@@ -1947,13 +2188,12 @@ descritos uno a uno abajo, en «Trabajo futuro».
 
 #### RF-05 — notificaciones, y la push de verdad
 
-`NotificacionController` es un esqueleto vacío. La mitad de escritura ya está: `NotificacionService`
-persiste, y los nueve tipos tienen su `CHECK` desde `V6`. Hoy **las notificaciones se guardan y nadie
-puede leerlas**. Falta:
+Las notificaciones se guardan, se crean tras el commit de lo que las origina y se leen con
+`GET /api/notificaciones` y `PATCH /api/notificaciones/{id}/leida` (§12). Falta:
 
-1. `GET /api/notificaciones` paginado, con filtro `leida`, y `PATCH /api/notificaciones/{id}/leida`.
-   Es la parte pequeña: la tabla, el índice `idx_notificacion_usuario_leida` y el contrato de §12 ya
-   existen.
+1. ~~`GET /api/notificaciones` paginado, con filtro `leida`, y `PATCH /api/notificaciones/{id}/leida`~~.
+   **Hecho en el bloque del feed del dueño** (nota en §22): sin ellos, el dueño de una alerta no se
+   enteraba de un `NUEVO_AVISTAMIENTO` hasta que existiera la push.
 2. **La entrega en vivo por `/user/queue/notificaciones`**, que hoy no la envía nadie: no hay ni una
    llamada a ese destino en todo el código. El canal está documentado en §13 y el
    `SimpMessagingTemplate` ya se usa para el mapa y para el chat, así que es reutilizar la misma
@@ -1998,13 +2238,15 @@ necesita pedir un avistamiento suelto**: cada sitio donde se consulta uno ya lo 
 
 - **El detalle de la alerta** (`GET /api/alertas/{id}`, §4) devuelve sus avistamientos `VISIBLE`, con
   su autor público: es donde el dueño de una alerta ve lo que le han mandado.
-- **El feed de swipe** (§5) lleva en cada tarjeta los datos del avistamiento y los de su alerta.
+- **El feed de swipe del dueño** (§5) lleva en cada tarjeta los datos del avistamiento y los de su alerta.
 - **El detalle de un chat** (§7) lleva los del avistamiento que originó el match.
 
 Lo que no tiene camino es llegar a un avistamiento **por su id, desde fuera** de esas tres vistas. Hoy
 nada lo pide: ninguna notificación apunta a un avistamiento —`NUEVO_MATCH` lleva al match, y de ahí al
-chat—. **Hará falta en cuanto exista un enlace directo**: un aviso *push* de «han visto a tu mascota»
-que abra el avistamiento (al diseñar RF-05), o un enlace compartido. Entonces habrá que decidir qué
+chat; `NUEVO_AVISTAMIENTO`, el «han visto a tu mascota», lleva a propósito a la alerta, cuyo feed
+enseña el avistamiento nuevo el primero—. **Hará falta en cuanto exista un enlace directo** a un
+avistamiento concreto: una push que lo abra sin pasar por el feed (al diseñar RF-05), o un enlace
+compartido. Entonces habrá que decidir qué
 responde para un avistamiento `ELIMINADO` por moderación o de una alerta ya terminada, con el mismo
 criterio que el detalle de alerta: `200` reducido para lo que existió y `404` solo para lo que no.
 
@@ -2333,3 +2575,116 @@ ella el primer `UPDATE` a `RETIRADA` fallaría en ejecución, y `ddl-auto=valida
 | Las alertas que ya estaban `ELIMINADA` antes de este bloque conservan su foto | La foto solo se borra al pasar a `ELIMINADA`, y moderar otra vez una `ELIMINADA` no hace nada, a propósito: la moderación es idempotente y sin efectos. Ninguna base de datos real tenía alertas `ELIMINADA` con foto |
 | Si el autor pone la foto de una alerta en otra publicación o en su perfil justo mientras se modera esa alerta, la publicación nueva puede quedarse apuntando a una foto ya borrada | La comprobación de uso y el borrado no bloquean la fila de `FOTO`, y la de propiedad tampoco. Exige que el propio autor reutilice esa foto en los milisegundos de la moderación; cerrarlo obligaría a bloquear `FOTO` en cada publicación con foto. La misma carrera existe desde §21 al cambiar la foto de perfil |
 | La foto externa de una alerta moderada, anterior a `/api/fotos`, no se borra | El backend no la aloja; la alerta deja de apuntar a ella (§20) |
+
+### Nota posterior: el feed de avistamientos es del dueño (interpretación del SRS)
+
+**El SRS admite dos lecturas** del swipe sobre avistamientos, y el backend siguió primero la literal.
+La historia de usuario HU-02 y el caso de uso CU-02 describen a un usuario que desliza avistamientos;
+leídos al pie de la letra, el feed enseñaba a **cualquier** usuario los avistamientos de **todas** las
+alertas activas, y cualquiera podía hacer match con un testigo y abrir un chat con él. La propuesta de
+valor del SRS —«swipe para hacer coincidir avistamientos con alertas activas»— y el prototipo de Figma
+describen otra cosa: **el dueño de una alerta revisa los avistamientos de su alerta** y, si reconoce a
+su mascota, hace match y se abre un chat con quien la vio. Se ha decidido esta segunda lectura,
+centrada en el dueño, porque es la única en la que el match tiene sentido: solo el dueño puede
+reconocer a su animal en una foto, y un desconocido no tiene nada que reconocer ni motivo para
+contactar con el testigo.
+
+Lo que cambia con ello:
+
+| Antes | Ahora |
+|---|---|
+| `GET /api/avistamientos/feed`, para cualquier usuario y de todas las alertas | `GET /api/alertas/{id}/avistamientos/feed`, solo para el dueño y de su alerta (§5). La ruta antigua responde `404` |
+| Cualquiera hacía match con el avistamiento de una alerta ajena | Solo el dueño; cualquier otro recibe `403 ALERTA_AJENA` (§6) |
+| El match leía el estado de la alerta sin bloqueo | La lee con `FOR SHARE`, el bloqueo de registrar un avistamiento (§6) |
+| Todo match consumía cupo diario (RF-24) | Solo los de adopción: sin el riesgo de match en masa, un dueño con muchos avistamientos no debe quedarse sin poder revisarlos (§6) |
+| El dueño no se enteraba de que tenía avistamientos nuevos | `NUEVO_AVISTAMIENTO` con la alerta como referencia (§12) |
+| Al cerrar la alerta no se avisaba a nadie | `ALERTA_ENCONTRADA` a quienes tienen chat por sus avistamientos, como pide el CU de cerrar alerta (§12) |
+| Las notificaciones se guardaban y nadie podía leerlas | `GET /api/notificaciones` y `PATCH /{id}/leida` (§12) |
+| `ALERTA_CERCANA` y los avisos del administrador se creaban antes del commit | Todos los avisos salvo `NUEVO_MATCH` se crean tras el commit (§12) |
+
+El match de adopción no cambia, salvo que sigue siendo el único que consume cupo. El detalle de una
+alerta (`GET /api/alertas/{id}`) sigue enseñando a cualquier autenticado sus avistamientos `VISIBLE`
+con los datos públicos de su autor: la restricción es sobre el match y el chat, no sobre verlos.
+
+**Datos anteriores.** Los matches y chats que otros usuarios hicieron sobre avistamientos antes de
+este cambio se conservan: no se migra nada, y solo existían en la base de datos de desarrollo. El aviso
+`ALERTA_ENCONTRADA` los tiene en cuenta: avisa a los dos extremos de cada chat.
+
+**`V17`** solo rehace `notificacion_tipo_check` con los dos tipos nuevos, como `V6`.
+
+### Nota posterior: lo que corrigió la revisión del feed del dueño
+
+La revisión del bloque terminado —una revisión del código y una prueba de humo de la API entera—
+encontró varios problemas, que se corrigieron antes de fusionarlo:
+
+- **Un avistamiento retirado podía colarse en un match.** El match leía el estado del avistamiento
+  sin bloqueo, así que una moderación que confirmara entre esa lectura y el commit del match dejaba
+  un chat abierto sobre contenido retirado. Ahora lo lee con `FOR SHARE`, después del de la alerta,
+  y la moderación y el match se esperan el uno al otro (§6). La tabla de §6 recoge el orden de
+  bloqueo completo: la moderación de un avistamiento no toca nada más que esa fila, y la de una
+  alerta borra además la fila de su foto, lo último que toma.
+- **El pool de conexiones podía agotarse con los avisos tras el commit.** Cada aviso pide una
+  segunda conexión mientras su petición conserva la primera (§12), y con el pool por defecto de
+  Hikari, de 10 conexiones, frente a los 200 hilos de Tomcat, diez peticiones a la vez en ese punto lo
+  bloqueaban: todas esperaban 30 s, sus avisos se perdían y el resto de la API se quedaba sin
+  conexiones. Ahora el pool tiene **20 conexiones** y Tomcat **19 hilos** (`DB_POOL_MAX`,
+  `TOMCAT_HILOS_MAX`): con menos hilos que conexiones siempre queda una libre o en manos de quien no
+  necesita otra, y la aplicación no arranca si se configuran al revés. Una prueba contra PostgreSQL
+  lo demuestra con un pool de 4: tres hilos a la vez en el punto que necesita dos conexiones crean
+  todos sus avisos; cuatro agotan el pool, esperan el tiempo máximo y pierden avisos.
+
+  **Por qué esos valores.** El PostgreSQL de Railway admite 100 conexiones: la plantilla parte de la
+  imagen oficial, que trae ese `max_connections`, y reserva 3 al superusuario. Con el volumen de
+  fotos, Railway no solapa dos despliegues ni admite réplicas (§21), así que hay un solo pool a la
+  vez: 20 deja casi 80 conexiones para la consola de datos de Railway, `psql` o `pg_dump`, y seguiría
+  cabiendo con el solape de un despliegue si las fotos salieran algún día del volumen. Más conexiones
+  no darían más rendimiento: la guía de dimensionado de HikariCP sitúa el tamaño útil en torno al
+  doble de los núcleos de la base de datos, y por encima de eso solo compiten entre sí. Y
+  19 peticiones a la vez sobran para los 100 usuarios simultáneos de RNF-02, porque una petición
+  tarda milisegundos y las que lleguen de más esperan en la cola de Tomcat, sin fallar.
+
+  **El precio**, que se acepta: la subida de una foto ocupa un hilo mientras llega el archivo, aunque
+  no ocupe una conexión, así que diecinueve subidas lentas a la vez retrasarían al resto de
+  peticiones. Con el uso previsto no es probable; si llegara a pasar, la salida es crear los avisos
+  en un ejecutor propio, fuera del hilo de la petición, que ya no necesitaría la segunda conexión.
+- **Dos consultas no tenían índice** (`V18`). Los destinatarios de `ALERTA_ENCONTRADA` se buscan
+  yendo de los avistamientos de la alerta a sus matches por publicación y tipo, y el único índice de
+  `MATCH_REGISTRO`, el de su restricción única, empieza por `usuario_id`: cada cierre recorría la
+  tabla entera, que crece con cada swipe. Y `GET /api/notificaciones` ordena por `createdAt` e `id`
+  con un índice que solo tenía `(usuario_id, leida)`, así que PostgreSQL ordenaba en memoria todas
+  las notificaciones del usuario para devolver una página. Ahora hay
+  `(publicacion_id, tipo_publicacion)` y `(usuario_id, created_at DESC, id DESC)`; una prueba
+  comprueba que existen y que el plan de cada consulta los usa.
+- **Cualquiera podía inundar la alerta de otro con avistamientos falsos** (`V19`). No había límite:
+  con una sola foto se podían registrar cientos, el dueño recibía un `NUEVO_AVISTAMIENTO` por cada
+  uno y el testigo de verdad quedaba enterrado en su feed. Ahora cada usuario registra como mucho
+  **5 al día en una misma alerta** (§5), con el mismo mecanismo atómico que los cupos de matches y
+  fotos: una fila por usuario, alerta y día, creada con `INSERT … ON CONFLICT DO NOTHING` y sumada
+  con un `UPDATE` condicional, sin carreras. Esa fila es un bloqueo más al registrar, después del de
+  la alerta (§6): dos avistamientos de la misma persona a la vez se esperan; los de personas
+  distintas, no.
+- **Se podía hacer match con el avistamiento de una cuenta bloqueada o dada de baja.** El feed seguía
+  ofreciéndolo, y el match abría un chat con alguien que no podía responder y le creaba un aviso que
+  nunca iba a leer; `ALERTA_ENCONTRADA`, en cambio, ya excluía esas cuentas. Ahora el feed no los
+  ofrece y el match se rechaza con `400 AUTOR_NO_DISPONIBLE`, después de `AVISTAMIENTO_ELIMINADO` y
+  antes de `ALERTA_NO_ACTIVA` (§6).
+- **Detalles menores.** Al retirar el catálogo de una protectora —por su baja, su bloqueo o su
+  rechazo— sus animales se cargan ahora en orden de id: Hibernate escribe los `UPDATE` en ese orden,
+  así que dos de esas operaciones a la vez sobre la misma protectora toman las filas igual y la
+  segunda espera a la primera, sin posibilidad de interbloqueo. Y varios comentarios del código que se
+  habían quedado atrás dicen ya lo que hace: los códigos de `POST /api/avistamientos`, qué lanza el
+  `403 ACCESO_DENEGADO`, la ruta del feed y cómo se entregan las notificaciones.
+
+**Además, un descarte dejó de ser definitivo.** El dueño tiene la lista de los avistamientos que
+descartó (§5) y convierte uno en match con el mismo `POST /api/matches` (§6): el registro cambia de
+sentido —no se inserta otro—, el chat y el aviso se crean en la misma transacción, con las mismas
+comprobaciones y bloqueos que un match normal, y un `UPDATE` condicional impide que dos conversiones a
+la vez abran dos chats.
+
+**Limitaciones que deja la revisión, aceptadas:**
+
+| Limitación | Por qué se acepta |
+|---|---|
+| `ALERTA_CERCANA` no está acotado: carga enteras todas las cuentas activas del área del autor, inserta los avisos uno a uno y, aunque va tras el commit, corre en el hilo de la petición, que no responde hasta terminar. El área se compara sin distinguir mayúsculas con `upper()`, y no hay índice que lo sostenga | Con los usuarios previstos, un área tiene pocas cuentas. Si llegara a miles, la salida sería un único `INSERT … SELECT`, un índice sobre `lower(area_geografica)` y crear los avisos fuera del hilo de la petición |
+| Un aviso tras el commit puede perderse si el proceso cae antes de escribirlo o si la escritura falla; solo queda el error en el log, sin reintento (§12) | Los avisos son una ayuda: el feed y el detalle de la alerta dicen lo mismo aunque el aviso falte. No perderlo exigiría una tabla de salida |
+| `PATCH /api/notificaciones/{id}/leida` distingue `403` de `404`, así que recorriendo ids se puede saber cuáles existen | Es lo que fija el contrato (§12), y no se ve nada del contenido ajeno |

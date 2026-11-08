@@ -5,10 +5,12 @@ import com.rescateanimal.backend.dto.request.CrearAlertaRequest;
 import com.rescateanimal.backend.dto.response.AlertaDetalleResponse;
 import com.rescateanimal.backend.dto.response.AlertaMapaResponse;
 import com.rescateanimal.backend.dto.response.AlertaResponse;
+import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.model.enums.EstadoAlerta;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AlertaService;
+import com.rescateanimal.backend.service.AvistamientoService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Pageable;
@@ -42,6 +44,7 @@ import java.util.List;
 public class AlertaController {
 
     private final AlertaService alertaService;
+    private final AvistamientoService avistamientoService;
 
     /**
      * POST /api/alertas -> 201, 400, 401, 409
@@ -155,5 +158,36 @@ public class AlertaController {
             @AuthenticationPrincipal UsuarioPrincipal usuario) {
 
         return ResponseEntity.ok(alertaService.cerrar(id, usuario.getId()));
+    }
+
+    /**
+     * GET /api/alertas/{id}/avistamientos/feed -> 200, 400, 401, 403, 404
+     *
+     * Feed de swipe del dueño: los avistamientos de su alerta que todavía no ha
+     * revisado, más recientes primero. 403 si la alerta no es suya; 400
+     * (ALERTA_NO_ACTIVA) si ya no está ACTIVA.
+     */
+    @GetMapping("/{id}/avistamientos/feed")
+    public ResponseEntity<List<AvistamientoFeedResponse>> feedDeAvistamientos(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UsuarioPrincipal usuario) {
+
+        return ResponseEntity.ok(avistamientoService.feedDeLaAlerta(id, usuario.getId()));
+    }
+
+    /**
+     * GET /api/alertas/{id}/avistamientos/descartados -> 200, 400, 401, 403, 404
+     *
+     * Los avistamientos de su alerta que el dueño descartó, el último primero,
+     * para recuperar uno haciendo match desde aquí con POST /api/matches. Mismas
+     * comprobaciones que el feed. Paginada: page y size, 20 por defecto.
+     */
+    @GetMapping("/{id}/avistamientos/descartados")
+    public ResponseEntity<PaginaResponse<AvistamientoFeedResponse>> descartadosDeAvistamientos(
+            @PathVariable Long id,
+            @AuthenticationPrincipal UsuarioPrincipal usuario,
+            @PageableDefault(size = 20) Pageable paginacion) {
+
+        return ResponseEntity.ok(avistamientoService.descartadosDeLaAlerta(id, usuario.getId(), paginacion));
     }
 }

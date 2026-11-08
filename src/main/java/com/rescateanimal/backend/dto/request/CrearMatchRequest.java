@@ -26,7 +26,9 @@ public class CrearMatchRequest {
     private TipoPublicacion tipoPublicacion;
 
     /**
-     * true: match, abre chat y consume cuota diaria (RF-08, RF-24).
+     * true: match, abre chat (RF-08, RF-09) y, en adopción, consume cuota diaria
+     * (RF-24). Sobre un avistamiento que el dueño había descartado, convierte el
+     * descarte en match.
      * false: descarte, solo evita que la publicación reaparezca en el feed (RF-15).
      *
      * Sin valor por defecto a propósito: dejarlo implícito convertiría un cuerpo

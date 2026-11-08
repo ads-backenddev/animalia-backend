@@ -1,6 +1,5 @@
 package com.rescateanimal.backend.service;
 
-import com.rescateanimal.backend.dto.response.AutorResponse;
 import com.rescateanimal.backend.dto.response.PaginaResponse;
 import com.rescateanimal.backend.dto.response.ProtectoraAdminResponse;
 import com.rescateanimal.backend.dto.response.ReporteResponse;
@@ -94,9 +93,7 @@ public class AdminService {
     public PaginaResponse<UsuarioAdminResponse> listarUsuarios(Rol rol, Boolean activo,
                                                                Pageable paginacion) {
 
-        PageRequest peticion = PageRequest.of(
-                Math.max(0, paginacion.getPageNumber()),
-                Math.min(Math.max(1, paginacion.getPageSize()), MAXIMO_POR_PAGINA),
+        PageRequest peticion = Paginas.acotada(paginacion, MAXIMO_POR_PAGINA,
                 Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id")));
 
         Page<Usuario> pagina = usuarioRepository.findAll(UsuarioAdminSpec.de(rol, activo), peticion);
@@ -415,7 +412,19 @@ public class AdminService {
         }
     }
 
-    /** @return true si esta llamada lo retiró, false si ya lo estaba. */
+    /**
+     * Pasa el avistamiento a ELIMINADO.
+     *
+     * Su UPDATE toma la fila en exclusiva (FOR NO KEY UPDATE en PostgreSQL) y
+     * choca con el FOR SHARE con que el dueño la lee al deslizarla
+     * (AvistamientoRepository.bloquearParaDeslizar): con un match en curso, la
+     * moderación espera a que confirme; si la moderación va primero, el match
+     * espera y ve el ELIMINADO. No toma ninguna otra fila —ni la alerta, ni la
+     * foto, que se conserva—, así que no puede cerrar un ciclo con el match,
+     * que bloquea la alerta antes que el avistamiento (MatchService.deslizar).
+     *
+     * @return true si esta llamada lo retiró, false si ya lo estaba.
+     */
     private boolean retirarAvistamiento(Long avistamientoId, Long adminId) {
         Avistamiento avistamiento = avistamientoRepository.findById(avistamientoId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -471,12 +480,13 @@ public class AdminService {
     /**
      * Avisa al afectado, sin dejar que un fallo del aviso deshaga la decisión.
      *
-     * NotificacionService abre su propia transacción para esto, así que un error
-     * insertando la notificación no arrastra a la del bloqueo o la aprobación.
-     * El try/catch cubre la otra mitad: que la excepción no suba hasta aquí y
-     * tumbe igualmente la operación. Es el mismo trato que AlertaService da al
-     * aviso a la zona, y por el mismo motivo: la decisión del administrador vale
-     * por sí sola, el aviso es su consecuencia.
+     * NotificacionService crea el aviso tras el commit, en su propia
+     * transacción y capturando cualquier fallo de esa escritura: un error
+     * insertándolo no arrastra al bloqueo o la aprobación, y una decisión que se
+     * deshace no deja un aviso de algo que no pasó. Este catch cubre lo único
+     * que queda, un fallo antes de programar el aviso. Es el mismo trato que
+     * AlertaService da al aviso a la zona, y por el mismo motivo: la decisión
+     * del administrador vale por sí sola, el aviso es su consecuencia.
      */
     private void notificar(Usuario destinatario, TipoNotificacion tipo, Long referenciaId) {
         try {

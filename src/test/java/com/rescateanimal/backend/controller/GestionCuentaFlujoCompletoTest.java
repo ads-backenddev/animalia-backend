@@ -9,6 +9,7 @@ import com.rescateanimal.backend.repository.AlertaRepository;
 import com.rescateanimal.backend.repository.AvistamientoRepository;
 import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.FotoRepository;
+import com.rescateanimal.backend.repository.LimiteAvistamientoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteFotoDiarioRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
@@ -101,6 +102,8 @@ class GestionCuentaFlujoCompletoTest {
     private NotificacionRepository notificacionRepository;
     @Autowired
     private LimiteMatchDiarioRepository limiteMatchDiarioRepository;
+    @Autowired
+    private LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository;
 
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -154,6 +157,9 @@ class GestionCuentaFlujoCompletoTest {
                 .filter(n -> usuariosCreados.contains(n.getUsuario().getId()))
                 .toList());
         limiteMatchDiarioRepository.deleteAll(limiteMatchDiarioRepository.findAll().stream()
+                .filter(l -> usuariosCreados.contains(l.getUsuario().getId()))
+                .toList());
+        limiteAvistamientoDiarioRepository.deleteAll(limiteAvistamientoDiarioRepository.findAll().stream()
                 .filter(l -> usuariosCreados.contains(l.getUsuario().getId()))
                 .toList());
         if (idAvistamiento != null) {

@@ -1,9 +1,9 @@
 package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.response.AutorResponse;
-import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.dto.response.UbicacionResponse;
+import com.rescateanimal.backend.exception.LimiteAvistamientosAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.ResourceNotFoundException;
 import com.rescateanimal.backend.model.enums.Rol;
@@ -27,11 +27,12 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
-import java.util.List;
+import java.time.LocalDate;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -185,27 +186,29 @@ class AvistamientoControllerTest {
     }
 
     @Test
-    @DisplayName("GET /feed -> 200 y consulta el feed del usuario autenticado")
-    void feedDevuelve200() throws Exception {
-        when(avistamientoService.feed(ID_USUARIO)).thenReturn(List.of(
-                AvistamientoFeedResponse.builder()
-                        .id(77L)
-                        .fotoUrl("https://fotos/avistamiento.jpg")
-                        .ubicacion(new UbicacionResponse(40.4168, -3.7038))
-                        .autor(AutorResponse.builder().id(8L).nombre("Luis").build())
-                        .alertaId(55L)
-                        .alertaEspecie("perro")
-                        .alertaFotoUrl("https://fotos/alerta.jpg")
-                        .build()));
+    @DisplayName("Cupo de la alerta agotado -> 429 con el límite y la hora de reinicio")
+    void cupoAgotadoDevuelve429() throws Exception {
+        when(avistamientoService.registrar(any(), any())).thenThrow(new LimiteAvistamientosAlcanzadoException(
+                5, LocalDate.now().plusDays(1).atStartOfDay()));
 
+        mockMvc.perform(post("/api/avistamientos")
+                        .contentType(MediaType.APPLICATION_JSON).content(CUERPO_VALIDO))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.codigo").value("LIMITE_AVISTAMIENTOS_ALCANZADO"))
+                .andExpect(jsonPath("$.mensaje").value(
+                        "Has alcanzado el límite de 5 avistamientos diarios en esta alerta. Podrás registrar más mañana."))
+                .andExpect(jsonPath("$.limiteDiario").value(5))
+                .andExpect(jsonPath("$.reiniciaEn").exists());
+    }
+
+    @Test
+    @DisplayName("GET /feed ya no existe -> 404 NO_ENCONTRADO: el feed es de cada alerta, para su dueño")
+    void elFeedGlobalYaNoExiste() throws Exception {
         mockMvc.perform(get("/api/avistamientos/feed"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$", org.hamcrest.Matchers.hasSize(1)))
-                .andExpect(jsonPath("$[0].id").value(77))
-                .andExpect(jsonPath("$[0].alertaEspecie").value("perro"))
-                .andExpect(jsonPath("$[0].alertaFotoUrl").value("https://fotos/alerta.jpg"));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.codigo").value("NO_ENCONTRADO"));
 
-        verify(avistamientoService).feed(ID_USUARIO);
+        verifyNoInteractions(avistamientoService);
     }
 
     @Test

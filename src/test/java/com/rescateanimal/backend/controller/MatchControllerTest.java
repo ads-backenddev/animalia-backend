@@ -2,6 +2,7 @@ package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.response.LimiteMatchResponse;
 import com.rescateanimal.backend.dto.response.MatchResponse;
+import com.rescateanimal.backend.exception.AlertaAjenaException;
 import com.rescateanimal.backend.exception.LimiteMatchesAlcanzadoException;
 import com.rescateanimal.backend.exception.OperacionNoPermitidaException;
 import com.rescateanimal.backend.exception.PublicacionYaDeslizadaException;
@@ -175,6 +176,30 @@ class MatchControllerTest {
     }
 
     @Test
+    @DisplayName("Avistamiento de una alerta ajena -> 403 ALERTA_AJENA, distinto de PUBLICACION_PROPIA")
+    void alertaAjenaDevuelve403() throws Exception {
+        when(matchService.deslizar(any(), any())).thenThrow(new AlertaAjenaException(
+                "Solo quien publicó la alerta puede hacer match con sus avistamientos"));
+
+        mockMvc.perform(post("/api/matches")
+                        .contentType(MediaType.APPLICATION_JSON).content(MATCH))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.codigo").value("ALERTA_AJENA"));
+    }
+
+    @Test
+    @DisplayName("Avistamiento retirado por el administrador -> 400 AVISTAMIENTO_ELIMINADO")
+    void avistamientoRetiradoDevuelve400() throws Exception {
+        when(matchService.deslizar(any(), any())).thenThrow(new OperacionNoPermitidaException(
+                "AVISTAMIENTO_ELIMINADO", "Este avistamiento fue retirado por incumplir las normas"));
+
+        mockMvc.perform(post("/api/matches")
+                        .contentType(MediaType.APPLICATION_JSON).content(MATCH))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.codigo").value("AVISTAMIENTO_ELIMINADO"));
+    }
+
+    @Test
     @DisplayName("Segundo swipe sobre la misma publicación -> 409")
     void dobleSwipeDevuelve409() throws Exception {
         when(matchService.deslizar(any(), any()))
@@ -198,7 +223,7 @@ class MatchControllerTest {
                 .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.codigo").value("LIMITE_MATCHES_ALCANZADO"))
                 .andExpect(jsonPath("$.mensaje").value(
-                        "Has alcanzado el límite de 20 matches diarios. Podrás continuar mañana."))
+                        "Has alcanzado el límite de 20 matches de adopción diarios. Podrás continuar mañana."))
                 .andExpect(jsonPath("$.limiteDiario").value(20))
                 .andExpect(jsonPath("$.reiniciaEn").exists());
     }

@@ -30,4 +30,16 @@ public class AvistamientoFeedResponse {
     private Long alertaId;
     private String alertaEspecie;
     private String alertaFotoUrl;
+
+    /**
+     * Metros entre el avistamiento y la última ubicación de su alerta, para que
+     * la tarjeta diga "A 300 m". Los mide PostGIS sobre geography, igual que la
+     * detección de duplicados, y se redondean al metro.
+     *
+     * null si alguno de los dos puntos falta: un avistamiento sin ubicación no
+     * está a ninguna distancia, y cero sería afirmar que está justo encima.
+     *
+     * Es información, no criterio: el feed se ordena por fecha.
+     */
+    private Long distanciaMetros;
 }

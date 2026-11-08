@@ -1,7 +1,6 @@
 package com.rescateanimal.backend.controller;
 
 import com.rescateanimal.backend.dto.request.CrearAvistamientoRequest;
-import com.rescateanimal.backend.dto.response.AvistamientoFeedResponse;
 import com.rescateanimal.backend.dto.response.AvistamientoResponse;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AvistamientoService;
@@ -9,7 +8,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,10 +15,13 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
-import java.util.List;
 
 /**
- * Registro de avistamientos y feed para el swipe (RF-15, RF-21).
+ * Registro de avistamientos (RF-21).
+ *
+ * El feed de swipe ya no vive aquí: es de cada alerta y solo para su dueño,
+ * en GET /api/alertas/{id}/avistamientos/feed (AlertaController). El feed
+ * global que había en /api/avistamientos/feed se retiró con ese cambio.
  *
  * Todos los endpoints requieren JWT: lo impone SecurityConfig, que exige
  * autenticación para cualquier ruta fuera de /api/auth.
@@ -33,10 +34,14 @@ public class AvistamientoController {
     private final AvistamientoService avistamientoService;
 
     /**
-     * POST /api/avistamientos -> 201, 400, 401, 404
+     * POST /api/avistamientos -> 201, 400, 401, 404, 409, 429
      *
      * El 404 es que la alerta referenciada no existe; el 400 con código
-     * ALERTA_NO_ACTIVA, que existe pero ya está cerrada.
+     * ALERTA_NO_ACTIVA, que existe pero ya está cerrada; el 409
+     * RECURSO_OCUPADO, que otra operación sobre la alerta —una edición, un
+     * cierre, una moderación— la tuvo bloqueada más allá de la espera máxima;
+     * el 429, que el usuario ya ha registrado hoy en esa alerta los
+     * avistamientos que admite su cupo.
      */
     @PostMapping
     public ResponseEntity<AvistamientoResponse> registrar(
@@ -48,16 +53,5 @@ public class AvistamientoController {
         URI ubicacion = uriBuilder.path("/api/avistamientos/{id}")
                 .buildAndExpand(creado.getId()).toUri();
         return ResponseEntity.created(ubicacion).body(creado);
-    }
-
-    /**
-     * GET /api/avistamientos/feed -> 200, 401
-     * Tarjetas que el usuario todavía no ha deslizado (RF-15).
-     */
-    @GetMapping("/feed")
-    public ResponseEntity<List<AvistamientoFeedResponse>> feed(
-            @AuthenticationPrincipal UsuarioPrincipal usuario) {
-
-        return ResponseEntity.ok(avistamientoService.feed(usuario.getId()));
     }
 }
