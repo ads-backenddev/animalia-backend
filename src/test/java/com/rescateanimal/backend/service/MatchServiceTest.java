@@ -29,6 +29,7 @@ import com.rescateanimal.backend.repository.ChatRepository;
 import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
+import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -40,7 +41,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.dao.DataIntegrityViolationException;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -538,6 +541,28 @@ class MatchServiceTest {
         }
 
         @Test
+        @DisplayName("Si al guardar choca con la restricción única —otra petición lo guardó a la vez—, es un doble swipe, sin chat")
+        void elChoqueConLaRestriccionUnicaEsUnDobleSwipe() {
+            when(matchRegistroRepository.save(any(MatchRegistro.class)))
+                    .thenThrow(violacionDe(MatchRegistro.RESTRICCION_UN_DESLIZAMIENTO));
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(true), ID_USUARIO))
+                    .isInstanceOf(PublicacionYaDeslizadaException.class);
+
+            verify(chatRepository, never()).save(any());
+            verifyNoInteractions(notificacionService);
+        }
+
+        @Test
+        @DisplayName("Otra violación de integridad al guardar no se disfraza de doble swipe")
+        void otraViolacionNoEsUnDobleSwipe() {
+            DataIntegrityViolationException otra = violacionDe("fk_match_registro_usuario");
+            when(matchRegistroRepository.save(any(MatchRegistro.class))).thenThrow(otra);
+
+            assertThatThrownBy(() -> matchService.deslizar(peticion(false), ID_USUARIO)).isSameAs(otra);
+        }
+
+        @Test
         @DisplayName("Un avistamiento inexistente se rechaza con 404")
         void avistamientoInexistenteSeRechaza() {
             when(avistamientoRepository.buscarAlertaYAutor(ID_AVISTAMIENTO)).thenReturn(Optional.empty());
@@ -884,6 +909,14 @@ class MatchServiceTest {
 
     private static CrearMatchRequest peticionDeAdopcion(boolean interesado) {
         return new CrearMatchRequest(ID_ANIMAL, TipoPublicacion.ADOPCION, interesado);
+    }
+
+    /** Lo que sale de save cuando el INSERT choca con esa restricción, ya traducido por Spring. */
+    private static DataIntegrityViolationException violacionDe(String restriccion) {
+        return new DataIntegrityViolationException("could not execute statement",
+                new ConstraintViolationException("could not execute statement",
+                        new SQLException("duplicate key value violates unique constraint", "23505"),
+                        ConstraintViolationException.ConstraintKind.UNIQUE, restriccion));
     }
 
     /**

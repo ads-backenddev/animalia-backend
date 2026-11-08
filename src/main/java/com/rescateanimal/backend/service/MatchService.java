@@ -28,7 +28,9 @@ import com.rescateanimal.backend.repository.LimiteMatchDiarioRepository;
 import com.rescateanimal.backend.repository.MatchRegistroRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -179,7 +181,7 @@ public class MatchService {
         registro.setPublicacionId(peticion.getPublicacionId());
         registro.setTipoPublicacion(peticion.getTipoPublicacion());
         registro.setInteresado(interesado);
-        MatchRegistro guardado = matchRegistroRepository.save(registro);
+        MatchRegistro guardado = guardarDeslizamiento(registro);
 
         if (!interesado) {
             // Un descarte solo deja constancia para que el feed no lo repita:
@@ -190,6 +192,43 @@ public class MatchService {
         }
 
         return abrirChatYAvisar(guardado, autorDeLaPublicacion, usuarioId);
+    }
+
+    /**
+     * Guarda un deslizamiento nuevo y traduce a SWIPE_DUPLICADO el choque con
+     * la restricción única.
+     *
+     * Ese choque es un doble swipe que existsBy no llegó a ver: el mismo
+     * usuario desliza la misma publicación dos veces a la vez —un descarte y el
+     * "deshacer" que lo sigue sin esperar a su 201, por ejemplo—, las dos
+     * peticiones pasan la comprobación porque ninguna ha confirmado todavía, y
+     * el INSERT de la segunda espera en el índice único hasta que la primera
+     * confirma y entonces falla. Es el mismo caso que existsBy responde con
+     * SWIPE_DUPLICADO, y se responde igual; la transacción se deshace entera,
+     * cupo incluido. El INSERT sale dentro de save porque el id es IDENTITY.
+     *
+     * La restricción se reconoce por su nombre, que Hibernate saca del mensaje
+     * de PostgreSQL. Cualquier otra violación sigue su camino hasta el 409
+     * CONFLICTO genérico de GlobalExceptionHandler.
+     */
+    private MatchRegistro guardarDeslizamiento(MatchRegistro registro) {
+        try {
+            return matchRegistroRepository.save(registro);
+        } catch (DataIntegrityViolationException ex) {
+            if (chocaConElDeslizamientoUnico(ex)) {
+                throw new PublicacionYaDeslizadaException("Ya habías deslizado esta publicación");
+            }
+            throw ex;
+        }
+    }
+
+    private static boolean chocaConElDeslizamientoUnico(DataIntegrityViolationException ex) {
+        for (Throwable causa = ex; causa != null; causa = causa.getCause()) {
+            if (causa instanceof ConstraintViolationException violacion) {
+                return MatchRegistro.RESTRICCION_UN_DESLIZAMIENTO.equals(violacion.getConstraintName());
+            }
+        }
+        return false;
     }
 
     /**

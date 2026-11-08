@@ -447,6 +447,12 @@ testigo. Para un animal perdido, el error caro no es el que se nota al momento, 
 tarde de que la foto sí era la suya; la lista cubre los dos casos, y la app puede ofrecer el
 «deshacer» del último descarte sobre ella, porque es el primero.
 
+**El cliente espera el `201` del descarte antes de ofrecer «deshacer».** Un match que sale mientras el
+descarte todavía no ha terminado no encuentra descarte que convertir: los dos intentan crear el
+registro, el segundo choca con la restricción única cuando el primero confirma y recibe
+`409 SWIPE_DUPLICADO`, sin chat. No se pierde nada —el descarte queda y se puede recuperar después—,
+pero el «deshacer» habría fallado. Con el `201` en la mano, el match convierte el descarte.
+
 Las comprobaciones son las del feed, en el mismo orden —`404`, `403 ACCESO_DENEGADO`,
 `400 ALERTA_NO_ACTIVA`—, y la tarjeta es la misma, `distanciaMetros` incluida. Qué entra:
 
@@ -517,7 +523,10 @@ de un usuario consigo mismo. Los feeds ya excluyen lo propio, así que esto cubr
 **`409` con código `SWIPE_DUPLICADO`** si el usuario ya había deslizado esa publicación, en
 cualquiera de los dos sentidos. Lo garantiza la restricción única
 `(usuario_id, publicacion_id, tipo_publicacion)`, que es la misma que permite a los feeds de
-`/api/alertas/{id}/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto.
+`/api/alertas/{id}/avistamientos/feed` y `/api/adopcion/feed` excluir lo ya visto. También cuando
+las dos peticiones llegan a la vez: la comprobación previa no ve lo que la otra todavía no ha
+confirmado, la segunda choca con la restricción al guardar y recibe el mismo `409 SWIPE_DUPLICADO`
+—no el `409 CONFLICTO` genérico—, con su transacción deshecha entera, cupo incluido.
 
 **Salvo una excepción: un descarte de avistamiento se puede convertir en match**, una vez (§5,
 *Recuperar un avistamiento descartado*). Si el dueño hace match (`interesado: true`) sobre un

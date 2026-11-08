@@ -406,6 +406,32 @@ class AlertaBloqueoTest {
     }
 
     @Test
+    @DisplayName("Un match durante el descarte de la misma tarjeta espera en el índice único y recibe SWIPE_DUPLICADO, no CONFLICTO")
+    void matchDuranteElDescarte() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        Retenida descarte = retener(() -> matchService.deslizar(
+                new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false), duenyo.getId()));
+
+        CompletableFuture<MatchResponse> match = CompletableFuture.supplyAsync(() ->
+                matchService.deslizar(swipeA(avistamiento), duenyo.getId()), hilos);
+        esperarAQueLaBloquee(descarte);
+        assertThat(match).as("el match no ve el descarte sin confirmar y espera en el índice único").isNotDone();
+
+        descarte.confirmar();
+
+        assertThatThrownBy(() -> match.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(PublicacionYaDeslizadaException.class);
+        assertThat(jdbc.queryForList("SELECT interesado FROM match_registro WHERE usuario_id = ?",
+                Boolean.class, duenyo.getId()))
+                .as("queda el descarte, y nada más").containsExactly(false);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM chat WHERE match_id IN "
+                + "(SELECT id FROM match_registro WHERE usuario_id = ?)", Integer.class, duenyo.getId()))
+                .as("ningún chat").isZero();
+    }
+
+    @Test
     @DisplayName("Quien no es el dueño recibe ALERTA_AJENA al momento: su swipe no espera ni bloquea")
     void unSwipeAjenoNoEspera() throws Exception {
         avistar();

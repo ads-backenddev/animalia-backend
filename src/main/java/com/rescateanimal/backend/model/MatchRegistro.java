@@ -78,7 +78,7 @@ import java.time.Instant;
 @Table(
         name = "match_registro",
         uniqueConstraints = @UniqueConstraint(
-                name = "uk_match_usuario_publicacion",
+                name = MatchRegistro.RESTRICCION_UN_DESLIZAMIENTO,
                 columnNames = {"usuario_id", "publicacion_id", "tipo_publicacion"}
         ),
         // Para ir de una publicación a sus deslizamientos, a lo que no sirve la
@@ -90,6 +90,13 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 public class MatchRegistro {
+
+    /**
+     * Nombre de la restricción única, el mismo que le da V1. MatchService lo
+     * reconoce cuando dos deslizamientos simultáneos de la misma publicación
+     * chocan contra ella.
+     */
+    public static final String RESTRICCION_UN_DESLIZAMIENTO = "uk_match_usuario_publicacion";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
