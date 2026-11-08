@@ -327,8 +327,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      * los demás 409 (duplicados), que no se arreglan reintentando.
      *
      * AL CLIENTE LE DA IGUAL, AL LOG NO. Una espera vencida es carga normal:
-     * warn. Un interbloqueo no debería pasar nunca —ninguna ruta toma los
-     * bloqueos de alerta en orden inverso (docs/api-rest.md §22)—, así que si
+     * warn. Un interbloqueo no debería pasar nunca —ninguna ruta pide en orden
+     * contrario los bloqueos de una alerta, sus avistamientos y los cupos
+     * (tabla de orden de bloqueo de docs/api-rest.md §6)—, así que si
      * pasa es un error de orden de bloqueos que hay que ir a buscar: error, con
      * la traza. Se distinguen por el SQLState de PostgreSQL y no por la clase de
      * la excepción, porque la clase depende de cómo la traduzcan Hibernate y
