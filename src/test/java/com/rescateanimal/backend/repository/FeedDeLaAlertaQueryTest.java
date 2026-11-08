@@ -185,6 +185,22 @@ class FeedDeLaAlertaQueryTest {
     }
 
     @Test
+    @DisplayName("Descartados: dos descartes del mismo instante salen por el id del registro, el último primero")
+    void descartadosDesempatePorIdDelRegistro() {
+        long antiguo = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 2, true);
+        long reciente = avistamiento(alerta, testigo, EstadoAvistamiento.VISIBLE, 1, true);
+        // El reciente se descarta antes, así que su registro tiene el id menor:
+        // el orden de los registros es el contrario al de los avistamientos, y
+        // la prueba distingue cuál de los dos desempata.
+        long primerDescarte = deslizar(dueno, reciente, TipoPublicacion.AVISTAMIENTO, false);
+        long segundoDescarte = deslizar(dueno, antiguo, TipoPublicacion.AVISTAMIENTO, false);
+        jdbc.update("UPDATE match_registro SET created_at = (SELECT created_at FROM match_registro WHERE id = ?) "
+                + "WHERE id = ?", primerDescarte, segundoDescarte);
+
+        assertThat(ids(descartados(0, 20).getContent())).containsExactly(antiguo, reciente);
+    }
+
+    @Test
     @DisplayName("Descartados en páginas, con el total")
     void descartadosEnPaginas() {
         List<Long> enOrden = new ArrayList<>();

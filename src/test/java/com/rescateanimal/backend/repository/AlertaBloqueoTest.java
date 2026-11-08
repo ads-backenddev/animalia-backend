@@ -171,6 +171,8 @@ class AlertaBloqueoTest {
         alertaRepository.deleteById(alertaId);
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow());
         fotoRepository.deleteById(almacenFotos.nombreDe(fotoDelOtroTestigo).orElseThrow());
+        // La foto de la alerta, si una prueba se la puso y no llegó a moderarse.
+        jdbc.update("DELETE FROM foto WHERE usuario_id = ?", duenyo.getId());
         usuarioRepository.delete(otroTestigo);
         usuarioRepository.delete(testigo);
         usuarioRepository.delete(duenyo);
@@ -259,6 +261,37 @@ class AlertaBloqueoTest {
         assertThat(moderacion.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS)).isTrue();
         assertThat(estado()).isEqualTo(EstadoAlerta.ELIMINADA);
         assertThat(avistamientos()).as("se registró mientras estaba ACTIVA").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Una moderación que borra la foto de la alerta hace esperar a un avistamiento, y la foto del testigo se conserva")
+    void avistamientoDuranteLaModeracionDeUnaAlertaConFoto() throws Exception {
+        String fotoDeLaAlerta = fotoDe(duenyo);
+        jdbc.update("UPDATE alerta SET foto_url = ? WHERE id = ?", fotoDeLaAlerta, alertaId);
+        // El DELETE de FOTO sale al hacer flush; se fuerza para retener la
+        // moderación con la fila de la foto ya tomada, lo último que bloquea.
+        Retenida moderacion = retener(() -> {
+            alertaService.retirarPorModeracion(alertaId, ADMIN);
+            entityManager.flush();
+        });
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_locks WHERE pid = ? AND locktype = 'relation' "
+                + "AND relation = 'foto'::regclass AND mode = 'RowExclusiveLock'", Integer.class, moderacion.pid))
+                .as("la moderación retenida ya ha borrado la fila de la foto").isEqualTo(1);
+
+        CompletableFuture<Void> avistamiento = CompletableFuture.runAsync(this::avistar, hilos);
+        esperarAQueLaBloquee(moderacion);
+        assertThat(avistamiento).as("el avistamiento espera a la moderación").isNotDone();
+
+        moderacion.confirmar();
+
+        assertThatThrownBy(() -> avistamiento.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasCauseInstanceOf(OperacionNoPermitidaException.class);
+        assertThat(fotoRepository.existsById(almacenFotos.nombreDe(fotoDeLaAlerta).orElseThrow()))
+                .as("la foto de la alerta moderada, borrada").isFalse();
+        assertThat(fotoRepository.existsById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow()))
+                .as("la del testigo no era de la alerta").isTrue();
+        assertThat(avistamientos()).isZero();
     }
 
     @Test
@@ -403,6 +436,29 @@ class AlertaBloqueoTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM chat WHERE match_id IN "
                 + "(SELECT id FROM match_registro WHERE usuario_id = ?)", Integer.class, duenyo.getId()))
                 .as("un solo chat").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Un cierre durante la recuperación de un descarte espera a que se abra el chat, y avisa también a ese testigo")
+    void cierreDuranteLaRecuperacionDeUnDescarte() throws Exception {
+        avistar();
+        long avistamiento = idDelAvistamiento();
+        matchService.deslizar(new CrearMatchRequest(avistamiento, TipoPublicacion.AVISTAMIENTO, false),
+                duenyo.getId());
+        Retenida conversion = retener(() -> matchService.deslizar(swipeA(avistamiento), duenyo.getId()));
+
+        CompletableFuture<Void> cierre = CompletableFuture.runAsync(() ->
+                alertaService.cerrar(alertaId, duenyo.getId()), hilos);
+        esperarAQueLaBloquee(conversion);
+        assertThat(cierre).as("el cierre espera a la conversión").isNotDone();
+
+        conversion.confirmar();
+
+        cierre.get(ESPERA_MAXIMA.toSeconds(), TimeUnit.SECONDS);
+        assertThat(estado()).isEqualTo(EstadoAlerta.ENCONTRADA);
+        assertThat(jdbc.queryForList("SELECT usuario_id FROM notificacion WHERE tipo = 'ALERTA_ENCONTRADA' "
+                + "AND referencia_id = ?", Long.class, alertaId))
+                .as("el testigo recuperado tiene chat, y recibe el aviso").containsExactly(testigo.getId());
     }
 
     @Test

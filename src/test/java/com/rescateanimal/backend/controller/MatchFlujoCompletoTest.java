@@ -477,6 +477,9 @@ class MatchFlujoCompletoTest {
         HttpResponse<String> descarte = deslizar(tokenDuenyo, descartado, false);
         assertThat(descarte.statusCode()).isEqualTo(201);
         long registro = numero(descarte.body(), "$.id");
+        // Leído de la base de datos, con su precisión, para compararlo con el
+        // que devuelva la conversión, que también sale de ella.
+        Instant descartadoEn = matchRegistroRepository.findById(registro).orElseThrow().getCreatedAt();
 
         // 1. Sale en sus descartados, con la tarjeta del feed, y ya no en el feed.
         HttpResponse<String> lista = descartados(tokenDuenyo);
@@ -498,6 +501,8 @@ class MatchFlujoCompletoTest {
         assertThat(match.statusCode()).isEqualTo(201);
         assertThat(numero(match.body(), "$.id")).isEqualTo(registro);
         assertThat(JsonPath.<Boolean>read(match.body(), "$.interesado")).isTrue();
+        assertThat(Instant.parse(JsonPath.read(match.body(), "$.createdAt")))
+                .as("la fecha del registro sigue siendo la del descarte").isEqualTo(descartadoEn);
         assertThat(chatRepository.findById(numero(match.body(), "$.chatId"))).isPresent();
         assertThat(matchRegistroRepository.findAll().stream()
                 .filter(m -> m.getUsuario().getId().equals(idDuenyo) && m.getPublicacionId().equals(descartado)))
