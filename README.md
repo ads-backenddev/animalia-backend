@@ -187,6 +187,7 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_URL` | `jdbc:postgresql://localhost:5432/rescate_animal` | URL JDBC de PostgreSQL |
 | `DB_USER` | `rescate` | Usuario de la base de datos |
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
+| `DB_SSLMODE` | `require` en `prod`; sin fijar fuera | TLS hasta PostgreSQL. En producción la conexión va cifrada o no hay conexión: si la base de datos no admite TLS, la aplicación no arranca. `disable` solo con constancia de que el tráfico va por la red privada de Railway |
 | `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
 | `JPA_LOCK_TIMEOUT_MS` | `5000` | Espera máxima, en milisegundos, de un bloqueo de fila sobre una alerta. Al vencer, el cliente recibe `409 RECURSO_OCUPADO` en lugar de quedarse esperando |
 | `DB_POOL_MAX` | `20` | Conexiones del pool con PostgreSQL. Tiene que ser mayor que `TOMCAT_HILOS_MAX`, o la aplicación no arranca: cada aviso que se crea tras el commit necesita una segunda conexión. `application.properties` justifica el valor frente al límite de 100 conexiones del PostgreSQL de Railway |
