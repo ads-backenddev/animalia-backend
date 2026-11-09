@@ -1,5 +1,6 @@
 package com.rescateanimal.backend.security;
 
+import com.rescateanimal.backend.service.AuditoriaService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletRequest;
@@ -80,7 +81,8 @@ class LimiteIntentosAutenticacionFilterTest {
         objectMapper = new JsonMapper();
 
         filtro = new LimiteIntentosAutenticacionFilter(
-                control, objectMapper, MAXIMO_POR_CUENTA, MAXIMO_POR_IP, (int) VENTANA.toMinutes());
+                control, new AuditoriaService(), objectMapper, MAXIMO_POR_CUENTA, MAXIMO_POR_IP,
+                (int) VENTANA.toMinutes());
     }
 
     // ---------------------------------------------------------------------

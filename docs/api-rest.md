@@ -1724,6 +1724,32 @@ que añadió el proxy. Lo inventado a la izquierda no cuenta, y el `429` vuelve 
 leería la cabecera y todos los clientes compartirían la dirección del proxy; la lista se fija entonces
 con `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`.
 
+**Registro de auditoría de la autenticación** (bloque de cierre, informe ENS C2). Antes, ni el login
+—correcto o fallido— ni el logout ni el restablecimiento de la contraseña dejaban rastro, y ninguna
+línea decía desde dónde llegaba la petición. Ahora cada evento escribe una línea en su propio logger,
+`com.rescateanimal.backend.auditoria`, con formato clave=valor:
+
+```
+evento=LOGIN resultado=CREDENCIALES_INVALIDAS usuario=42 ip=203.0.113.7
+```
+
+| `evento` | Cuándo | `resultado` posibles |
+|---|---|---|
+| `REGISTRO` | Alta de ciudadano o de protectora | `OK`, `EMAIL_YA_REGISTRADO` |
+| `LOGIN` | Cada intento | `OK`, `CREDENCIALES_INVALIDAS`, `CUENTA_BLOQUEADA`, `PROTECTORA_PENDIENTE`, `PROTECTORA_RECHAZADA` |
+| `LOGOUT` | Cierre de sesión | `OK`, `TOKEN_INVALIDO` |
+| `RECUPERACION_SOLICITADA` | `POST /recuperar-password` | `OK`, `SIN_CUENTA` |
+| `PASSWORD_RESTABLECIDA` | `POST /restablecer-password` | `OK`, `TOKEN_INVALIDO`, `TOKEN_YA_USADO`, `CUENTA_BLOQUEADA` |
+| `LIMITE_INTENTOS` | El filtro corta con `429` | `BLOQUEADO_POR_IP`, `BLOQUEADO_POR_CUENTA` |
+
+El cuándo es la marca de tiempo de la línea; los éxitos van en `INFO` y los rechazos en `WARN`, y el
+perfil `prod` escribe los dos. `usuario` es el id de la cuenta, o `-` si no la hay; **nunca se
+escriben el email, la contraseña ni el token**: el email que se probó en un login fallido es un dato
+personal, y de alguien que puede no ser quien lo tecleó. `ip` es la que calcula Tomcat (ver la nota
+anterior), así que una cabecera inventada no la cambia. La respuesta al cliente no cambia en nada:
+`recuperar-password` sigue respondiendo `204` exista o no la cuenta, y lo que lo distingue queda solo
+en el log.
+
 ### Fuera de alcance, pendientes
 
 | Pendiente | Bloque |

@@ -18,6 +18,8 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.security.JwtService;
+import com.rescateanimal.backend.service.AuditoriaService.Evento;
+import com.rescateanimal.backend.service.AuditoriaService.Resultado;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -61,6 +63,8 @@ class AuthServiceTest {
     private TokenRevocadoService tokenRevocadoService;
     @Mock
     private EmailService emailService;
+    @Mock
+    private AuditoriaService auditoria;
 
     /**
      * Va de verdad, no simulado, y por eso es @Spy y no @Mock: lo que importa de
@@ -167,6 +171,7 @@ class AuthServiceTest {
             assertThat(respuesta.getTipo()).isEqualTo("Bearer");
             assertThat(respuesta.getExpiraEn()).isEqualTo(caducidad);
             assertThat(respuesta.getUsuario().getEmail()).isEqualTo("ana@test.es");
+            verify(auditoria).registrar(Evento.LOGIN, Resultado.OK, 1L);
         }
 
         @Test
@@ -177,6 +182,7 @@ class AuthServiceTest {
 
             assertThatThrownBy(() -> authService.login(new LoginRequest("ana@test.es", "mala")))
                     .isInstanceOf(CredencialesInvalidasException.class);
+            verify(auditoria).registrar(Evento.LOGIN, Resultado.CREDENCIALES_INVALIDAS, 1L);
         }
 
         @Test
@@ -189,6 +195,8 @@ class AuthServiceTest {
 
             // La comparación contra el hash de descarte es lo que iguala los tiempos.
             verify(passwordEncoder).matches(eq("loquesea"), anyString());
+            // Sin cuenta, sin usuario: el email probado no llega al registro.
+            verify(auditoria).registrar(Evento.LOGIN, Resultado.CREDENCIALES_INVALIDAS, null);
         }
 
         @Test
@@ -203,6 +211,7 @@ class AuthServiceTest {
                     .isInstanceOf(CuentaNoAutorizadaException.class)
                     .extracting(e -> ((CuentaNoAutorizadaException) e).getCodigo())
                     .isEqualTo("CUENTA_BLOQUEADA");
+            verify(auditoria).registrar(Evento.LOGIN, Resultado.CUENTA_BLOQUEADA, 1L);
         }
 
         @Test
@@ -220,6 +229,7 @@ class AuthServiceTest {
                     .isInstanceOf(CuentaNoAutorizadaException.class)
                     .extracting(e -> ((CuentaNoAutorizadaException) e).getCodigo())
                     .isEqualTo("PROTECTORA_PENDIENTE");
+            verify(auditoria).registrar(Evento.LOGIN, Resultado.PROTECTORA_PENDIENTE, 1L);
         }
     }
 
@@ -237,6 +247,7 @@ class AuthServiceTest {
             authService.solicitarRecuperacion(new RecuperarPasswordRequest("nadie@test.es"));
 
             verify(emailService, never()).enviarEnlaceRecuperacion(anyString(), anyString(), anyString());
+            verify(auditoria).registrar(Evento.RECUPERACION_SOLICITADA, Resultado.SIN_CUENTA, null);
         }
 
         @Test
@@ -248,6 +259,7 @@ class AuthServiceTest {
             authService.solicitarRecuperacion(new RecuperarPasswordRequest("ana@test.es"));
 
             verify(emailService).enviarEnlaceRecuperacion("ana@test.es", "Ana", "token-reset");
+            verify(auditoria).registrar(Evento.RECUPERACION_SOLICITADA, Resultado.OK, 1L);
         }
 
         @Test
@@ -270,6 +282,7 @@ class AuthServiceTest {
             assertThat(usuario.getPasswordHash()).isEqualTo("$2a$10$nuevo");
             assertThat(usuario.getPasswordChangedAt()).isNotNull();
             verify(tokenRevocadoService).revocar(eq("jti-reset"), any(Instant.class));
+            verify(auditoria).registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.OK, 1L);
         }
 
         @Test
@@ -285,6 +298,7 @@ class AuthServiceTest {
                     .isInstanceOf(TokenInvalidoException.class);
 
             verify(usuarioRepository, never()).save(any());
+            verify(auditoria).registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.TOKEN_YA_USADO, null);
         }
 
         @Test
@@ -302,6 +316,7 @@ class AuthServiceTest {
             assertThatThrownBy(() -> authService.restablecerPassword(
                     new RestablecerPasswordRequest("token-reset", "nuevaClave123")))
                     .isInstanceOf(CuentaNoAutorizadaException.class);
+            verify(auditoria).registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.CUENTA_BLOQUEADA, 1L);
         }
     }
 
@@ -319,10 +334,13 @@ class AuthServiceTest {
             when(jwtService.validarYExtraer("el-token", JwtService.TIPO_ACCESO)).thenReturn(claims);
             when(jwtService.getJti(claims)).thenReturn("jti-acceso");
             when(jwtService.getExpiracion(claims)).thenReturn(caducidad);
+            when(jwtService.getEmail(claims)).thenReturn("ana@test.es");
+            when(usuarioRepository.findByEmail("ana@test.es")).thenReturn(Optional.of(usuarioActivo()));
 
             authService.logout("el-token");
 
             verify(tokenRevocadoService).revocar("jti-acceso", caducidad);
+            verify(auditoria).registrar(Evento.LOGOUT, Resultado.OK, 1L);
         }
 
         @Test
@@ -334,6 +352,7 @@ class AuthServiceTest {
             authService.logout("caducado");
 
             verify(tokenRevocadoService, never()).revocar(anyString(), any());
+            verify(auditoria).registrar(Evento.LOGOUT, Resultado.TOKEN_INVALIDO, null);
         }
 
         @Test

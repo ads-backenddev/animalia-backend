@@ -11,6 +11,7 @@ import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AdminService;
+import com.rescateanimal.backend.service.AuditoriaService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.AfterEach;
@@ -88,6 +89,8 @@ class AdminControllerTest {
     private TokenRevocadoService tokenRevocadoService;
     @MockitoBean
     private ControlIntentosService controlIntentosService;
+    @MockitoBean
+    private AuditoriaService auditoriaService;
 
     @AfterEach
     void limpiarContexto() {

@@ -8,6 +8,7 @@ import com.rescateanimal.backend.model.enums.TipoNotificacion;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.AuditoriaService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.NotificacionService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
@@ -63,6 +64,8 @@ class NotificacionControllerTest {
     private TokenRevocadoService tokenRevocadoService;
     @MockitoBean
     private ControlIntentosService controlIntentosService;
+    @MockitoBean
+    private AuditoriaService auditoriaService;
 
     @BeforeEach
     void autenticarUsuario() {

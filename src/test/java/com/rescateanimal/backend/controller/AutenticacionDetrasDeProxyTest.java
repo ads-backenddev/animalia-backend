@@ -3,6 +3,9 @@ package com.rescateanimal.backend.controller;
 import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
@@ -33,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Con la estrategia "framework", la que tenía prod, la IP era el primer valor
  * de la cabecera y los 31 intentos daban 401.
  */
+@ExtendWith(OutputCaptureExtension.class)
 @ActiveProfiles("test")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -56,7 +60,7 @@ class AutenticacionDetrasDeProxyTest {
 
     @Test
     @DisplayName("Inventar el principio de X-Forwarded-For no esquiva el límite por IP: el intento 31 da 429, y otro cliente sigue entrando")
-    void laCabeceraInventadaNoEsquivaElLimite() throws Exception {
+    void laCabeceraInventadaNoEsquivaElLimite(CapturedOutput salida) throws Exception {
         for (int intento = 1; intento <= 30; intento++) {
             HttpResponse<String> respuesta = login(intento, "198.51.100." + intento + ", " + CLIENTE_REAL);
             assertThat(respuesta.statusCode()).as("intento %d", intento).isEqualTo(401);
@@ -68,6 +72,11 @@ class AutenticacionDetrasDeProxyTest {
 
         // El límite es de esa dirección y no del proxy: otro cliente, por el mismo proxy, entra.
         assertThat(login(32, "198.51.100.1, " + OTRO_CLIENTE).statusCode()).isEqualTo(401);
+
+        // El corte queda en el registro de auditoría (C2) con la dirección real, no con la inventada.
+        assertThat(salida).contains("evento=LIMITE_INTENTOS resultado=BLOQUEADO_POR_IP usuario=- ip=" + CLIENTE_REAL)
+                .contains("evento=LOGIN resultado=CREDENCIALES_INVALIDAS usuario=- ip=" + CLIENTE_REAL)
+                .doesNotContain("ip=198.51.100.");
     }
 
     private HttpResponse<String> login(int intento, String reenviadoPara) throws Exception {
