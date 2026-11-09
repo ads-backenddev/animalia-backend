@@ -312,8 +312,9 @@ public class AlertaService {
      * dos decisiones para cualquiera que tenga el id. Su detalle lleva solo lo
      * que dice qué fue y en qué quedó: id, especie, estado y fecha.
      *
-     * LOS AVISTAMIENTOS, ENTEROS SOLO PARA EL DUEÑO. A cualquier otro le llegan
-     * sin autor y con la ubicación redondeada a unos 100 m (informe ENS, C8; ver
+     * LOS AVISTAMIENTOS, ENTEROS SOLO PARA EL DUEÑO, Y CADA UNO PARA SU AUTOR. A
+     * cualquier otro, también al administrador, le llegan sin autor y con la
+     * ubicación redondeada a unos 100 m (informe ENS, C8; ver
      * AvistamientoService.visiblesDeLaAlerta).
      *
      * @param usuarioId quien pide el detalle
@@ -324,12 +325,13 @@ public class AlertaService {
                 .orElseThrow(() -> new ResourceNotFoundException("La alerta no existe"));
 
         return switch (alerta.getEstado()) {
-            case ACTIVA, ENCONTRADA -> detalleCompleto(alerta, alerta.getUsuario().getId().equals(usuarioId));
+            case ACTIVA, ENCONTRADA -> detalleCompleto(alerta, usuarioId);
             case RETIRADA, ELIMINADA -> detalleDeRetirada(alerta);
         };
     }
 
-    private AlertaDetalleResponse detalleCompleto(Alerta alerta, boolean paraElDueno) {
+    private AlertaDetalleResponse detalleCompleto(Alerta alerta, Long usuarioId) {
+        boolean paraElDueno = alerta.getUsuario().getId().equals(usuarioId);
         AlertaResponse base = aAlertaResponse(alerta);
         return AlertaDetalleResponse.builder()
                 .id(base.getId())
@@ -342,7 +344,7 @@ public class AlertaService {
                 .estado(base.getEstado())
                 .createdAt(base.getCreatedAt())
                 .autor(base.getAutor())
-                .avistamientos(avistamientoService.visiblesDeLaAlerta(alerta.getId(), paraElDueno))
+                .avistamientos(avistamientoService.visiblesDeLaAlerta(alerta.getId(), paraElDueno, usuarioId))
                 .build();
     }
 

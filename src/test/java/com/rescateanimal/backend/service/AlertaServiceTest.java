@@ -626,7 +626,7 @@ class AlertaServiceTest {
             alerta.setEstado(estado);
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
             AvistamientoResponse visto = AvistamientoResponse.builder().id(70L).alertaId(5L).build();
-            when(avistamientoService.visiblesDeLaAlerta(5L, true)).thenReturn(List.of(visto));
+            when(avistamientoService.visiblesDeLaAlerta(5L, true, 1L)).thenReturn(List.of(visto));
 
             AlertaDetalleResponse detalle = alertaService.detalle(5L, 1L);
 
@@ -642,12 +642,12 @@ class AlertaServiceTest {
         void avistamientosReducidosParaQuienNoEsElDueno() {
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
             AvistamientoResponse reducido = AvistamientoResponse.builder().id(70L).alertaId(5L).build();
-            when(avistamientoService.visiblesDeLaAlerta(5L, false)).thenReturn(List.of(reducido));
+            when(avistamientoService.visiblesDeLaAlerta(5L, false, 99L)).thenReturn(List.of(reducido));
 
             AlertaDetalleResponse detalle = alertaService.detalle(5L, 99L);
 
             assertThat(detalle.getAvistamientos()).containsExactly(reducido);
-            verify(avistamientoService, never()).visiblesDeLaAlerta(5L, true);
+            verify(avistamientoService, never()).visiblesDeLaAlerta(eq(5L), eq(true), anyLong());
         }
 
         @ParameterizedTest(name = "{0}")
@@ -668,7 +668,7 @@ class AlertaServiceTest {
             assertThat(detalle).extracting("descripcion", "fotoUrl", "ubicacion", "autor", "fechaAvistamiento")
                     .containsOnlyNulls();
             assertThat(detalle.getAvistamientos()).isEmpty();
-            verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong(), anyBoolean());
+            verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong(), anyBoolean(), any());
         }
 
         /*
@@ -683,7 +683,7 @@ class AlertaServiceTest {
             Alerta alerta = alertaExistente(5L);
             alerta.getUsuario().setTelefono("600111222");
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
-            when(avistamientoService.visiblesDeLaAlerta(5L, true)).thenReturn(List.of());
+            when(avistamientoService.visiblesDeLaAlerta(5L, true, 1L)).thenReturn(List.of());
             when(alertaRepository.findAll(ArgumentMatchers.<Specification<Alerta>>any(), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(alerta)));
 

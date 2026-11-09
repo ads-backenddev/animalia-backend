@@ -508,13 +508,20 @@ class AvistamientoServiceTest {
     @DisplayName("Avistamientos en el detalle de la alerta (C8)")
     class DetalleDeLaAlerta {
 
+        /** El de alerta(...). */
+        private static final Long ID_DUENO_ALERTA = 99L;
+        /** El de avistamientoDe(...). */
+        private static final Long ID_AUTOR = 8L;
+        /** Ni el dueño de la alerta ni el autor de ningún avistamiento. */
+        private static final Long ID_TERCERO = 50L;
+
         @Test
         @DisplayName("Para el dueño, enteros: la ubicación exacta y el autor")
         void enterosParaElDueno() {
             when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
                     .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
 
-            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true).get(0);
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0);
 
             assertThat(visto.getUbicacion().getLatitud()).isEqualTo(LAT);
             assertThat(visto.getUbicacion().getLongitud()).isEqualTo(LNG);
@@ -528,7 +535,7 @@ class AvistamientoServiceTest {
             when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
                     .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
 
-            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false).get(0);
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_TERCERO).get(0);
 
             assertThat(visto.getUbicacion().getLatitud()).isEqualTo(40.417);
             assertThat(visto.getUbicacion().getLongitud()).isEqualTo(-3.704);
@@ -540,6 +547,41 @@ class AvistamientoServiceTest {
         }
 
         @Test
+        @DisplayName("Su autor recibe entero el suyo, y solo el suyo: el de otro testigo le llega reducido")
+        void enteroSoloElPropioParaSuAutor() {
+            Avistamiento suyo = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            Avistamiento deOtro = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            deOtro.setId(78L);
+            deOtro.setUsuario(usuario(9L));
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(suyo, deOtro));
+
+            List<AvistamientoResponse> vistos = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_AUTOR);
+
+            assertThat(vistos.get(0).getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(vistos.get(0).getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(vistos.get(0).getAutor().getId()).isEqualTo(ID_AUTOR);
+            assertThat(vistos.get(1).getUbicacion().getLatitud()).isEqualTo(40.417);
+            assertThat(vistos.get(1).getUbicacion().getLongitud()).isEqualTo(-3.704);
+            assertThat(vistos.get(1).getAutor()).isNull();
+        }
+
+        @Test
+        @DisplayName("El dueño de la alerta que además es su autor también lo recibe entero")
+        void enteroParaElDuenoQueEsSuAutor() {
+            Avistamiento delDueno = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            delDueno.setUsuario(usuario(ID_DUENO_ALERTA));
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(delDueno));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(visto.getAutor().getId()).isEqualTo(ID_DUENO_ALERTA);
+        }
+
+        @Test
         @DisplayName("Sin ubicación, null en las dos versiones")
         void sinUbicacion() {
             Avistamiento sinPunto = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
@@ -547,8 +589,8 @@ class AvistamientoServiceTest {
             when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
                     .thenReturn(List.of(sinPunto));
 
-            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false).get(0).getUbicacion()).isNull();
-            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true).get(0).getUbicacion()).isNull();
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_TERCERO).get(0).getUbicacion()).isNull();
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0).getUbicacion()).isNull();
         }
     }
 

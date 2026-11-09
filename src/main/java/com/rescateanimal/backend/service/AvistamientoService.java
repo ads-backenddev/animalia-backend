@@ -313,27 +313,33 @@ public class AvistamientoService {
      * salen: los retiró el administrador por incumplir las normas, y el detalle
      * los volvería a publicar.
      *
-     * ENTEROS SOLO PARA EL DUEÑO DE LA ALERTA (informe ENS, C8). Un avistamiento
-     * dice dónde estuvo una persona y cuándo, y el detalle lo ve cualquier
-     * autenticado. Para él la ubicación va redondeada a unos 100 m
+     * ENTEROS SOLO PARA EL DUEÑO DE LA ALERTA Y PARA SU AUTOR (informe ENS, C8).
+     * Un avistamiento dice dónde estuvo una persona y cuándo, y el detalle lo ve
+     * cualquier autenticado. Para él la ubicación va redondeada a unos 100 m
      * (ver redondeada) y sin autor: basta para saber por qué zona se ha visto al
      * animal, que es lo que sirve a quien ayuda a buscarlo, y no para seguir a
      * quien lo vio. El dueño lo recibe todo, porque con eso decide si es su
-     * animal y va a buscarlo.
+     * animal y va a buscarlo. El autor recibe entero el suyo, y solo el suyo:
+     * es su propio dato y no hay nada que esconderle.
+     *
+     * EL ADMINISTRADOR NO ES UNA EXCEPCIÓN: aquí es un autenticado más y le
+     * llegan redondeados. Para moderar le basta el contenido —la descripción y
+     * la foto—, no dónde estaba exactamente quien lo vio (minimización).
      *
      * @param paraElDueno si quien pide el detalle es el dueño de la alerta
+     * @param usuarioId   quien pide el detalle; recibe enteros los avistamientos que registró él
      */
     @Transactional(readOnly = true)
-    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId, boolean paraElDueno) {
+    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId, boolean paraElDueno, Long usuarioId) {
         return avistamientoRepository.buscarDeLaAlerta(alertaId, EstadoAvistamiento.VISIBLE)
                 .stream()
-                .map(avistamiento -> paraElDueno
+                .map(avistamiento -> paraElDueno || avistamiento.getUsuario().getId().equals(usuarioId)
                         ? aAvistamientoResponse(avistamiento)
                         : aAvistamientoSinAutor(avistamiento))
                 .toList();
     }
 
-    /** El avistamiento que ve quien no es el dueño de la alerta: sin autor y con la ubicación redondeada. */
+    /** El avistamiento que ve quien no es ni el dueño de la alerta ni su autor: sin autor y con la ubicación redondeada. */
     private AvistamientoResponse aAvistamientoSinAutor(Avistamiento avistamiento) {
         return AvistamientoResponse.builder()
                 .id(avistamiento.getId())
