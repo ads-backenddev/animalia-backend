@@ -12,7 +12,9 @@ con protectoras verificadas.
 - Flyway para versionar el esquema (ddl-auto=validate, no update)
 - Spring Security + JWT (stateless, sin sesiones)
 - WebSockets con STOMP (mapa en tiempo real, chat, notificaciones)
-- Thymeleaf + Bootstrap 5 (panel web de protectora/administrador)
+- Thymeleaf + Bootstrap 5 (panel web de protectora/administrador): planificado,
+  no construido. Hoy esos paneles son endpoints REST (/api/protectoras/panel,
+  /api/admin); la dependencia sigue en el pom.xml.
 - Docker + Docker Compose para desarrollo local
 
 ## Arquitectura — por capas, estricta

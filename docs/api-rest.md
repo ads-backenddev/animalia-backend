@@ -2756,3 +2756,117 @@ la vez abran dos chats.
 | `ALERTA_CERCANA` no está acotado: carga enteras todas las cuentas activas del área del autor, inserta los avisos uno a uno y, aunque va tras el commit, corre en el hilo de la petición, que no responde hasta terminar. El área se compara sin distinguir mayúsculas con `upper()`, y no hay índice que lo sostenga | Con los usuarios previstos, un área tiene pocas cuentas. Si llegara a miles, la salida sería un único `INSERT … SELECT`, un índice sobre `lower(area_geografica)` y crear los avisos fuera del hilo de la petición |
 | Un aviso tras el commit puede perderse si el proceso cae antes de escribirlo o si la escritura falla; solo queda el error en el log, sin reintento (§12) | Los avisos son una ayuda: el feed y el detalle de la alerta dicen lo mismo aunque el aviso falte. No perderlo exigiría una tabla de salida |
 | `PATCH /api/notificaciones/{id}/leida` distingue `403` de `404`, así que recorriendo ids se puede saber cuáles existen | Es lo que fija el contrato (§12), y no se ve nada del contenido ajeno |
+
+---
+
+## 23. Bloque de cierre del backend: correo y despliegue
+
+El último bloque antes de la app Android. Cambia el proveedor de correo, cierra los huecos de código
+del informe de seguridad en el marco del ENS (C1, C2, C6, C8, C9, D4 y C16) y deja fijado qué arranca
+en producción. Lo que afecta a cada endpoint está en su sección; aquí, el correo, el despliegue y la
+lista de variables de producción.
+
+### Correo: independiente del proveedor
+
+El correo sale por la interfaz `EmailSender`, y el perfil decide la implementación:
+
+| Perfil | Implementación | Por dónde sale |
+|---|---|---|
+| Todo lo que no es `prod` (local, test, sin perfil) | `SmtpEmailSender` | SMTP con el `JavaMailSender` de Spring, contra Mailpit en desarrollo (`MAIL_HOST`, `MAIL_PORT`) |
+| `prod` | `ResendEmailSender` | La API HTTP de Resend: `POST https://api.resend.com/emails` con `Authorization: Bearer <RESEND_API_KEY>` y un JSON con `from`, `to`, `subject`, `html` y `text` |
+
+`EmailService` compone el correo —qué dice y a quién va— y no sabe por dónde sale. Hoy solo hay uno, el
+enlace de recuperación de contraseña (RF-17), en texto plano y en HTML, con el nombre del usuario
+escapado en el HTML. **No existe ningún endpoint de verificación de email ni de reenvío de la
+verificación**: el registro no envía correo.
+
+**Por HTTPS y no por SMTP en producción**: la plataforma de despliegue no garantiza la salida por los
+puertos de correo, y la API devuelve un código de estado por envío. **Esperas acotadas**: 5 s para
+conectar y 10 s para la respuesta; el envío corre en el ejecutor en segundo plano (`@Async`), y sin
+techo un proveedor colgado iría ocupando sus hilos.
+
+**Un fallo de envío no es un error para nadie.** Si Resend responde `4xx` —también el `429` de su
+límite de envíos— o `5xx`, o no responde a tiempo, el envío devuelve `false` y deja en el log el tipo de
+correo y el código de estado (o «tiempo de espera agotado», «error de conexión»). **Nunca la dirección
+del destinatario, la clave ni el cuerpo de la respuesta de error**, que puede repetir la dirección. La
+operación que lo provocó no se deshace, y `recuperar-password` sigue respondiendo `204` igual.
+
+**Sin sus dos variables, producción no arranca.** `ResendEmailSender` comprueba al crearse que
+`RESEND_API_KEY` y `MAIL_FROM` tienen valor —y que `MAIL_FROM` es una dirección—, y si no, la
+aplicación se niega a arrancar con un mensaje que nombra la variable y **nunca su valor**. Así no
+puede quedar en producción una aplicación que no envía ningún correo de recuperación sin que nadie
+lo sepa.
+
+**El proveedor.** Resend, en su región de la UE (`eu-west-1`). La clave de la API tiene permiso solo de
+envío y se guarda en una variable del servicio en Railway, nunca en el repositorio. El remitente es de
+un dominio propio con SPF, DKIM y DMARC, **todavía en configuración**: hasta que el dominio esté
+verificado en Resend, el envío desde `MAIL_FROM` se rechazará.
+
+Las pruebas de `ResendEmailSender` van contra el servidor HTTP que trae el propio JDK, sin ninguna
+dependencia nueva: comprueban la cabecera, el cuerpo, cada clase de fallo y que ni la clave ni la
+dirección llegan al log. Ninguna prueba llama a Resend de verdad.
+
+### Despliegue
+
+**La imagen arranca con el perfil `prod`.** El `Dockerfile` fija `ENV SPRING_PROFILES_ACTIVE=prod`: sin
+él, la imagen arrancaría con los valores de desarrollo de `application.properties`. `PerfilProdTest`
+carga la configuración de producción como al arrancar, sin base de datos ni red, y comprueba:
+
+| Qué | Valor en `prod` | Hueco del informe ENS |
+|---|---|---|
+| Detalle de los errores de PostgreSQL en los mensajes del driver | `logServerErrorDetail=false` | C6 |
+| TLS hasta PostgreSQL | `sslmode=require` (`DB_SSLMODE`): cifrado o no hay conexión | D4 |
+| Cabeceras del proxy | `server.forward-headers-strategy=native`: la IP del cliente no se falsifica con `X-Forwarded-For` | C1 |
+| Correo | `ResendEmailSender`; sin `RESEND_API_KEY` o sin `MAIL_FROM` no arranca | — |
+
+**Dos comprobaciones quedan para Railway antes de desplegar**, porque dependen de la plataforma y no se
+pueden probar en local:
+
+1. **Que el proxy de Railway conecte desde un rango privado** (10/8, 172.16/12, 192.168/16, 100.64/10,
+   fc00::/7…), que es lo que Tomcat da por proxy de confianza. Si no, Tomcat no leería
+   `X-Forwarded-For` y todos los clientes compartirían la dirección del proxy, también para el límite
+   de intentos; la lista se fija con `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`.
+2. **Que el PostgreSQL de Railway admita TLS.** Si no, con `require` la aplicación no arranca: es
+   preferible a mandar en claro las credenciales y los datos, pero hay que saberlo antes.
+   `DB_SSLMODE=disable` solo con constancia de que el tráfico va por la red privada.
+
+### Variables de entorno de producción
+
+Solo nombres. **Obligatoria** quiere decir que, si falta, la aplicación no arranca.
+
+| Variable | En `prod` | Para qué |
+|---|---|---|
+| `DB_URL` | Obligatoria | URL JDBC de PostgreSQL |
+| `DB_USER` | Obligatoria | Usuario de la base de datos |
+| `DB_PASSWORD` | Obligatoria | Contraseña de la base de datos |
+| `DB_SSLMODE` | Opcional (`require`) | TLS hasta PostgreSQL (D4) |
+| `DB_POOL_MAX` | Opcional | Conexiones del pool; siempre por encima de `TOMCAT_HILOS_MAX` (§22) |
+| `TOMCAT_HILOS_MAX` | Opcional | Peticiones a la vez |
+| `JPA_LOCK_TIMEOUT_MS` | Opcional | Espera máxima de un bloqueo de fila |
+| `JWT_SECRET` | Obligatoria | Secreto de firma del JWT |
+| `JWT_EXPIRATION` | Opcional | Validez del token de acceso |
+| `JWT_RESET_EXPIRATION` | Opcional | Validez del enlace de recuperación |
+| `RESEND_API_KEY` | Obligatoria | Clave de la API de Resend, solo de envío |
+| `MAIL_FROM` | Obligatoria | Remitente, de un dominio verificado en Resend |
+| `APP_URL_RESTABLECER` | Obligatoria | URL `https` de la pantalla de restablecer la contraseña, la del enlace del correo |
+| `APP_CORS_ORIGENES` | Obligatoria | Orígenes autorizados del cliente |
+| `FOTOS_DIR` | Obligatoria | Punto de montaje del volumen de fotos |
+| `APP_FOTOS_URL_PUBLICA` | Obligatoria | Base `https` de las URLs de las fotos |
+| `FOTOS_LIMITE_DIARIO`, `FOTOS_LIMPIEZA_CRON` | Opcionales | Cupo diario de subidas y hora de la limpieza |
+| `MATCHES_LIMITE_DIARIO`, `AVISTAMIENTOS_LIMITE_DIARIO_POR_ALERTA` | Opcionales | Cupos diarios de matches de adopción y de avistamientos por alerta |
+| `AVISTAMIENTOS_TAMANYO_FEED`, `ADOPCION_TAMANYO_FEED` | Opcionales | Tamaño de las tandas de los feeds |
+| `ALERTAS_RADIO_DUPLICADOS`, `ALERTAS_VENTANA_DUPLICADOS`, `ALERTAS_RADIO_MAPA_MAXIMO` | Opcionales | Detección de duplicados (RF-25) y radio máximo del mapa |
+| `AUTH_MAX_INTENTOS_CUENTA`, `AUTH_MAX_INTENTOS_IP`, `AUTH_VENTANA_INTENTOS_MINUTOS` | Opcionales | Límite de intentos de autenticación |
+| `SERVER_PORT` | Opcional | Puerto de la API |
+| `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` | Opcional | Proxies de confianza, si el de Railway no está en los rangos privados (C1) |
+| `SPRING_PROFILES_ACTIVE` | La fija la imagen | `prod` |
+
+**Ya no se usan en producción**, y se pueden quitar de Railway: `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
+`MAIL_PASSWORD` (el SMTP salió del perfil `prod`) y `MAIL_REMITENTE` (sustituida por `MAIL_FROM`).
+
+### Panel web de administración
+
+**Planificado, no construido.** El stack del proyecto preveía un panel web con Thymeleaf y Bootstrap 5
+para protectoras y administradores; no tiene ni una plantilla. Lo que sí existe son sus endpoints REST,
+`/api/protectoras/panel` (§9) y `/api/admin` (§11), que el panel —o la app— consumirán. La dependencia
+`spring-boot-starter-thymeleaf` sigue en el `pom.xml`.

@@ -19,7 +19,8 @@ adopción, con filtros por especie, tamaño y zona, y reciben valoraciones de lo
 | Geolocalización | Hibernate Spatial + JTS (`org.locationtech.jts.geom.Point`) |
 | Seguridad | Spring Security + JWT (stateless), contraseñas con BCrypt |
 | Tiempo real | WebSockets con STOMP (mapa, chat, notificaciones) |
-| Panel web | Thymeleaf + Bootstrap 5 |
+| Correo | SMTP (Mailpit) fuera de producción; API HTTP de Resend en producción (`docs/api-rest.md` §23) |
+| Panel web de administración | Thymeleaf + Bootstrap 5: **planificado, no construido**. Hoy los paneles de protectora y de administración son endpoints REST (`/api/protectoras/panel`, `/api/admin`) |
 | Infraestructura | Docker + Docker Compose |
 
 ## Arquitectura
@@ -315,5 +316,7 @@ avistamientos.
 | Adopción: publicación, catálogo con filtros, feed y confirmación (RF-07, RF-20, RF-22) | Terminado |
 | Protectoras: directorio, ficha, valoraciones y panel (RF-06, RF-10, RF-23) | Terminado, **salvo los dos endpoints de contacto** de RF-06 (§9) |
 | Reportes y administración (RF-11, RF-26) | Terminado |
-| Subida de fotos: almacenamiento propio, borrado en la baja y al moderar una alerta, limpieza diaria y cupo (§21, §22) | Terminado |
+| Subida de fotos: almacenamiento propio, borrado en la baja y al moderar una alerta o un avistamiento, limpieza diaria y cupo (§21, §22, §23) | Terminado |
+| Correo independiente del proveedor —Resend en producción—, registro de auditoría de la autenticación e imagen Docker con el perfil `prod` (§17, §23) | Terminado |
+| Panel web de administración con Thymeleaf | **Planificado, no construido**: sus endpoints REST sí existen (§9, §11, §23) |
 | Notificaciones (RF-05): creadas tras el commit, listado y marcado como leídas (`GET /api/notificaciones`, `PATCH /{id}/leida`) | Terminado **salvo la entrega en vivo y la *push***, que se diseñará con la app Android delante (§12, §20) |
