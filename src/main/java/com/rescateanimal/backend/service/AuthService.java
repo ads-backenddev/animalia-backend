@@ -21,6 +21,8 @@ import com.rescateanimal.backend.repository.ProtectoraRepository;
 import com.rescateanimal.backend.repository.UsuarioRepository;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.AuditoriaService.Evento;
+import com.rescateanimal.backend.service.AuditoriaService.Resultado;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -58,6 +60,8 @@ public class AuthService {
     private final TokenRevocadoService tokenRevocadoService;
     private final EmailService emailService;
     private final AnonimizacionService anonimizacionService;
+    /** Los eventos de autenticación quedan en el registro de auditoría (informe ENS, C2). */
+    private final AuditoriaService auditoria;
 
     // ---------------------------------------------------------------------
     // Registro (RF-01)
@@ -78,7 +82,9 @@ public class AuthService {
         usuario.setIdioma(idiomaDe(peticion.getIdioma()));
         usuario.setActivo(true);
 
-        return aUsuarioResponse(usuarioRepository.save(usuario));
+        Usuario guardado = usuarioRepository.save(usuario);
+        auditoria.registrar(Evento.REGISTRO, Resultado.OK, guardado.getId());
+        return aUsuarioResponse(guardado);
     }
 
     /**
@@ -112,7 +118,9 @@ public class AuthService {
         // RegistroProtectoraRequest.esPersonaFisica.
         protectora.setEsPersonaFisica(Boolean.TRUE.equals(peticion.getEsPersonaFisica()));
 
-        return aProtectoraResponse(protectoraRepository.save(protectora));
+        ProtectoraResponse creada = aProtectoraResponse(protectoraRepository.save(protectora));
+        auditoria.registrar(Evento.REGISTRO, Resultado.OK, guardado.getId());
+        return creada;
     }
 
     // ---------------------------------------------------------------------
@@ -136,17 +144,26 @@ public class AuthService {
             // inexistente respondería sin pagar los ~100 ms de BCrypt y el tiempo
             // de respuesta delataría qué cuentas existen.
             passwordEncoder.matches(peticion.getPassword(), HASH_DESCARTE);
+            auditoria.registrar(Evento.LOGIN, Resultado.CREDENCIALES_INVALIDAS, null);
             throw new CredencialesInvalidasException("Email o contraseña incorrectos");
         }
 
         Usuario usuario = encontrado.get();
         if (!passwordEncoder.matches(peticion.getPassword(), usuario.getPasswordHash())) {
+            auditoria.registrar(Evento.LOGIN, Resultado.CREDENCIALES_INVALIDAS, usuario.getId());
             throw new CredencialesInvalidasException("Email o contraseña incorrectos");
         }
 
-        verificarCuentaOperativa(usuario);
+        try {
+            verificarCuentaOperativa(usuario);
+        } catch (CuentaNoAutorizadaException e) {
+            // Los códigos de verificarCuentaOperativa son los nombres de Resultado.
+            auditoria.registrar(Evento.LOGIN, Resultado.valueOf(e.getCodigo()), usuario.getId());
+            throw e;
+        }
 
         JwtService.TokenAcceso token = jwtService.generarTokenAcceso(UsuarioPrincipal.de(usuario));
+        auditoria.registrar(Evento.LOGIN, Resultado.OK, usuario.getId());
 
         return LoginResponse.builder()
                 .token(token.token())
@@ -167,8 +184,12 @@ public class AuthService {
         try {
             Claims claims = jwtService.validarYExtraer(token, JwtService.TIPO_ACCESO);
             tokenRevocadoService.revocar(jwtService.getJti(claims), jwtService.getExpiracion(claims));
+            // El token lleva el email, no el id: el registro de auditoría va por id.
+            auditoria.registrar(Evento.LOGOUT, Resultado.OK,
+                    usuarioRepository.findByEmail(jwtService.getEmail(claims)).map(Usuario::getId).orElse(null));
         } catch (TokenInvalidoException e) {
             log.debug("Logout con un token que ya no era válido: {}", e.getMessage());
+            auditoria.registrar(Evento.LOGOUT, Resultado.TOKEN_INVALIDO, null);
         }
     }
 
@@ -188,8 +209,10 @@ public class AuthService {
         Optional<Usuario> usuario = usuarioRepository.findByEmail(normalizarEmail(peticion.getEmail()));
         if (usuario.isEmpty()) {
             log.debug("Solicitud de recuperación para un email sin cuenta");
+            auditoria.registrar(Evento.RECUPERACION_SOLICITADA, Resultado.SIN_CUENTA, null);
             return;
         }
+        auditoria.registrar(Evento.RECUPERACION_SOLICITADA, Resultado.OK, usuario.get().getId());
         String token = jwtService.generarTokenReset(usuario.get().getEmail());
         emailService.enviarEnlaceRecuperacion(usuario.get().getEmail(), usuario.get().getNombre(), token);
     }
@@ -200,19 +223,31 @@ public class AuthService {
      */
     @Transactional
     public void restablecerPassword(RestablecerPasswordRequest peticion) {
-        Claims claims = jwtService.validarYExtraer(peticion.getToken(), JwtService.TIPO_RESET);
+        Claims claims;
+        try {
+            claims = jwtService.validarYExtraer(peticion.getToken(), JwtService.TIPO_RESET);
+        } catch (TokenInvalidoException e) {
+            auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.TOKEN_INVALIDO, null);
+            throw e;
+        }
 
         String jti = jwtService.getJti(claims);
         if (tokenRevocadoService.estaRevocado(jti)) {
+            auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.TOKEN_YA_USADO, null);
             throw new TokenInvalidoException("Este enlace de recuperación ya se ha utilizado");
         }
 
-        Usuario usuario = usuarioRepository.findByEmail(jwtService.getEmail(claims))
-                .orElseThrow(() -> new TokenInvalidoException("El token no es válido o ha caducado"));
+        Optional<Usuario> encontrado = usuarioRepository.findByEmail(jwtService.getEmail(claims));
+        if (encontrado.isEmpty()) {
+            auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.TOKEN_INVALIDO, null);
+            throw new TokenInvalidoException("El token no es válido o ha caducado");
+        }
+        Usuario usuario = encontrado.get();
 
         // Una cuenta bloqueada por el administrador no puede operar, tampoco para
         // cambiarse la contraseña (RF-11).
         if (!Boolean.TRUE.equals(usuario.getActivo())) {
+            auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.CUENTA_BLOQUEADA, usuario.getId());
             throw new CuentaNoAutorizadaException("CUENTA_BLOQUEADA",
                     "Tu cuenta ha sido bloqueada por un administrador");
         }
@@ -221,6 +256,7 @@ public class AuthService {
         // último cambio de contraseña ya no vale, aunque la lista de tokens
         // revocados se haya perdido al reiniciar la aplicación.
         if (!UsuarioPrincipal.de(usuario).tokenEmitidoSigueVigente(jwtService.getEmitidoEn(claims))) {
+            auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.TOKEN_YA_USADO, usuario.getId());
             throw new TokenInvalidoException("Este enlace de recuperación ya no es válido");
         }
 
@@ -231,6 +267,7 @@ public class AuthService {
         usuarioRepository.save(usuario);
 
         tokenRevocadoService.revocar(jti, jwtService.getExpiracion(claims));
+        auditoria.registrar(Evento.PASSWORD_RESTABLECIDA, Resultado.OK, usuario.getId());
     }
 
     // ---------------------------------------------------------------------
@@ -271,6 +308,7 @@ public class AuthService {
         // forma indefinida, y sin que el mensaje de error dijera por qué.
         if (anonimizacionService.esDominioReservado(normalizado)) {
             log.warn("Intento de registro en el dominio reservado de cuentas eliminadas");
+            auditoria.registrar(Evento.REGISTRO, Resultado.EMAIL_YA_REGISTRADO, null);
             throw new EmailYaRegistradoException("Ya existe una cuenta con ese email");
         }
 
@@ -280,6 +318,7 @@ public class AuthService {
         if (usuarioRepository.existsByEmail(normalizado)
                 || usuarioRepository.existsByEmail(anonimizacionService.emailAnonimizado(normalizado))) {
 
+            auditoria.registrar(Evento.REGISTRO, Resultado.EMAIL_YA_REGISTRADO, null);
             throw new EmailYaRegistradoException("Ya existe una cuenta con ese email");
         }
     }

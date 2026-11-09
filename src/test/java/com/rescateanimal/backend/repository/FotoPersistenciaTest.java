@@ -152,6 +152,46 @@ class FotoPersistenciaTest {
     }
 
     @Test
+    @DisplayName("usadaFueraDelAvistamiento no cuenta al propio avistamiento; sí a otro, a la alerta y a un perfil (C9)")
+    void usadaFueraDelAvistamiento() {
+        String nombre = UUID.randomUUID() + ".jpg";
+        String url = "https://otra-base.test/fotos/" + nombre;
+        long alerta = alertaCon(null);
+        long propio = avistamientoCon(alerta, url);
+
+        assertThat(fotoRepository.usadaFueraDelAvistamiento(nombre, propio)).as("solo lo usa él").isFalse();
+
+        long otroAvistamiento = avistamientoCon(alerta, url);
+        assertThat(fotoRepository.usadaFueraDelAvistamiento(nombre, propio)).as("otro avistamiento").isTrue();
+        avistamientoRepository.deleteById(otroAvistamiento);
+        avistamientosCreados.remove(Long.valueOf(otroAvistamiento));
+        assertThat(fotoRepository.usadaFueraDelAvistamiento(nombre, propio)).isFalse();
+
+        Alerta conFoto = alertaRepository.findById(alerta).orElseThrow();
+        conFoto.setFotoUrl(url);
+        alertaRepository.save(conFoto);
+        assertThat(fotoRepository.usadaFueraDelAvistamiento(nombre, propio)).as("la alerta").isTrue();
+        conFoto.setFotoUrl(null);
+        alertaRepository.save(conFoto);
+
+        otro.setFotoUrl(url);
+        otro = usuarioRepository.save(otro);
+        assertThat(fotoRepository.usadaFueraDelAvistamiento(nombre, propio)).as("un perfil").isTrue();
+    }
+
+    private long avistamientoCon(long alertaId, String fotoUrl) {
+        Avistamiento avistamiento = new Avistamiento();
+        avistamiento.setUsuario(otro);
+        avistamiento.setAlerta(alertaRepository.getReferenceById(alertaId));
+        avistamiento.setFotoUrl(fotoUrl);
+        avistamiento.setDescripcion("Con una foto");
+        avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
+        long id = avistamientoRepository.save(avistamiento).getId();
+        avistamientosCreados.add(id);
+        return id;
+    }
+
+    @Test
     @DisplayName("usadaFueraDeLaAlerta cuenta un animal en adopción con la misma foto")
     void usadaPorUnAnimal() {
         String nombre = UUID.randomUUID() + ".jpg";

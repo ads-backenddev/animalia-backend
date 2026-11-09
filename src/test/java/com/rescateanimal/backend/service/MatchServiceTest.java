@@ -35,6 +35,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
@@ -44,11 +46,13 @@ import org.mockito.quality.Strictness;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.sql.SQLException;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -126,10 +130,7 @@ class MatchServiceTest {
 
     @BeforeEach
     void prepararServicio() {
-        matchService = new MatchService(matchRegistroRepository, limiteMatchDiarioRepository,
-                chatRepository, avistamientoRepository, animalAdopcionRepository, alertaRepository,
-                usuarioRepository, notificacionService,
-                LIMITE_DIARIO);
+        matchService = servicioCon(Clock.systemUTC());
 
         // Los permisos se miran con escalares; el avistamiento se carga después,
         // ya bloqueado.
@@ -509,6 +510,35 @@ class MatchServiceTest {
                     .thenReturn(Optional.of(fila));
 
             assertThat(matchService.consultarLimite(ID_USUARIO).getRestantes()).isZero();
+        }
+
+        /* La medianoche de Madrid es las 23:00 UTC en invierno y las 22:00 UTC en verano. */
+        @ParameterizedTest(name = "{0} es el {1} en Madrid")
+        @CsvSource({
+                "2026-01-15T22:59:59Z, 2026-01-15",
+                "2026-01-15T23:00:00Z, 2026-01-16",
+                "2026-07-15T21:59:59Z, 2026-07-15",
+                "2026-07-15T22:00:00Z, 2026-07-16"
+        })
+        @DisplayName("El día de la cuota cambia a medianoche de Madrid, y se reinicia en la siguiente")
+        void elDiaCambiaAMedianocheDeMadrid(Instant instante, LocalDate diaDeMadrid) {
+            MatchService aEsaHora = servicioCon(Clock.fixed(instante, ZoneOffset.UTC));
+            when(limiteMatchDiarioRepository.findByUsuarioIdAndFecha(any(), any())).thenReturn(Optional.empty());
+
+            LimiteMatchResponse limite = aEsaHora.consultarLimite(ID_USUARIO);
+
+            verify(limiteMatchDiarioRepository).findByUsuarioIdAndFecha(ID_USUARIO, diaDeMadrid);
+            assertThat(limite.getReiniciaEn()).isEqualTo(diaDeMadrid.plusDays(1).atStartOfDay());
+        }
+
+        @Test
+        @DisplayName("Un match de adopción a las 00:30 de Madrid —aún el día anterior en UTC— gasta la cuota del día nuevo")
+        void elMatchGastaLaCuotaDelDiaDeMadrid() {
+            MatchService aEsaHora = servicioCon(Clock.fixed(Instant.parse("2026-01-15T23:30:00Z"), ZoneOffset.UTC));
+
+            aEsaHora.deslizar(peticionDeAdopcion(true), ID_USUARIO);
+
+            verify(limiteMatchDiarioRepository).crearContadorSiNoExiste(ID_USUARIO, LocalDate.parse("2026-01-16"));
         }
     }
 
@@ -902,6 +932,13 @@ class MatchServiceTest {
     }
 
     // ---------------------------------------------------------------------
+
+    private MatchService servicioCon(Clock reloj) {
+        return new MatchService(matchRegistroRepository, limiteMatchDiarioRepository,
+                chatRepository, avistamientoRepository, animalAdopcionRepository, alertaRepository,
+                usuarioRepository, notificacionService,
+                LIMITE_DIARIO, reloj);
+    }
 
     private static CrearMatchRequest peticion(boolean interesado) {
         return new CrearMatchRequest(ID_AVISTAMIENTO, TipoPublicacion.AVISTAMIENTO, interesado);

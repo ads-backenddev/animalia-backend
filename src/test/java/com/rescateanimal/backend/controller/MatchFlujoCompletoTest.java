@@ -525,6 +525,55 @@ class MatchFlujoCompletoTest {
         assertThat(JsonPath.<String>read(cerrada.body(), "$.codigo")).isEqualTo("ALERTA_NO_ACTIVA");
     }
 
+    /*
+     * C8 en el detalle de la alerta. Las coordenadas llevan más decimales de los
+     * que se publican redondeados, para que redondear se note: 40.41736/-3.70412
+     * se publica como 40.417/-3.704, y 40.41864/-3.70588 como 40.419/-3.706.
+     */
+
+    @Test
+    @DisplayName("En el detalle de la alerta el dueño ve cada avistamiento entero; un tercero, sin autor y a unos 100 m (C8)")
+    void detalleConAvistamientosParaElDuenoYParaUnTercero() throws Exception {
+        long id = avistarEn(tokenTestigo, 40.41736, -3.70412);
+
+        loVeEntero(tokenDuenyo, id, 40.41736, -3.70412, idTestigo);
+
+        HttpResponse<String> delCurioso = loVeReducido(tokenCurioso, id, 40.417, -3.704, 40.41736);
+        assertThat(delCurioso.body()).doesNotContain("\"nombre\":\"testigo\"");
+    }
+
+    @Test
+    @DisplayName("El autor de un avistamiento ve entero el suyo, y solo el suyo: el de otro testigo le llega reducido (C8)")
+    void elAutorVeEnteroSoloElSuyo() throws Exception {
+        long delTestigo = avistarEn(tokenTestigo, 40.41736, -3.70412);
+        long delCurioso = avistarEn(tokenCurioso, 40.41864, -3.70588);
+
+        loVeEntero(tokenTestigo, delTestigo, 40.41736, -3.70412, idTestigo);
+        loVeReducido(tokenTestigo, delCurioso, 40.419, -3.706, 40.41864);
+
+        loVeEntero(tokenCurioso, delCurioso, 40.41864, -3.70588, idCurioso);
+        loVeReducido(tokenCurioso, delTestigo, 40.417, -3.704, 40.41736);
+    }
+
+    @Test
+    @DisplayName("El administrador ve los avistamientos reducidos: para moderar no necesita la ubicación exacta (C8)")
+    void elAdministradorLosVeReducidos() throws Exception {
+        long id = avistarEn(tokenTestigo, 40.41736, -3.70412);
+        String tokenAdmin = crearAdministradorYEntrar();
+
+        HttpResponse<String> delAdministrador = loVeReducido(tokenAdmin, id, 40.417, -3.704, 40.41736);
+        assertThat(delAdministrador.body()).doesNotContain("\"nombre\":\"testigo\"");
+    }
+
+    @Test
+    @DisplayName("El dueño que además registró el avistamiento lo ve entero; los demás, reducido (C8)")
+    void elDuenoQueEsAutorLoVeEntero() throws Exception {
+        long id = avistarEn(tokenDuenyo, 40.41736, -3.70412);
+
+        loVeEntero(tokenDuenyo, id, 40.41736, -3.70412, idDuenyo);
+        loVeReducido(tokenTestigo, id, 40.417, -3.704, 40.41736);
+    }
+
     @Test
     @DisplayName("En /mios un descarte recuperado sale el primero: el orden es el de apertura del chat, no la fecha del registro")
     void misMatchesPorAperturaDelChat() throws Exception {
@@ -614,6 +663,53 @@ class MatchFlujoCompletoTest {
             avistamientos.add(numero(respuesta.body(), "$.id"));
         }
         return respuesta;
+    }
+
+    /** Registra sobre la alerta del escenario un avistamiento en esas coordenadas y devuelve su id. */
+    private long avistarEn(String token, double latitud, double longitud) throws Exception {
+        HttpResponse<String> respuesta = enviar("POST", "/api/avistamientos", token, """
+                {"alertaId":%d,"descripcion":"Junto a la fuente","fotoUrl":"%s",
+                 "ubicacion":{"latitud":%s,"longitud":%s}}
+                """.formatted(alertaId, FotosDePrueba.subir(http, puerto, token), latitud, longitud));
+        assertThat(respuesta.statusCode()).isEqualTo(201);
+        long id = numero(respuesta.body(), "$.id");
+        avistamientos.add(id);
+        return id;
+    }
+
+    /** Pide el detalle de la alerta del escenario y comprueba que el avistamiento llega con la ubicación exacta y su autor. */
+    private void loVeEntero(String token, long avistamientoId, double latitud, double longitud, Long autorId)
+            throws Exception {
+        HttpResponse<String> detalle = enviar("GET", "/api/alertas/" + alertaId, token, null);
+        assertThat(detalle.statusCode()).isEqualTo(200);
+        String avistamiento = "$.avistamientos[?(@.id == " + avistamientoId + ")]";
+        assertThat(JsonPath.<List<Double>>read(detalle.body(), avistamiento + ".ubicacion.latitud"))
+                .containsExactly(latitud);
+        assertThat(JsonPath.<List<Double>>read(detalle.body(), avistamiento + ".ubicacion.longitud"))
+                .containsExactly(longitud);
+        assertThat(JsonPath.<List<Integer>>read(detalle.body(), avistamiento + ".autor.id"))
+                .containsExactly(autorId.intValue());
+    }
+
+    /**
+     * Pide el detalle de la alerta del escenario y comprueba que el avistamiento
+     * llega sin autor y con la ubicación redondeada, y que su latitud exacta no
+     * aparece en ninguna parte de la respuesta. Devuelve la respuesta.
+     */
+    private HttpResponse<String> loVeReducido(String token, long avistamientoId,
+                                              double latitudRedondeada, double longitudRedondeada,
+                                              double latitudExacta) throws Exception {
+        HttpResponse<String> detalle = enviar("GET", "/api/alertas/" + alertaId, token, null);
+        assertThat(detalle.statusCode()).isEqualTo(200);
+        String avistamiento = "$.avistamientos[?(@.id == " + avistamientoId + ")]";
+        assertThat(JsonPath.<List<Double>>read(detalle.body(), avistamiento + ".ubicacion.latitud"))
+                .containsExactly(latitudRedondeada);
+        assertThat(JsonPath.<List<Double>>read(detalle.body(), avistamiento + ".ubicacion.longitud"))
+                .containsExactly(longitudRedondeada);
+        assertThat(JsonPath.<List<Object>>read(detalle.body(), avistamiento + ".autor"))
+                .containsExactly((Object) null);
+        assertThat(detalle.body()).doesNotContain(String.valueOf(latitudExacta));
+        return detalle;
     }
 
     /** Los NUEVO_AVISTAMIENTO que ha recibido el dueño por esta alerta. */

@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -44,8 +45,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.access.AccessDeniedException;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 
@@ -94,9 +99,7 @@ class AvistamientoServiceTest {
 
     @BeforeEach
     void prepararServicio() {
-        avistamientoService = new AvistamientoService(
-                avistamientoRepository, alertaRepository, usuarioRepository, fotoService,
-                notificacionService, limiteAvistamientoDiarioRepository, TAMANYO_FEED, LIMITE_POR_ALERTA);
+        avistamientoService = servicioCon(Clock.systemUTC());
 
         // Por defecto queda cupo.
         when(limiteAvistamientoDiarioRepository.incrementarSiHayCupo(anyLong(), anyLong(), any(), anyInt()))
@@ -251,6 +254,46 @@ class AvistamientoServiceTest {
             orden.verify(limiteAvistamientoDiarioRepository)
                     .incrementarSiHayCupo(ID_USUARIO, ID_ALERTA, hoy, LIMITE_POR_ALERTA);
             orden.verify(avistamientoRepository).save(any());
+        }
+
+        /*
+         * La medianoche de Madrid es las 23:00 UTC en invierno y las 22:00 UTC en
+         * verano: en los dos segundos casos UTC sigue en el día anterior, y la
+         * fecha tiene que ser ya la del día siguiente.
+         */
+        @ParameterizedTest(name = "{0} es el {1} en Madrid")
+        @CsvSource({
+                "2026-01-15T22:59:59Z, 2026-01-15",
+                "2026-01-15T23:00:00Z, 2026-01-16",
+                "2026-07-15T21:59:59Z, 2026-07-15",
+                "2026-07-15T22:00:00Z, 2026-07-16"
+        })
+        @DisplayName("El día del cupo cambia a medianoche de Madrid, en invierno y en verano, no a la de UTC")
+        void elDiaCambiaAMedianocheDeMadrid(Instant instante, LocalDate diaDeMadrid) {
+            AvistamientoService aEsaHora = servicioCon(Clock.fixed(instante, ZoneOffset.UTC));
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+
+            aEsaHora.registrar(peticion(), ID_USUARIO);
+
+            verify(limiteAvistamientoDiarioRepository).crearContadorSiNoExiste(ID_USUARIO, ID_ALERTA, diaDeMadrid);
+            verify(limiteAvistamientoDiarioRepository)
+                    .incrementarSiHayCupo(ID_USUARIO, ID_ALERTA, diaDeMadrid, LIMITE_POR_ALERTA);
+        }
+
+        @Test
+        @DisplayName("Agotado a las 00:30 de Madrid —aún el día anterior en UTC—, se reinicia a la medianoche siguiente")
+        void reinicioTrasLaMedianocheDeMadrid() {
+            AvistamientoService aEsaHora = servicioCon(Clock.fixed(Instant.parse("2026-01-15T23:30:00Z"), ZoneOffset.UTC));
+            when(alertaRepository.bloquearParaAvistar(ID_ALERTA))
+                    .thenReturn(Optional.of(alerta(EstadoAlerta.ACTIVA)));
+            when(limiteAvistamientoDiarioRepository.incrementarSiHayCupo(anyLong(), anyLong(), any(), anyInt()))
+                    .thenReturn(0);
+
+            assertThatThrownBy(() -> aEsaHora.registrar(peticion(), ID_USUARIO))
+                    .isInstanceOf(LimiteAvistamientosAlcanzadoException.class)
+                    .satisfies(e -> assertThat(((LimiteAvistamientosAlcanzadoException) e).getReiniciaEn())
+                            .isEqualTo(LocalDateTime.parse("2026-01-17T00:00")));
         }
 
         @Test
@@ -461,7 +504,103 @@ class AvistamientoServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Avistamientos en el detalle de la alerta (C8)")
+    class DetalleDeLaAlerta {
+
+        /** El de alerta(...). */
+        private static final Long ID_DUENO_ALERTA = 99L;
+        /** El de avistamientoDe(...). */
+        private static final Long ID_AUTOR = 8L;
+        /** Ni el dueño de la alerta ni el autor de ningún avistamiento. */
+        private static final Long ID_TERCERO = 50L;
+
+        @Test
+        @DisplayName("Para el dueño, enteros: la ubicación exacta y el autor")
+        void enterosParaElDueno() {
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(visto.getAutor().getId()).isEqualTo(8L);
+            assertThat(visto.getAutor().getNombre()).isEqualTo("Usuario 8");
+        }
+
+        @Test
+        @DisplayName("Para cualquier otro, sin autor y con la ubicación redondeada a tres decimales (unos 100 m)")
+        void reducidosParaLosDemas() {
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_TERCERO).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(40.417);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(-3.704);
+            assertThat(visto.getAutor()).isNull();
+            // Lo demás es lo que sirve para ayudar a buscar, y se queda.
+            assertThat(visto.getId()).isEqualTo(77L);
+            assertThat(visto.getFotoUrl()).isEqualTo("https://fotos/avistamiento.jpg");
+            assertThat(visto.getDescripcion()).isEqualTo("Lo he visto en el parque");
+        }
+
+        @Test
+        @DisplayName("Su autor recibe entero el suyo, y solo el suyo: el de otro testigo le llega reducido")
+        void enteroSoloElPropioParaSuAutor() {
+            Avistamiento suyo = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            Avistamiento deOtro = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            deOtro.setId(78L);
+            deOtro.setUsuario(usuario(9L));
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(suyo, deOtro));
+
+            List<AvistamientoResponse> vistos = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_AUTOR);
+
+            assertThat(vistos.get(0).getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(vistos.get(0).getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(vistos.get(0).getAutor().getId()).isEqualTo(ID_AUTOR);
+            assertThat(vistos.get(1).getUbicacion().getLatitud()).isEqualTo(40.417);
+            assertThat(vistos.get(1).getUbicacion().getLongitud()).isEqualTo(-3.704);
+            assertThat(vistos.get(1).getAutor()).isNull();
+        }
+
+        @Test
+        @DisplayName("El dueño de la alerta que además es su autor también lo recibe entero")
+        void enteroParaElDuenoQueEsSuAutor() {
+            Avistamiento delDueno = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            delDueno.setUsuario(usuario(ID_DUENO_ALERTA));
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(delDueno));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(visto.getAutor().getId()).isEqualTo(ID_DUENO_ALERTA);
+        }
+
+        @Test
+        @DisplayName("Sin ubicación, null en las dos versiones")
+        void sinUbicacion() {
+            Avistamiento sinPunto = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            sinPunto.setUbicacion(null);
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(sinPunto));
+
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false, ID_TERCERO).get(0).getUbicacion()).isNull();
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true, ID_DUENO_ALERTA).get(0).getUbicacion()).isNull();
+        }
+    }
+
     // ---------------------------------------------------------------------
+
+    private AvistamientoService servicioCon(Clock reloj) {
+        return new AvistamientoService(
+                avistamientoRepository, alertaRepository, usuarioRepository, fotoService,
+                notificacionService, limiteAvistamientoDiarioRepository, TAMANYO_FEED, LIMITE_POR_ALERTA, reloj);
+    }
 
     private static AvistamientoRepository.DistanciaALaAlerta filaDeDistancia(Long avistamientoId, double metros) {
         return new AvistamientoRepository.DistanciaALaAlerta() {

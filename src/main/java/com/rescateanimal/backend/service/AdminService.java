@@ -72,6 +72,7 @@ public class AdminService {
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final AnimalAdopcionService animalAdopcionService;
     private final NotificacionService notificacionService;
+    private final FotoService fotoService;
 
     // ---------------------------------------------------------------------
     // Usuarios (RF-11)
@@ -136,8 +137,11 @@ public class AdminService {
         }
 
         usuario.setActivo(false);
-        log.warn("El administrador {} ha bloqueado al usuario {}. Motivo: {}",
-                adminId, usuarioId, motivo);
+        // El motivo es texto libre del administrador y puede llevar nombres o
+        // cualquier otro dato personal: no se escribe en el log (informe ENS,
+        // C6). Queda que hubo uno, y de qué longitud.
+        log.warn("El administrador {} ha bloqueado al usuario {} (motivo de {} caracteres, no se registra)",
+                adminId, usuarioId, motivo == null ? 0 : motivo.length());
 
         retirarElCatalogoSiEsProtectora(usuario);
 
@@ -299,8 +303,9 @@ public class AdminService {
      */
     private void marcarRechazada(Protectora protectora, String motivo, Long adminId) {
         protectora.setEstado(EstadoProtectora.RECHAZADA);
-        log.warn("El administrador {} ha rechazado la protectora {}. Motivo: {}",
-                adminId, protectora.getId(), motivo);
+        // Sin el texto del motivo, por lo mismo que en bloquear (C6).
+        log.warn("El administrador {} ha rechazado la protectora {} (motivo de {} caracteres, no se registra)",
+                adminId, protectora.getId(), motivo == null ? 0 : motivo.length());
 
         notificar(protectora.getUsuario(), TipoNotificacion.PROTECTORA_RECHAZADA,
                 protectora.getId());
@@ -419,9 +424,17 @@ public class AdminService {
      * choca con el FOR SHARE con que el dueño la lee al deslizarla
      * (AvistamientoRepository.bloquearParaDeslizar): con un match en curso, la
      * moderación espera a que confirme; si la moderación va primero, el match
-     * espera y ve el ELIMINADO. No toma ninguna otra fila —ni la alerta, ni la
-     * foto, que se conserva—, así que no puede cerrar un ciclo con el match,
-     * que bloquea la alerta antes que el avistamiento (MatchService.deslizar).
+     * espera y ve el ELIMINADO.
+     *
+     * SU FOTO SE BORRA, como la de una alerta moderada (informe ENS, C9): si
+     * no la usa nada más, la fila de FOTO ahora y el archivo tras el commit
+     * (FotoService.retirarDeAvistamientoModerado). Antes se conservaba, y lo
+     * retirado seguía servido en /fotos para quien tuviera el enlace. Esa fila
+     * es lo último que toma la moderación, después del avistamiento, y no la
+     * toca nadie que bloquee el avistamiento —el match no toca FOTO—, así que
+     * sigue sin poder cerrar un ciclo con el match, que bloquea la alerta antes
+     * que el avistamiento (MatchService.deslizar). Ni la alerta ni su foto se
+     * tocan.
      *
      * @return true si esta llamada lo retiró, false si ya lo estaba.
      */
@@ -435,6 +448,11 @@ public class AdminService {
         }
 
         avistamiento.setEstado(EstadoAvistamiento.ELIMINADO);
+        String foto = avistamiento.getFotoUrl();
+        if (foto != null) {
+            avistamiento.setFotoUrl(null);
+            fotoService.retirarDeAvistamientoModerado(foto, avistamiento.getUsuario().getId(), avistamientoId);
+        }
         log.warn("El administrador {} ha retirado el avistamiento {} por incumplir las normas",
                 adminId, avistamientoId);
         return true;

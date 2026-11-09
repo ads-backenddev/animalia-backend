@@ -19,7 +19,8 @@ adopción, con filtros por especie, tamaño y zona, y reciben valoraciones de lo
 | Geolocalización | Hibernate Spatial + JTS (`org.locationtech.jts.geom.Point`) |
 | Seguridad | Spring Security + JWT (stateless), contraseñas con BCrypt |
 | Tiempo real | WebSockets con STOMP (mapa, chat, notificaciones) |
-| Panel web | Thymeleaf + Bootstrap 5 |
+| Correo | SMTP (Mailpit) fuera de producción; API HTTP de Resend en producción (`docs/api-rest.md` §23) |
+| Panel web de administración | Thymeleaf + Bootstrap 5: **planificado, no construido**. Hoy los paneles de protectora y de administración son endpoints REST (`/api/protectoras/panel`, `/api/admin`). Thymeleaf no está en el `pom.xml`: nada lo usaba, tampoco el correo (§23) |
 | Infraestructura | Docker + Docker Compose |
 
 ## Arquitectura
@@ -128,8 +129,12 @@ recuperación de contraseña (RF-17) sin escribir a una dirección real.
 - Bandeja de entrada: <http://localhost:8025>
 
 Sin él, la aplicación arranca igual; el envío falla en segundo plano y solo queda registrado en el
-log, porque `EmailService` no propaga el error (si lo hiciera, el flujo de recuperación revelaría
-qué correos están registrados).
+log —el tipo de correo y la clase del error, nunca la dirección—, porque el envío no propaga el
+error (si lo hiciera, el flujo de recuperación revelaría qué correos están registrados).
+
+Fuera de producción el correo sale por SMTP (`SmtpEmailSender`, contra Mailpit); en el perfil `prod`
+sale por la API de Resend (`ResendEmailSender`), que necesita `RESEND_API_KEY` y `MAIL_FROM`. Las dos
+implementaciones cumplen la misma interfaz, `EmailSender`, y el perfil decide cuál se usa.
 
 ### Comandos útiles de Docker
 
@@ -183,15 +188,18 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `DB_URL` | `jdbc:postgresql://localhost:5432/rescate_animal` | URL JDBC de PostgreSQL |
 | `DB_USER` | `rescate` | Usuario de la base de datos |
 | `DB_PASSWORD` | `rescate` | Contraseña de la base de datos |
+| `DB_SSLMODE` | `require` en `prod`; sin fijar fuera | TLS hasta PostgreSQL. En producción la conexión va cifrada o no hay conexión: si la base de datos no admite TLS, la aplicación no arranca. `disable` solo con constancia de que el tráfico va por la red privada de Railway |
 | `JPA_DDL_AUTO` | `validate` | Siempre `validate`: el esquema lo crea y lo cambia Flyway (`src/main/resources/db/migration`), y Hibernate solo comprueba que las entidades coinciden con las tablas. Con `update` taparía una migración olvidada |
 | `JPA_LOCK_TIMEOUT_MS` | `5000` | Espera máxima, en milisegundos, de un bloqueo de fila sobre una alerta. Al vencer, el cliente recibe `409 RECURSO_OCUPADO` en lugar de quedarse esperando |
 | `DB_POOL_MAX` | `20` | Conexiones del pool con PostgreSQL. Tiene que ser mayor que `TOMCAT_HILOS_MAX`, o la aplicación no arranca: cada aviso que se crea tras el commit necesita una segunda conexión. `application.properties` justifica el valor frente al límite de 100 conexiones del PostgreSQL de Railway |
 | `TOMCAT_HILOS_MAX` | `19` | Peticiones que Tomcat atiende a la vez; las demás esperan en cola. Siempre por debajo de `DB_POOL_MAX` |
 | `JWT_SECRET` | valor de desarrollo | Secreto de firma del JWT. **Obligatorio en producción** |
 | `JWT_EXPIRATION` | `86400000` | Validez del token en ms (24 h) |
-| `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña |
+| `MAIL_HOST` / `MAIL_PORT` | `localhost` / `1025` | SMTP para el email de recuperación de contraseña, **solo fuera de producción** (Mailpit) |
+| `MAIL_FROM` | `no-reply@rescateanimal.es` | Remitente de los correos. **Obligatoria en producción**: una dirección de un dominio verificado en Resend |
+| `RESEND_API_KEY` | — | Clave de la API de Resend, con permiso solo de envío. **Solo y obligatoria en producción**; sin ella, o sin `MAIL_FROM`, la aplicación no arranca |
 | `SERVER_PORT` | `8080` | Puerto de la API |
-| `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción |
+| `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción. La imagen Docker ya lo fija (`ENV SPRING_PROFILES_ACTIVE=prod` en el `Dockerfile`): no hace falta ponerlo en Railway |
 | `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
 | `APP_FOTOS_URL_PUBLICA` | `http://localhost:8080/fotos` | Base de las URLs de las fotos. **Obligatoria y `https` en producción** |
 | `FOTOS_LIMITE_DIARIO` | `25` | Subidas de fotos por usuario y día |
@@ -308,5 +316,7 @@ avistamientos.
 | Adopción: publicación, catálogo con filtros, feed y confirmación (RF-07, RF-20, RF-22) | Terminado |
 | Protectoras: directorio, ficha, valoraciones y panel (RF-06, RF-10, RF-23) | Terminado, **salvo los dos endpoints de contacto** de RF-06 (§9) |
 | Reportes y administración (RF-11, RF-26) | Terminado |
-| Subida de fotos: almacenamiento propio, borrado en la baja y al moderar una alerta, limpieza diaria y cupo (§21, §22) | Terminado |
+| Subida de fotos: almacenamiento propio, borrado en la baja y al moderar una alerta o un avistamiento, limpieza diaria y cupo (§21, §22, §23) | Terminado |
+| Correo independiente del proveedor —Resend en producción—, registro de auditoría de la autenticación e imagen Docker con el perfil `prod` (§17, §23) | Terminado |
+| Panel web de administración con Thymeleaf | **Planificado, no construido**: sus endpoints REST sí existen (§9, §11, §23) |
 | Notificaciones (RF-05): creadas tras el commit, listado y marcado como leídas (`GET /api/notificaciones`, `PATCH /{id}/leida`) | Terminado **salvo la entrega en vivo y la *push***, que se diseñará con la app Android delante (§12, §20) |

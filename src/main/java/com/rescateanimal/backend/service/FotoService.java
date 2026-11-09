@@ -31,11 +31,13 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Subida de fotos (POST /api/fotos): de los bytes que manda el cliente a un
@@ -95,17 +97,21 @@ public class FotoService {
     private final LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     private final AlmacenFotosService almacen;
     private final int limiteDiario;
+    /** De dónde sale el instante del cupo; el día lo pone ZONA_CUPO (ver RelojConfig). */
+    private final Clock reloj;
 
     public FotoService(FotoRepository fotoRepository,
                        UsuarioRepository usuarioRepository,
                        LimiteFotoDiarioRepository limiteFotoDiarioRepository,
                        AlmacenFotosService almacen,
-                       @Value("${app.fotos.limite-diario}") int limiteDiario) {
+                       @Value("${app.fotos.limite-diario}") int limiteDiario,
+                       Clock reloj) {
         this.fotoRepository = fotoRepository;
         this.usuarioRepository = usuarioRepository;
         this.limiteFotoDiarioRepository = limiteFotoDiarioRepository;
         this.almacen = almacen;
         this.limiteDiario = limiteDiario;
+        this.reloj = reloj;
     }
 
     @Transactional
@@ -224,19 +230,47 @@ public class FotoService {
      */
     @Transactional
     public void retirarDeAlertaModerada(String url, Long autorId, Long alertaId) {
+        retirarDeModerada(url, autorId, "la alerta moderada " + alertaId,
+                nombre -> fotoRepository.usadaFueraDeLaAlerta(nombre, alertaId));
+    }
+
+    /**
+     * Quita la foto de un avistamiento que el administrador acaba de moderar
+     * (pasa a ELIMINADO), con las mismas reglas que retirarDeAlertaModerada
+     * (informe ENS, C9). Antes solo la alerta perdía su foto al moderarse, y lo
+     * retirado de un avistamiento seguía al alcance de quien tuviera el enlace.
+     *
+     * Se conserva si la usa otra cosa —la alerta, otro avistamiento, un animal o
+     * un perfil—: el autor puede haber puesto la misma foto en otro avistamiento,
+     * que no está moderado.
+     */
+    @Transactional
+    public void retirarDeAvistamientoModerado(String url, Long autorId, Long avistamientoId) {
+        retirarDeModerada(url, autorId, "el avistamiento moderado " + avistamientoId,
+                nombre -> fotoRepository.usadaFueraDelAvistamiento(nombre, avistamientoId));
+    }
+
+    /**
+     * Lo común a las dos moderaciones: comprobar que la foto es de este almacén
+     * y del autor, y que nada más la usa; y entonces borrar la fila ya y el
+     * archivo tras el commit.
+     *
+     * @param publicacion lo que se ha moderado, para el log
+     * @param usadaFuera  si algo distinto de lo moderado usa la foto con ese nombre
+     */
+    private void retirarDeModerada(String url, Long autorId, String publicacion, Predicate<String> usadaFuera) {
         Optional<String> encontrada = almacen.nombreDe(url);
         if (encontrada.isEmpty()) {
-            log.info("La alerta moderada {} tenía una foto externa: no se aloja aquí, no se borra", alertaId);
+            log.info("La foto de {} es externa: no se aloja aquí, no se borra", publicacion);
             return;
         }
         String nombre = encontrada.get();
         if (!fotoRepository.existsByNombreAndUsuarioId(nombre, autorId)) {
-            log.warn("La alerta moderada {} apuntaba a la foto {}, que no es de su autor", alertaId, nombre);
+            log.warn("La foto {} de {} no es de su autor: no se borra", nombre, publicacion);
             return;
         }
-        if (fotoRepository.usadaFueraDeLaAlerta(nombre, alertaId)) {
-            log.info("La foto {} de la alerta moderada {} la usa también otra publicación o un perfil: se conserva",
-                    nombre, alertaId);
+        if (usadaFuera.test(nombre)) {
+            log.info("La foto {} de {} la usa también otra publicación o un perfil: se conserva", nombre, publicacion);
             return;
         }
 
@@ -280,7 +314,7 @@ public class FotoService {
      * atómicas en la base de datos: ver LimiteFotoDiarioRepository.
      */
     private void consumirCupo(Long usuarioId) {
-        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        LocalDate hoy = LocalDate.ofInstant(reloj.instant(), ZONA_CUPO);
         limiteFotoDiarioRepository.crearContadorSiNoExiste(usuarioId, hoy);
         if (limiteFotoDiarioRepository.incrementarSiHayCupo(usuarioId, hoy, limiteDiario) == 0) {
             log.info("Usuario {} ha agotado sus {} subidas de fotos del día", usuarioId, limiteDiario);

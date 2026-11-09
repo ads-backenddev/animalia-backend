@@ -34,4 +34,12 @@ RUN chmod 755 /usr/local/bin/docker-entrypoint.sh
 # ejecuta java como "spring". Ver docker-entrypoint.sh.
 EXPOSE 8080
 
+# Esta imagen es la de produccion, y arranca con el perfil prod sin depender de
+# que alguien lo ponga en las variables del servicio. Sin el, la aplicacion
+# arrancaria con los valores de desarrollo de application.properties: secreto
+# JWT de desarrollo, correo por SMTP, sin TLS hasta PostgreSQL y con la IP del
+# limite de intentos sin proxy de confianza. Con el, cada secreto que falte
+# impide arrancar (application-prod.properties). PerfilProdTest lo comprueba.
+ENV SPRING_PROFILES_ACTIVE=prod
+
 ENTRYPOINT ["docker-entrypoint.sh"]

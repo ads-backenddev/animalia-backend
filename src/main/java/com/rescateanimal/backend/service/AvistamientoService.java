@@ -33,6 +33,9 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.HashMap;
@@ -56,6 +59,9 @@ public class AvistamientoService {
     /** Tope de tamaño de página de los descartados, el mismo que el del resto de listados. */
     static final int MAXIMO_POR_PAGINA = 100;
 
+    /** Decimales de la ubicación de un avistamiento para quien no es el dueño de la alerta (C8). */
+    static final int DECIMALES_REDONDEO = 3;
+
     private final AvistamientoRepository avistamientoRepository;
     private final AlertaRepository alertaRepository;
     private final UsuarioRepository usuarioRepository;
@@ -65,6 +71,8 @@ public class AvistamientoService {
 
     private final int tamanyoFeed;
     private final int limiteDiarioPorAlerta;
+    /** De dónde sale el instante del cupo; el día lo pone ZONA_CUPO (ver RelojConfig). */
+    private final Clock reloj;
 
     private final GeometryFactory geometryFactory =
             new GeometryFactory(new PrecisionModel(), SRID_WGS84);
@@ -76,7 +84,8 @@ public class AvistamientoService {
                                NotificacionService notificacionService,
                                LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository,
                                @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed,
-                               @Value("${app.avistamientos.limite-diario-por-alerta}") int limiteDiarioPorAlerta) {
+                               @Value("${app.avistamientos.limite-diario-por-alerta}") int limiteDiarioPorAlerta,
+                               Clock reloj) {
         this.avistamientoRepository = avistamientoRepository;
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
@@ -85,6 +94,7 @@ public class AvistamientoService {
         this.limiteAvistamientoDiarioRepository = limiteAvistamientoDiarioRepository;
         this.tamanyoFeed = tamanyoFeed;
         this.limiteDiarioPorAlerta = limiteDiarioPorAlerta;
+        this.reloj = reloj;
     }
 
     // ---------------------------------------------------------------------
@@ -269,7 +279,7 @@ public class AvistamientoService {
      * LimiteAvistamientoDiarioRepository.
      */
     private void consumirCupo(Long autorId, Long alertaId) {
-        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        LocalDate hoy = LocalDate.ofInstant(reloj.instant(), ZONA_CUPO);
         limiteAvistamientoDiarioRepository.crearContadorSiNoExiste(autorId, alertaId, hoy);
         if (limiteAvistamientoDiarioRepository.incrementarSiHayCupo(
                 autorId, alertaId, hoy, limiteDiarioPorAlerta) == 0) {
@@ -302,13 +312,62 @@ public class AvistamientoService {
      * Los avistamientos VISIBLE de una alerta, para su detalle. Los ELIMINADO no
      * salen: los retiró el administrador por incumplir las normas, y el detalle
      * los volvería a publicar.
+     *
+     * ENTEROS SOLO PARA EL DUEÑO DE LA ALERTA Y PARA SU AUTOR (informe ENS, C8).
+     * Un avistamiento dice dónde estuvo una persona y cuándo, y el detalle lo ve
+     * cualquier autenticado. Para él la ubicación va redondeada a unos 100 m
+     * (ver redondeada) y sin autor: basta para saber por qué zona se ha visto al
+     * animal, que es lo que sirve a quien ayuda a buscarlo, y no para seguir a
+     * quien lo vio. El dueño lo recibe todo, porque con eso decide si es su
+     * animal y va a buscarlo. El autor recibe entero el suyo, y solo el suyo:
+     * es su propio dato y no hay nada que esconderle.
+     *
+     * EL ADMINISTRADOR NO ES UNA EXCEPCIÓN: aquí es un autenticado más y le
+     * llegan redondeados. Para moderar le basta el contenido —la descripción y
+     * la foto—, no dónde estaba exactamente quien lo vio (minimización).
+     *
+     * @param paraElDueno si quien pide el detalle es el dueño de la alerta
+     * @param usuarioId   quien pide el detalle; recibe enteros los avistamientos que registró él
      */
     @Transactional(readOnly = true)
-    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId) {
+    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId, boolean paraElDueno, Long usuarioId) {
         return avistamientoRepository.buscarDeLaAlerta(alertaId, EstadoAvistamiento.VISIBLE)
                 .stream()
-                .map(this::aAvistamientoResponse)
+                .map(avistamiento -> paraElDueno || avistamiento.getUsuario().getId().equals(usuarioId)
+                        ? aAvistamientoResponse(avistamiento)
+                        : aAvistamientoSinAutor(avistamiento))
                 .toList();
+    }
+
+    /** El avistamiento que ve quien no es ni el dueño de la alerta ni su autor: sin autor y con la ubicación redondeada. */
+    private AvistamientoResponse aAvistamientoSinAutor(Avistamiento avistamiento) {
+        return AvistamientoResponse.builder()
+                .id(avistamiento.getId())
+                .alertaId(avistamiento.getAlerta().getId())
+                .descripcion(avistamiento.getDescripcion())
+                .fotoUrl(avistamiento.getFotoUrl())
+                .ubicacion(redondeada(avistamiento.getUbicacion()))
+                .createdAt(avistamiento.getCreatedAt())
+                .build();
+    }
+
+    /**
+     * La ubicación con DECIMALES_REDONDEO decimales. Con tres, un paso es 0,001°:
+     * unos 111 m en latitud y, a la latitud de la Península, unos 85 m en
+     * longitud. El punto real queda a menos de medio paso del publicado.
+     */
+    static UbicacionResponse redondeada(Point punto) {
+        if (punto == null) {
+            return null;
+        }
+        return UbicacionResponse.builder()
+                .latitud(redondear(punto.getY()))
+                .longitud(redondear(punto.getX()))
+                .build();
+    }
+
+    private static double redondear(double grados) {
+        return BigDecimal.valueOf(grados).setScale(DECIMALES_REDONDEO, RoundingMode.HALF_UP).doubleValue();
     }
 
     private AvistamientoResponse aAvistamientoResponse(Avistamiento avistamiento) {

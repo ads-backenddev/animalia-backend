@@ -6,6 +6,7 @@ import com.rescateanimal.backend.model.enums.Rol;
 import com.rescateanimal.backend.security.JwtService;
 import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
+import com.rescateanimal.backend.service.AuditoriaService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.FotoService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
@@ -59,6 +60,8 @@ class FotoControllerTest {
     private TokenRevocadoService tokenRevocadoService;
     @MockitoBean
     private ControlIntentosService controlIntentosService;
+    @MockitoBean
+    private AuditoriaService auditoriaService;
 
     @BeforeEach
     void autenticarUsuario() {

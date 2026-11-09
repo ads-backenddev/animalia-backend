@@ -179,7 +179,9 @@ del mismo usuario la use: entonces es la foto de un animal y se queda.
 
 **La foto de una alerta moderada también deja de existir** (§11): al pasar a `ELIMINADA`, la alerta
 deja de apuntar a ella y se borra igual que una de perfil. Se conserva si otra publicación o un
-perfil usan la misma foto, porque eso no está moderado. Es la única foto de un animal que se borra.
+perfil usan la misma foto, porque eso no está moderado. Desde el bloque de cierre (informe ENS, C9)
+pasa lo mismo con la foto de un **avistamiento moderado**; son las únicas fotos de un animal que se
+borran.
 Vale para las alertas moderadas desde el bloque de los endpoints de alerta (§22): las que ya estaban
 `ELIMINADA` antes conservan la suya.
 
@@ -294,7 +296,7 @@ RF-03, RF-04, RF-14, RF-25.
 |---|---|---|---|---|---|---|
 | `POST` | `/api/alertas` | Publica una alerta de mascota perdida. Antes de guardar comprueba si ya existe una alerta similar (RF-25) | Autenticado | `CrearAlertaRequest`: `descripcion`, `fotoUrl?`, `especie`, `fechaAvistamiento`, `ubicacion{latitud,longitud}`, `radioBusqueda?` | `AlertaResponse` | `201`, `400`, `401`, `409` |
 | `GET` | `/api/alertas` | Listado paginado para navegar y buscar; el mapa en tiempo real sigue siendo `/mapa` y `/topic/mapa`. `estado`: `ACTIVA` por defecto o `ENCONTRADA`; `RETIRADA` y `ELIMINADA` no se listan (`400`). `especie` sin distinguir mayúsculas. Zona: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`), 50 km como máximo, igual que `/mapa`. Paginación `page`/`size` (100 como máximo), más recientes primero | Autenticado | — | Página de `AlertaResponse` | `200`, `400`, `401` |
-| `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`. **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
+| `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`: **enteros solo para el dueño, y cada uno para su autor**; para cualquier otro, también el administrador, sin autor y con la ubicación redondeada a unos 100 m (§5). **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
 | `PUT` | `/api/alertas/{id}` | Edita una alerta propia, **solo mientras esté `ACTIVA`**. Si cambian la especie o la ubicación vuelve a pasar RF-25, sin contarse a sí misma. Emite `ACTUALIZACION` por `/topic/mapa` | Propietario | `ActualizarAlertaRequest`: los mismos campos y reglas que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
 | `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
@@ -473,9 +475,28 @@ a los antiguos también hay que poder llegar. El orden lo fija el servidor; el q
 se aplica.
 
 Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
-`AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero, con los
-datos públicos de su autor. Los `ELIMINADO` por el administrador no salen, y una alerta retirada o
-moderada no enseña ninguno.
+`AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero. Los
+`ELIMINADO` por el administrador no salen, y una alerta retirada o moderada no enseña ninguno.
+
+**Enteros solo para el dueño de la alerta y para su autor** (informe ENS, C8). Un avistamiento dice
+dónde estuvo una persona y cuándo, y el detalle lo pide cualquier autenticado. Se decide avistamiento
+por avistamiento:
+
+| Quién pide el detalle | `ubicacion` | `autor` |
+|---|---|---|
+| El dueño de la alerta, de todos sus avistamientos | La exacta | Los datos públicos del autor (`id`, `nombre`, `fotoUrl`) |
+| Quien registró el avistamiento, solo del suyo | La exacta | Los suyos |
+| Cualquier otro, **también el administrador** | Redondeada a tres decimales: unos 111 m en latitud y unos 85 m en longitud a la latitud de la Península | `null` |
+
+La descripción, la foto del avistamiento y la fecha llegan igual a todos: son lo que sirve para ayudar
+a buscar al animal. Lo que se quita es lo que sirve para seguir a quien lo vio. El dueño lo necesita
+entero, porque con eso decide si es su animal y va a buscarlo; y en el feed y en los descartados, que
+solo son suyos, ya lo recibía. El autor recibe entero el suyo porque es su propio dato; los de otros
+testigos le llegan como a cualquiera. Si el dueño registra un avistamiento en su propia alerta, lo ve
+entero por las dos razones.
+
+**El administrador no es una excepción** (minimización): para moderar un avistamiento le basta su
+contenido —la descripción y la foto—, no dónde estaba exactamente quien lo vio.
 
 ---
 
@@ -610,13 +631,13 @@ esas filas son estas:
 | Editar, retirar o cerrar una alerta | La alerta (`FOR NO KEY UPDATE`) |
 | Moderar una alerta | La alerta (`FOR NO KEY UPDATE`) y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra |
 | Registrar un avistamiento | La alerta (`FOR SHARE`) y después la fila del cupo del autor en esa alerta y ese día (§5); el avistamiento es una fila nueva |
-| Moderar un avistamiento | Solo el avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`): ni la alerta ni su foto, que se conserva |
+| Moderar un avistamiento | El avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`), y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra (C9). Ni la alerta ni su foto |
 | Match de adopción | El contador diario del usuario |
 
 Nadie bloquea un avistamiento y pide después su alerta: la única espera de una alerta hacia un
-avistamiento es la del propio match, y la moderación del avistamiento no pide nada más. La fila de
-`FOTO` que borra la moderación de una alerta es lo último que esa operación toma, y el match no la
-toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
+avistamiento es la del propio match, y la moderación del avistamiento no pide nada más que la foto de
+ese avistamiento. La fila de `FOTO` que borra cada moderación —la de una alerta, la de un
+avistamiento— es lo último que esa operación toma, y el match no la toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
 fila del cupo de avistamientos solo la toma el registro, siempre después de la alerta. Sin dos
 bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
 `MatchService.deslizar`.
@@ -675,6 +696,12 @@ heredado de la zona de la máquina. Sin fijarlo, la cuota se reiniciaba a una ho
 entorno: en Railway, que va en UTC, a la 01:00 o a las 02:00 de la madrugada peninsular según la
 época del año, y en el portátil de desarrollo a medianoche. Con la zona fija, esas `00:00` son
 medianoche peninsular en todas partes.
+
+*Nota posterior (bloque de cierre).* Ahora se prueba: el instante sale de un `Clock` inyectable
+(`RelojConfig`, el del sistema en UTC), y las pruebas fijan las 22:59:59 y las 23:00 UTC de un día de
+invierno, y las 21:59:59 y las 22:00 UTC de uno de verano. En los dos segundos casos UTC sigue en el
+día anterior y la fecha del cupo ya es la del siguiente. Vale para los tres cupos: matches de
+adopción, fotos y avistamientos por alerta.
 
 Es una **simplificación consciente**, no una solución general. Vale para España peninsular, que es
 el alcance geográfico del proyecto, y **no es correcta para Canarias**: allí se va una hora por
@@ -1182,12 +1209,15 @@ Los tres tipos nuevos se añadieron al enum `TipoNotificacion` con su migración
 referencia va nula en las dos de cuenta porque el aviso es sobre la cuenta del propio destinatario, no
 sobre otra fila a la que apuntar.
 
-**El `motivo` no llega al usuario, y conviene saberlo.** Hoy acaba solo en el log del servidor, junto
-al id del administrador que decidió: `NOTIFICACION` no tiene ningún campo de texto —solo `tipo` y
-`referencia_id`—, así que el afectado recibe un `CUENTA_BLOQUEADA` sin explicación. Se exige
-igualmente en el body porque obliga a articular la decisión y porque el día que exista dónde
-guardarlo el contrato ya lo pide. Hacérselo llegar exige una columna de texto en `NOTIFICACION` o una
-tabla de auditoría de acciones del administrador, y ninguna de las dos está decidida.
+**El `motivo` no se guarda en ninguna parte, y conviene saberlo.** Hasta el bloque de cierre acababa
+en el log del servidor; como es texto libre del administrador y puede llevar nombres o cualquier otro
+dato personal, ya no se escribe (informe ENS, C6): el log dice qué administrador bloqueó o rechazó a
+quién y cuántos caracteres tenía el motivo, no su texto. `NOTIFICACION` no tiene ningún campo de
+texto —solo `tipo` y `referencia_id`—, así que el afectado recibe un `CUENTA_BLOQUEADA` sin
+explicación. Se exige igualmente en el body porque obliga a articular la decisión y porque el día que
+exista dónde guardarlo el contrato ya lo pide. Guardarlo exige una tabla de auditoría de acciones del
+administrador con acceso controlado, y hacérselo llegar al afectado, una columna de texto en
+`NOTIFICACION`; ninguna de las dos está decidida.
 
 Si la notificación falla, **la decisión se mantiene**: se crea en su propia transacción
 (`REQUIRES_NEW`) y el error se registra sin propagarse. La decisión del administrador vale por sí
@@ -1219,6 +1249,12 @@ respuestas, avisos y chats anteriores— dejaría la sanción a medias. Se conse
 publicación o un perfil usan la misma foto —eso no está moderado—, y una foto externa anterior a
 `/api/fotos` no se puede borrar porque el backend no la aloja. Los avistamientos de la alerta y sus
 fotos no se tocan.
+
+**Lo mismo con la foto de un avistamiento moderado** (bloque de cierre, informe ENS C9). Antes el
+avistamiento pasaba a `ELIMINADO` y su foto seguía servida en `/fotos/…` para quien tuviera el enlace.
+Ahora deja de apuntar a ella y la foto se borra con las mismas reglas: se conserva si la usa otra cosa
+—la alerta, otro avistamiento, un animal o un perfil—, y una externa no se toca. La alerta y su foto
+no cambian.
 
 | `tipo` | Tabla | Estado terminal |
 |---|---|---|
@@ -1593,7 +1629,7 @@ bloque 5.
 | `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
 | `MATCH_REGISTRO` no tiene índice por `(tipo_publicacion, interesado)`. Las consultas del panel de RF-10 filtran por ahí, y el único índice existente empieza por `usuario_id`, así que no las sirve. Con los volúmenes del proyecto no se nota | Cuando el panel tenga volumen que lo justifique |
-| El `motivo` de un bloqueo o un rechazo no llega al usuario: solo queda en el log, porque `NOTIFICACION` no tiene campo de texto (§11). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
+| El `motivo` de un bloqueo o un rechazo no llega al usuario ni se guarda: `NOTIFICACION` no tiene campo de texto (§11), y desde el bloque de cierre tampoco se escribe en el log, por ser texto libre que puede llevar datos personales (C6). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
 | No hay endpoint de alta de administradores, ni debe haberlo: la cuenta `ADMIN` se crea desde la base de datos, como la cuenta raíz de cualquier panel | Fuera de alcance |
 
 ---
@@ -1696,10 +1732,47 @@ replicada el límite efectivo se multiplicaría por el número de réplicas. Per
 haría escribir en cada intento fallido, que es justo lo que un ataque provoca en masa; lo razonable
 llegado el caso sería Redis, y eso es una dependencia de infraestructura que este proyecto no tiene.
 
-**La dirección se toma de `getRemoteAddr()`, no de `X-Forwarded-For`.** Esa cabecera la pone el
+**La dirección se toma de `getRemoteAddr()`, no de `X-Forwarded-For`.** Esa cabecera la empieza el
 cliente y se falsifica sola: fiarse de ella convertiría el límite por IP en un adorno, porque bastaría
-con mandar una distinta en cada intento. Si esto se despliega detrás de un proxy inverso habrá que
-leerla, pero **solo** tras configurar la lista de proxies de confianza.
+con mandar una distinta en cada intento.
+
+*Nota posterior (bloque de cierre, informe ENS C1).* En producción la aplicación está detrás del
+proxy de Railway, y lo que dice este apartado dejó de ser cierto sin que nadie lo viera: el perfil
+`prod` tenía `server.forward-headers-strategy=framework`, y con ella `getRemoteAddr()` era el
+**primer** valor de `X-Forwarded-For`, el que escribe el cliente. Se comprobó en local: 35 logins
+fallidos con una cabecera distinta en cada uno daban los 35 un `401`, ninguno un `429`. Ahora es
+`native`: el `RemoteIpValve` de Tomcat recorre la cabecera de derecha a izquierda, salta los proxies
+de confianza —los rangos privados, por defecto— y se queda con la primera dirección que no lo es, la
+que añadió el proxy. Lo inventado a la izquierda no cuenta, y el `429` vuelve a llegar en el intento
+31. Queda una comprobación en Railway: que su proxy conecte desde un rango privado. Si no, Tomcat no
+leería la cabecera y todos los clientes compartirían la dirección del proxy; la lista se fija entonces
+con `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`.
+
+**Registro de auditoría de la autenticación** (bloque de cierre, informe ENS C2). Antes, ni el login
+—correcto o fallido— ni el logout ni el restablecimiento de la contraseña dejaban rastro, y ninguna
+línea decía desde dónde llegaba la petición. Ahora cada evento escribe una línea en su propio logger,
+`com.rescateanimal.backend.auditoria`, con formato clave=valor:
+
+```
+evento=LOGIN resultado=CREDENCIALES_INVALIDAS usuario=42 ip=203.0.113.7
+```
+
+| `evento` | Cuándo | `resultado` posibles |
+|---|---|---|
+| `REGISTRO` | Alta de ciudadano o de protectora | `OK`, `EMAIL_YA_REGISTRADO` |
+| `LOGIN` | Cada intento | `OK`, `CREDENCIALES_INVALIDAS`, `CUENTA_BLOQUEADA`, `PROTECTORA_PENDIENTE`, `PROTECTORA_RECHAZADA` |
+| `LOGOUT` | Cierre de sesión | `OK`, `TOKEN_INVALIDO` |
+| `RECUPERACION_SOLICITADA` | `POST /recuperar-password` | `OK`, `SIN_CUENTA` |
+| `PASSWORD_RESTABLECIDA` | `POST /restablecer-password` | `OK`, `TOKEN_INVALIDO`, `TOKEN_YA_USADO`, `CUENTA_BLOQUEADA` |
+| `LIMITE_INTENTOS` | El filtro corta con `429` | `BLOQUEADO_POR_IP`, `BLOQUEADO_POR_CUENTA` |
+
+El cuándo es la marca de tiempo de la línea; los éxitos van en `INFO` y los rechazos en `WARN`, y el
+perfil `prod` escribe los dos. `usuario` es el id de la cuenta, o `-` si no la hay; **nunca se
+escriben el email, la contraseña ni el token**: el email que se probó en un login fallido es un dato
+personal, y de alguien que puede no ser quien lo tecleó. `ip` es la que calcula Tomcat (ver la nota
+anterior), así que una cabecera inventada no la cambia. La respuesta al cliente no cambia en nada:
+`recuperar-password` sigue respondiendo `204` exista o no la cuenta, y lo que lo distingue queda solo
+en el log.
 
 ### Fuera de alcance, pendientes
 
@@ -2603,8 +2676,10 @@ Lo que cambia con ello:
 | `ALERTA_CERCANA` y los avisos del administrador se creaban antes del commit | Todos los avisos salvo `NUEVO_MATCH` se crean tras el commit (§12) |
 
 El match de adopción no cambia, salvo que sigue siendo el único que consume cupo. El detalle de una
-alerta (`GET /api/alertas/{id}`) sigue enseñando a cualquier autenticado sus avistamientos `VISIBLE`
-con los datos públicos de su autor: la restricción es sobre el match y el chat, no sobre verlos.
+alerta (`GET /api/alertas/{id}`) sigue enseñando a cualquier autenticado sus avistamientos `VISIBLE`:
+la restricción es sobre el match y el chat, no sobre verlos. *Nota posterior (bloque de cierre,
+informe ENS C8):* a quien no es el dueño de la alerta le llegan sin autor y con la ubicación
+redondeada a unos 100 m, salvo el avistamiento que registró él mismo (§5).
 
 **Datos anteriores.** Los matches y chats que otros usuarios hicieron sobre avistamientos antes de
 este cambio se conservan: no se migra nada, y solo existían en la base de datos de desarrollo. El aviso
@@ -2688,3 +2763,180 @@ la vez abran dos chats.
 | `ALERTA_CERCANA` no está acotado: carga enteras todas las cuentas activas del área del autor, inserta los avisos uno a uno y, aunque va tras el commit, corre en el hilo de la petición, que no responde hasta terminar. El área se compara sin distinguir mayúsculas con `upper()`, y no hay índice que lo sostenga | Con los usuarios previstos, un área tiene pocas cuentas. Si llegara a miles, la salida sería un único `INSERT … SELECT`, un índice sobre `lower(area_geografica)` y crear los avisos fuera del hilo de la petición |
 | Un aviso tras el commit puede perderse si el proceso cae antes de escribirlo o si la escritura falla; solo queda el error en el log, sin reintento (§12) | Los avisos son una ayuda: el feed y el detalle de la alerta dicen lo mismo aunque el aviso falte. No perderlo exigiría una tabla de salida |
 | `PATCH /api/notificaciones/{id}/leida` distingue `403` de `404`, así que recorriendo ids se puede saber cuáles existen | Es lo que fija el contrato (§12), y no se ve nada del contenido ajeno |
+
+---
+
+## 23. Bloque de cierre del backend: correo y despliegue
+
+El último bloque antes de la app Android. Cambia el proveedor de correo, cierra los huecos de código
+del informe de seguridad en el marco del ENS (C1, C2, C6, C8, C9, D4 y C16) y deja fijado qué arranca
+en producción. Lo que afecta a cada endpoint está en su sección; aquí, el correo, el despliegue, la
+lista de variables de producción, la lista para el despliegue y lo que queda abierto.
+
+### Correo: independiente del proveedor
+
+El correo sale por la interfaz `EmailSender`, y el perfil decide la implementación:
+
+| Perfil | Implementación | Por dónde sale |
+|---|---|---|
+| Todo lo que no es `prod` (local, test, sin perfil) | `SmtpEmailSender` | SMTP con el `JavaMailSender` de Spring, contra Mailpit en desarrollo (`MAIL_HOST`, `MAIL_PORT`) |
+| `prod` | `ResendEmailSender` | La API HTTP de Resend: `POST https://api.resend.com/emails` con `Authorization: Bearer <RESEND_API_KEY>` y un JSON con `from`, `to`, `subject`, `html` y `text` |
+
+`EmailService` compone el correo —qué dice y a quién va— y no sabe por dónde sale. Hoy solo hay uno, el
+enlace de recuperación de contraseña (RF-17), en texto plano y en HTML, con el nombre del usuario
+escapado en el HTML. **No existe ningún endpoint de verificación de email ni de reenvío de la
+verificación**: el registro no envía correo.
+
+**Por HTTPS y no por SMTP en producción**: la plataforma de despliegue no garantiza la salida por los
+puertos de correo, y la API devuelve un código de estado por envío. **Esperas acotadas**: 5 s para
+conectar y 10 s para la respuesta; el envío corre en el ejecutor en segundo plano (`@Async`), y sin
+techo un proveedor colgado iría ocupando sus hilos.
+
+**Un fallo de envío no es un error para nadie.** Si Resend responde `4xx` —también el `429` de su
+límite de envíos— o `5xx`, o no responde a tiempo, el envío devuelve `false` y deja en el log el tipo de
+correo y el código de estado (o «tiempo de espera agotado», «error de conexión»). **Nunca la dirección
+del destinatario, la clave ni el cuerpo de la respuesta de error**, que puede repetir la dirección. La
+operación que lo provocó no se deshace, y `recuperar-password` sigue respondiendo `204` igual.
+
+**Sin sus dos variables, producción no arranca.** `ResendEmailSender` comprueba al crearse que
+`RESEND_API_KEY` y `MAIL_FROM` tienen valor —y que `MAIL_FROM` es una dirección—, y si no, la
+aplicación se niega a arrancar con un mensaje que nombra la variable y **nunca su valor**. Así no
+puede quedar en producción una aplicación que no envía ningún correo de recuperación sin que nadie
+lo sepa.
+
+**El proveedor.** Resend, en su región de la UE (`eu-west-1`). La clave de la API tiene permiso solo de
+envío y se guarda en una variable del servicio en Railway, nunca en el repositorio. El remitente es de
+un dominio propio con SPF, DKIM y DMARC, **todavía en configuración**: hasta que el dominio esté
+verificado en Resend, el envío desde `MAIL_FROM` se rechazará.
+
+Las pruebas de `ResendEmailSender` van contra el servidor HTTP que trae el propio JDK, sin ninguna
+dependencia nueva: comprueban la cabecera, el cuerpo, cada clase de fallo y que ni la clave ni la
+dirección llegan al log. Ninguna prueba llama a Resend de verdad.
+
+### Despliegue
+
+**La imagen arranca con el perfil `prod`.** El `Dockerfile` fija `ENV SPRING_PROFILES_ACTIVE=prod`: sin
+él, la imagen arrancaría con los valores de desarrollo de `application.properties`. `PerfilProdTest`
+carga la configuración de producción como al arrancar, sin base de datos ni red, y comprueba:
+
+| Qué | Valor en `prod` | Hueco del informe ENS |
+|---|---|---|
+| Detalle de los errores de PostgreSQL en los mensajes del driver | `logServerErrorDetail=false` | C6 |
+| TLS hasta PostgreSQL | `sslmode=require` (`DB_SSLMODE`): cifrado o no hay conexión | D4 |
+| Cabeceras del proxy | `server.forward-headers-strategy=native`: la IP del cliente no se falsifica con `X-Forwarded-For` | C1 |
+| Correo | `ResendEmailSender`; sin `RESEND_API_KEY` o sin `MAIL_FROM` no arranca | — |
+
+**Dos comprobaciones quedan para Railway**, la de C1 y la de D4, porque dependen de la plataforma y no
+se pueden probar en local. Están, con el resto de lo que hay que hacer al desplegar, en la *Lista para
+el despliegue*, más abajo.
+
+### Variables de entorno de producción
+
+Solo nombres. **Obligatoria** quiere decir que, si falta, la aplicación no arranca.
+
+| Variable | En `prod` | Para qué |
+|---|---|---|
+| `DB_URL` | Obligatoria | URL JDBC de PostgreSQL |
+| `DB_USER` | Obligatoria | Usuario de la base de datos |
+| `DB_PASSWORD` | Obligatoria | Contraseña de la base de datos |
+| `DB_SSLMODE` | Opcional (`require`) | TLS hasta PostgreSQL (D4) |
+| `DB_POOL_MAX` | Opcional | Conexiones del pool; siempre por encima de `TOMCAT_HILOS_MAX` (§22) |
+| `TOMCAT_HILOS_MAX` | Opcional | Peticiones a la vez |
+| `JPA_LOCK_TIMEOUT_MS` | Opcional | Espera máxima de un bloqueo de fila |
+| `JWT_SECRET` | Obligatoria | Secreto de firma del JWT |
+| `JWT_EXPIRATION` | Opcional | Validez del token de acceso |
+| `JWT_RESET_EXPIRATION` | Opcional | Validez del enlace de recuperación |
+| `RESEND_API_KEY` | Obligatoria | Clave de la API de Resend, solo de envío |
+| `MAIL_FROM` | Obligatoria | Remitente, de un dominio verificado en Resend |
+| `APP_URL_RESTABLECER` | Obligatoria | URL `https` de la pantalla de restablecer la contraseña, la del enlace del correo |
+| `APP_CORS_ORIGENES` | Obligatoria | Orígenes autorizados del cliente |
+| `FOTOS_DIR` | Obligatoria | Punto de montaje del volumen de fotos |
+| `APP_FOTOS_URL_PUBLICA` | Obligatoria | Base `https` de las URLs de las fotos |
+| `FOTOS_LIMITE_DIARIO`, `FOTOS_LIMPIEZA_CRON` | Opcionales | Cupo diario de subidas y hora de la limpieza |
+| `MATCHES_LIMITE_DIARIO`, `AVISTAMIENTOS_LIMITE_DIARIO_POR_ALERTA` | Opcionales | Cupos diarios de matches de adopción y de avistamientos por alerta |
+| `AVISTAMIENTOS_TAMANYO_FEED`, `ADOPCION_TAMANYO_FEED` | Opcionales | Tamaño de las tandas de los feeds |
+| `ALERTAS_RADIO_DUPLICADOS`, `ALERTAS_VENTANA_DUPLICADOS`, `ALERTAS_RADIO_MAPA_MAXIMO` | Opcionales | Detección de duplicados (RF-25) y radio máximo del mapa |
+| `AUTH_MAX_INTENTOS_CUENTA`, `AUTH_MAX_INTENTOS_IP`, `AUTH_VENTANA_INTENTOS_MINUTOS` | Opcionales | Límite de intentos de autenticación |
+| `SERVER_PORT` | Opcional | Puerto de la API |
+| `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` | Opcional | Proxies de confianza, si el de Railway no está en los rangos privados (C1) |
+| `SPRING_PROFILES_ACTIVE` | La fija la imagen | `prod` |
+
+**Ya no se usan en producción**, y se quitan de Railway: `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
+`MAIL_PASSWORD` (el SMTP salió del perfil `prod`) y `MAIL_REMITENTE` (sustituida por `MAIL_FROM`).
+
+### Lista para el despliegue
+
+Lo que hay que hacer en Railway al desplegar este bloque, en este orden. Los pasos 3 y 4 son las dos
+comprobaciones que no se pueden hacer en local.
+
+1. **Crear** en el servicio de la API las dos variables del correo:
+
+   | Variable | Valor |
+   |---|---|
+   | `RESEND_API_KEY` | La clave de la API de Resend, con permiso solo de envío |
+   | `MAIL_FROM` | El remitente, de un dominio verificado en Resend |
+
+   Sin cualquiera de las dos, la aplicación no arranca (*Correo*, arriba).
+
+2. **Borrar** las cinco que el perfil `prod` ya no usa: `MAIL_REMITENTE`, `MAIL_HOST`, `MAIL_PORT`,
+   `MAIL_USER` y `MAIL_PASSWORD`. No impiden arrancar, pero `MAIL_PASSWORD` es un secreto que ya no sirve
+   para nada y que habría que seguir custodiando (D5 del informe ENS).
+
+3. **Comprobar C1 con el registro de auditoría de C2.** Ya desplegado, un login fallido —con un email
+   que no exista, que no crea nada— desde **dos clientes con IP públicas distintas**, por ejemplo la red
+   de casa y los datos del móvil. En el log de Railway, filtrando por el logger
+   `com.rescateanimal.backend.auditoria`, las dos líneas
+   `evento=LOGIN resultado=CREDENCIALES_INVALIDAS usuario=- ip=…` tienen que llevar **dos `ip=`
+   distintas**, y cada una la IP pública de su cliente.
+   - Si llevan la misma —una dirección privada: la del proxy—, el proxy de Railway no conecta desde los
+     rangos que Tomcat da por proxy de confianza (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7…).
+     Tomcat no lee entonces `X-Forwarded-For`, y todos los clientes comparten un solo contador del
+     límite por IP: treinta peticiones de login, registro o recuperación en quince minutos, sumando las
+     de todos, dejan fuera a todo el mundo.
+     Se arregla dando la dirección del proxy en `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` (una expresión
+     regular) y se repite la comprobación.
+   - Un login más, desde cualquiera de los dos, con la cabecera `X-Forwarded-For: 203.0.113.99` puesta
+     a mano: la línea tiene que llevar la IP real del cliente, no `203.0.113.99`. Si lleva la inventada,
+     el límite por IP se esquiva cambiando la cabecera en cada intento, que es el hueco original de C1.
+
+4. **Comprobar D4.** Que la aplicación arranca con `DB_SSLMODE` sin fijar (`require`) y
+   `/actuator/health` responde `UP`: la conexión con PostgreSQL va cifrada. Si no arranca porque el
+   PostgreSQL de Railway no admite TLS (el driver lo dice: el servidor no admite SSL), `DB_SSLMODE=disable`
+   solo si se cumplen las dos condiciones:
+   - `DB_URL` apunta a la **red privada** de Railway (`*.railway.internal`), nunca al proxy público.
+     Por el proxy público, la conexión no se abre sin TLS.
+   - Queda **escrita la justificación** —qué se comprobó, cuándo, y por qué en ese caso basta la red
+     privada— en esta sección y en D4 del informe ENS. Sin ella, `disable` es justo lo que D4 cerró.
+
+### Riesgos residuales y limitaciones conocidas
+
+Lo que este bloque deja abierto a sabiendas. También consta en el informe ENS.
+
+**C6, riesgo residual: el motivo de un bloqueo o de un rechazo no se guarda.** Para que el texto libre
+del administrador —que puede llevar nombres o cualquier otro dato personal— dejara de llegar al log, se
+dejó de escribir; y `NOTIFICACION` no guarda texto, por diseño (§11). Queda quién decidió, sobre quién,
+cuándo y cuántos caracteres tenía el motivo, pero no por qué: ante la reclamación de un usuario
+bloqueado o de una protectora rechazada, la decisión no se puede justificar con lo que hay guardado.
+**Pendiente de una tabla de auditoría de moderación**, con acceso solo para los administradores y un
+plazo de conservación fijado.
+
+**Limitación conocida: el registro no verifica que el email pertenezca al usuario.** No se envía correo
+de confirmación ni hay endpoint de verificación (*Correo*, arriba). Cualquiera puede abrir una cuenta con
+el email de otra persona: el dueño real de la dirección recibe `409 EMAIL_DUPLICADO` si intenta
+registrarse, y la plataforma da por buena una identidad que nadie ha comprobado. Lo atenúa que el enlace
+de recuperación va siempre a ese email, así que quien controla el buzón puede quedarse con la cuenta —y
+al restablecer la contraseña deja sin efecto todos los tokens emitidos antes (§17)—; que una protectora
+no entra hasta que el administrador la verifica; y que el registro queda en el registro de auditoría con
+su IP y pasa por el límite de intentos. Cerrarlo exige un correo de confirmación con un token de un solo
+uso y la cuenta pendiente hasta confirmarlo.
+
+### Panel web de administración
+
+**Planificado, no construido.** El stack del proyecto preveía un panel web con Thymeleaf y Bootstrap 5
+para protectoras y administradores; no tiene ni una plantilla. Lo que sí existe son sus endpoints REST,
+`/api/protectoras/panel` (§9) y `/api/admin` (§11), que el panel —o la app— consumirán.
+
+**La dependencia `spring-boot-starter-thymeleaf` se quitó del `pom.xml`**, porque nada la usaba: no
+había ni una plantilla, y el correo de recuperación tampoco la necesita, porque compone su HTML con un
+bloque de texto y escapa el nombre del usuario con `HtmlUtils` de Spring (*Correo*, arriba). Volverá,
+con su justificación, el día que se construya el panel.

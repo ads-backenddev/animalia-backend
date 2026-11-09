@@ -20,6 +20,7 @@ import com.rescateanimal.backend.security.UserDetailsServiceImpl;
 import com.rescateanimal.backend.security.UsuarioPrincipal;
 import com.rescateanimal.backend.service.AlertaService;
 import com.rescateanimal.backend.service.AvistamientoService;
+import com.rescateanimal.backend.service.AuditoriaService;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import com.rescateanimal.backend.service.TokenRevocadoService;
 import org.junit.jupiter.api.AfterEach;
@@ -89,6 +90,8 @@ class AlertaControllerTest {
     private TokenRevocadoService tokenRevocadoService;
     @MockitoBean
     private ControlIntentosService controlIntentosService;
+    @MockitoBean
+    private AuditoriaService auditoriaService;
 
     @BeforeEach
     void autenticarUsuario() {
@@ -306,7 +309,7 @@ class AlertaControllerTest {
         @Test
         @DisplayName("GET /{id} -> 200 con los avistamientos")
         void detalle() throws Exception {
-            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+            when(alertaService.detalle(42L, ID_USUARIO)).thenReturn(AlertaDetalleResponse.builder()
                     .id(42L).especie("perro").estado(EstadoAlerta.ACTIVA)
                     .autor(AutorResponse.builder().id(ID_USUARIO).nombre("Ana").build())
                     .avistamientos(List.of(AvistamientoResponse.builder().id(70L).alertaId(42L)
@@ -322,7 +325,7 @@ class AlertaControllerTest {
         @Test
         @DisplayName("GET /{id} de una alerta retirada -> 200 con su estado, no 404")
         void detalleDeRetirada() throws Exception {
-            when(alertaService.detalle(42L)).thenReturn(AlertaDetalleResponse.builder()
+            when(alertaService.detalle(42L, ID_USUARIO)).thenReturn(AlertaDetalleResponse.builder()
                     .id(42L).especie("perro").estado(EstadoAlerta.ELIMINADA).avistamientos(List.of()).build());
 
             mockMvc.perform(get("/api/alertas/42"))
@@ -337,7 +340,7 @@ class AlertaControllerTest {
         @Test
         @DisplayName("GET /{id} de un id que nunca existió -> 404 NO_ENCONTRADO")
         void detalleInexistente() throws Exception {
-            when(alertaService.detalle(999L)).thenThrow(new ResourceNotFoundException("La alerta no existe"));
+            when(alertaService.detalle(999L, ID_USUARIO)).thenThrow(new ResourceNotFoundException("La alerta no existe"));
 
             mockMvc.perform(get("/api/alertas/999"))
                     .andExpect(status().isNotFound())

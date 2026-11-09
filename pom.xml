@@ -52,11 +52,6 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-websocket</artifactId>
 		</dependency>
-		<!-- Panel web de protectora/administrador (RF-10, RF-11) -->
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-thymeleaf</artifactId>
-		</dependency>
 		<!-- Envío del enlace de recuperación de contraseña (RF-17) -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

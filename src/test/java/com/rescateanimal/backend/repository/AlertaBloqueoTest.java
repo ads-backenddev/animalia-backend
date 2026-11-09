@@ -411,6 +411,9 @@ class AlertaBloqueoTest {
         assertThat(jdbc.queryForObject("SELECT estado FROM avistamiento WHERE id = ?", String.class, avistamiento))
                 .isEqualTo("ELIMINADO");
         assertThat(deslizamientos()).as("el match confirmó antes que la moderación").isEqualTo(1);
+        // La moderación borra además la foto del avistamiento, lo último que toma (C9).
+        assertThat(fotoRepository.existsById(almacenFotos.nombreDe(fotoDelTestigo).orElseThrow()))
+                .as("la foto del avistamiento moderado").isFalse();
     }
 
     @Test

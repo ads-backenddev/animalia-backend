@@ -1,6 +1,9 @@
 package com.rescateanimal.backend.security;
 
 import com.rescateanimal.backend.dto.response.ErrorResponse;
+import com.rescateanimal.backend.service.AuditoriaService;
+import com.rescateanimal.backend.service.AuditoriaService.Evento;
+import com.rescateanimal.backend.service.AuditoriaService.Resultado;
 import com.rescateanimal.backend.service.ControlIntentosService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -57,12 +60,19 @@ import java.time.Instant;
  * ventana no se renueva mientras dure el bloqueo (ver ControlIntentosService), de
  * modo que el castigo tiene techo y no depende de cuánto insista el atacante.
  *
- * LA IP SE TOMA DE getRemoteAddr() Y NO DE X-Forwarded-For, a propósito: esa
- * cabecera la pone el cliente y se falsifica sola, así que fiarse de ella
- * convierte el límite por IP en un adorno —basta con mandar una distinta en cada
- * intento—. Si algún día esto se despliega detrás de un proxy inverso, habrá que
- * leerla, pero solo tras configurar la lista de proxies de confianza que permite
- * distinguir el salto real del inventado.
+ * LA IP ES LA DE getRemoteAddr(), y lo que valga depende del entorno. En
+ * local es la del otro extremo de la conexión. En producción, detrás del proxy
+ * de Railway, la calcula el RemoteIpValve de Tomcat (forward-headers-strategy
+ * native, application-prod.properties): recorre X-Forwarded-For de derecha a
+ * izquierda, salta solo los proxies de confianza y se queda con la primera
+ * dirección que no lo es, la que añadió el proxy. Lo que el cliente escriba a
+ * la izquierda de la cabecera no cuenta.
+ *
+ * NO SE LEE X-Forwarded-For AQUÍ, y es a propósito: esa cabecera la empieza el
+ * cliente y se falsifica sola. Con la estrategia "framework" de Spring,
+ * getRemoteAddr() era su primer valor, y mandar uno distinto en cada intento
+ * esquivaba el límite por IP (informe ENS, C1; AutenticacionDetrasDeProxyTest
+ * lo comprueba).
  */
 @Slf4j
 @Component
@@ -101,6 +111,7 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
     private static final int MAXIMO_CUERPO_BYTES = 16 * 1024;
 
     private final ControlIntentosService controlIntentos;
+    private final AuditoriaService auditoria;
 
     /**
      * El ObjectMapper de Jackson 3 (tools.jackson), que es el que Spring Boot 4
@@ -130,12 +141,14 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
      */
     public LimiteIntentosAutenticacionFilter(
             ControlIntentosService controlIntentos,
+            AuditoriaService auditoria,
             ObjectMapper objectMapper,
             @Value("${app.auth.max-intentos-cuenta}") int maximoPorCuenta,
             @Value("${app.auth.max-intentos-ip}") int maximoPorIp,
             @Value("${app.auth.ventana-intentos-minutos}") int ventanaMinutos) {
 
         this.controlIntentos = controlIntentos;
+        this.auditoria = auditoria;
         this.objectMapper = objectMapper;
         this.maximoPorCuenta = maximoPorCuenta;
         this.maximoPorIp = maximoPorIp;
@@ -169,6 +182,7 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
         if (controlIntentos.registrarYComprobar(clavePorIp, maximoPorIp, ventana)) {
             log.warn("Demasiados intentos de autenticación desde una misma dirección en {}",
                     request.getRequestURI());
+            auditoria.registrar(Evento.LIMITE_INTENTOS, Resultado.BLOQUEADO_POR_IP, null);
             rechazar(response, clavePorIp,
                     "Demasiados intentos desde esta conexión. Inténtalo de nuevo más tarde",
                     request.getRequestURI());
@@ -201,6 +215,7 @@ public class LimiteIntentosAutenticacionFilter extends OncePerRequestFilter {
             // No se registra el email: es dato personal (RNF-10).
             log.warn("Demasiados intentos de autenticación contra una misma cuenta en {}",
                     request.getRequestURI());
+            auditoria.registrar(Evento.LIMITE_INTENTOS, Resultado.BLOQUEADO_POR_CUENTA, null);
             rechazar(response, clavePorCuenta,
                     "Demasiados intentos con esta cuenta. Inténtalo de nuevo en unos minutos",
                     request.getRequestURI());
