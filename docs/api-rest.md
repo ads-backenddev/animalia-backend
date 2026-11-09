@@ -294,7 +294,7 @@ RF-03, RF-04, RF-14, RF-25.
 |---|---|---|---|---|---|---|
 | `POST` | `/api/alertas` | Publica una alerta de mascota perdida. Antes de guardar comprueba si ya existe una alerta similar (RF-25) | Autenticado | `CrearAlertaRequest`: `descripcion`, `fotoUrl?`, `especie`, `fechaAvistamiento`, `ubicacion{latitud,longitud}`, `radioBusqueda?` | `AlertaResponse` | `201`, `400`, `401`, `409` |
 | `GET` | `/api/alertas` | Listado paginado para navegar y buscar; el mapa en tiempo real sigue siendo `/mapa` y `/topic/mapa`. `estado`: `ACTIVA` por defecto o `ENCONTRADA`; `RETIRADA` y `ELIMINADA` no se listan (`400`). `especie` sin distinguir mayúsculas. Zona: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`), 50 km como máximo, igual que `/mapa`. Paginación `page`/`size` (100 como máximo), más recientes primero | Autenticado | — | Página de `AlertaResponse` | `200`, `400`, `401` |
-| `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`. **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
+| `GET` | `/api/alertas/{id}` | Detalle con sus avistamientos `VISIBLE`: **enteros solo para el dueño**; para cualquier otro, sin autor y con la ubicación redondeada a unos 100 m (§5). **`200` para cualquier alerta que haya existido**, en el estado que esté; `404` solo para un id que nunca existió. Una `RETIRADA` o `ELIMINADA` llega reducida (ver *Estados de una alerta*) | Autenticado | — | `AlertaDetalleResponse` | `200`, `401`, `404` |
 | `PUT` | `/api/alertas/{id}` | Edita una alerta propia, **solo mientras esté `ACTIVA`**. Si cambian la especie o la ubicación vuelve a pasar RF-25, sin contarse a sí misma. Emite `ACTUALIZACION` por `/topic/mapa` | Propietario | `ActualizarAlertaRequest`: los mismos campos y reglas que la creación | `AlertaResponse` | `200`, `400`, `401`, `403`, `404`, `409` |
 | `DELETE` | `/api/alertas/{id}` | La retira su dueño: pasa a `RETIRADA`, no se borra. Si estaba en el mapa emite `CIERRE`. Idempotente; sobre una `ELIMINADA` responde igual sin cambiarla | Propietario | — | — | `204`, `401`, `403`, `404`, `409` |
 | `GET` | `/api/alertas/mapa` | Alertas `ACTIVA` con ubicación, para el mapa interactivo en tiempo real. Filtro por área: `lat`, `lng`, `radio` (metros) — **los tres o ninguno**, números finitos (`NaN` e infinito son `400`); `radio` admite 50 km como máximo. Sin filtro devuelve todas las activas. Debe soportar 100 usuarios simultáneos (RNF-02) | Autenticado | — | Lista de `AlertaMapaResponse`: `id`, `especie`, `fotoUrl`, `ubicacion`, `fechaAvistamiento`, `estado` | `200`, `400`, `401` |
@@ -473,9 +473,21 @@ a los antiguos también hay que poder llegar. El orden lo fija el servidor; el q
 se aplica.
 
 Para consultar los avistamientos de una alerta concreta no hay endpoint propio: van incluidos en
-`AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero, con los
-datos públicos de su autor. Los `ELIMINADO` por el administrador no salen, y una alerta retirada o
-moderada no enseña ninguno.
+`AlertaDetalleResponse` de `GET /api/alertas/{id}` (§4): los `VISIBLE`, más recientes primero. Los
+`ELIMINADO` por el administrador no salen, y una alerta retirada o moderada no enseña ninguno.
+
+**Enteros solo para el dueño de la alerta** (informe ENS, C8). Un avistamiento dice dónde estuvo una
+persona y cuándo, y el detalle lo pide cualquier autenticado. Así que:
+
+| Quién pide el detalle | `ubicacion` | `autor` |
+|---|---|---|
+| El dueño de la alerta | La exacta | Los datos públicos del autor (`id`, `nombre`, `fotoUrl`) |
+| Cualquier otro, también quien registró el avistamiento | Redondeada a tres decimales: unos 111 m en latitud y unos 85 m en longitud a la latitud de la Península | `null` |
+
+La descripción, la foto del avistamiento y la fecha llegan igual a todos: son lo que sirve para ayudar
+a buscar al animal. Lo que se quita es lo que sirve para seguir a quien lo vio. El dueño lo necesita
+entero, porque con eso decide si es su animal y va a buscarlo; y en el feed y en los descartados, que
+solo son suyos, ya lo recibía.
 
 ---
 
@@ -2603,8 +2615,10 @@ Lo que cambia con ello:
 | `ALERTA_CERCANA` y los avisos del administrador se creaban antes del commit | Todos los avisos salvo `NUEVO_MATCH` se crean tras el commit (§12) |
 
 El match de adopción no cambia, salvo que sigue siendo el único que consume cupo. El detalle de una
-alerta (`GET /api/alertas/{id}`) sigue enseñando a cualquier autenticado sus avistamientos `VISIBLE`
-con los datos públicos de su autor: la restricción es sobre el match y el chat, no sobre verlos.
+alerta (`GET /api/alertas/{id}`) sigue enseñando a cualquier autenticado sus avistamientos `VISIBLE`:
+la restricción es sobre el match y el chat, no sobre verlos. *Nota posterior (bloque de cierre,
+informe ENS C8):* a quien no es el dueño de la alerta le llegan sin autor y con la ubicación
+redondeada a unos 100 m (§5).
 
 **Datos anteriores.** Los matches y chats que otros usuarios hicieron sobre avistamientos antes de
 este cambio se conservan: no se migra nada, y solo existían en la base de datos de desarrollo. El aviso

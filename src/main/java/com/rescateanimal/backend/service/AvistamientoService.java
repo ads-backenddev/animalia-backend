@@ -33,6 +33,8 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.HashMap;
@@ -55,6 +57,9 @@ public class AvistamientoService {
 
     /** Tope de tamaño de página de los descartados, el mismo que el del resto de listados. */
     static final int MAXIMO_POR_PAGINA = 100;
+
+    /** Decimales de la ubicación de un avistamiento para quien no es el dueño de la alerta (C8). */
+    static final int DECIMALES_REDONDEO = 3;
 
     private final AvistamientoRepository avistamientoRepository;
     private final AlertaRepository alertaRepository;
@@ -302,13 +307,56 @@ public class AvistamientoService {
      * Los avistamientos VISIBLE de una alerta, para su detalle. Los ELIMINADO no
      * salen: los retiró el administrador por incumplir las normas, y el detalle
      * los volvería a publicar.
+     *
+     * ENTEROS SOLO PARA EL DUEÑO DE LA ALERTA (informe ENS, C8). Un avistamiento
+     * dice dónde estuvo una persona y cuándo, y el detalle lo ve cualquier
+     * autenticado. Para él la ubicación va redondeada a unos 100 m
+     * (ver redondeada) y sin autor: basta para saber por qué zona se ha visto al
+     * animal, que es lo que sirve a quien ayuda a buscarlo, y no para seguir a
+     * quien lo vio. El dueño lo recibe todo, porque con eso decide si es su
+     * animal y va a buscarlo.
+     *
+     * @param paraElDueno si quien pide el detalle es el dueño de la alerta
      */
     @Transactional(readOnly = true)
-    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId) {
+    public List<AvistamientoResponse> visiblesDeLaAlerta(Long alertaId, boolean paraElDueno) {
         return avistamientoRepository.buscarDeLaAlerta(alertaId, EstadoAvistamiento.VISIBLE)
                 .stream()
-                .map(this::aAvistamientoResponse)
+                .map(avistamiento -> paraElDueno
+                        ? aAvistamientoResponse(avistamiento)
+                        : aAvistamientoSinAutor(avistamiento))
                 .toList();
+    }
+
+    /** El avistamiento que ve quien no es el dueño de la alerta: sin autor y con la ubicación redondeada. */
+    private AvistamientoResponse aAvistamientoSinAutor(Avistamiento avistamiento) {
+        return AvistamientoResponse.builder()
+                .id(avistamiento.getId())
+                .alertaId(avistamiento.getAlerta().getId())
+                .descripcion(avistamiento.getDescripcion())
+                .fotoUrl(avistamiento.getFotoUrl())
+                .ubicacion(redondeada(avistamiento.getUbicacion()))
+                .createdAt(avistamiento.getCreatedAt())
+                .build();
+    }
+
+    /**
+     * La ubicación con DECIMALES_REDONDEO decimales. Con tres, un paso es 0,001°:
+     * unos 111 m en latitud y, a la latitud de la Península, unos 85 m en
+     * longitud. El punto real queda a menos de medio paso del publicado.
+     */
+    static UbicacionResponse redondeada(Point punto) {
+        if (punto == null) {
+            return null;
+        }
+        return UbicacionResponse.builder()
+                .latitud(redondear(punto.getY()))
+                .longitud(redondear(punto.getX()))
+                .build();
+    }
+
+    private static double redondear(double grados) {
+        return BigDecimal.valueOf(grados).setScale(DECIMALES_REDONDEO, RoundingMode.HALF_UP).doubleValue();
     }
 
     private AvistamientoResponse aAvistamientoResponse(Avistamiento avistamiento) {

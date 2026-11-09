@@ -461,6 +461,54 @@ class AvistamientoServiceTest {
         }
     }
 
+    @Nested
+    @DisplayName("Avistamientos en el detalle de la alerta (C8)")
+    class DetalleDeLaAlerta {
+
+        @Test
+        @DisplayName("Para el dueño, enteros: la ubicación exacta y el autor")
+        void enterosParaElDueno() {
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(LAT);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(LNG);
+            assertThat(visto.getAutor().getId()).isEqualTo(8L);
+            assertThat(visto.getAutor().getNombre()).isEqualTo("Usuario 8");
+        }
+
+        @Test
+        @DisplayName("Para cualquier otro, sin autor y con la ubicación redondeada a tres decimales (unos 100 m)")
+        void reducidosParaLosDemas() {
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(avistamientoDe(alerta(EstadoAlerta.ACTIVA))));
+
+            AvistamientoResponse visto = avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false).get(0);
+
+            assertThat(visto.getUbicacion().getLatitud()).isEqualTo(40.417);
+            assertThat(visto.getUbicacion().getLongitud()).isEqualTo(-3.704);
+            assertThat(visto.getAutor()).isNull();
+            // Lo demás es lo que sirve para ayudar a buscar, y se queda.
+            assertThat(visto.getId()).isEqualTo(77L);
+            assertThat(visto.getFotoUrl()).isEqualTo("https://fotos/avistamiento.jpg");
+            assertThat(visto.getDescripcion()).isEqualTo("Lo he visto en el parque");
+        }
+
+        @Test
+        @DisplayName("Sin ubicación, null en las dos versiones")
+        void sinUbicacion() {
+            Avistamiento sinPunto = avistamientoDe(alerta(EstadoAlerta.ACTIVA));
+            sinPunto.setUbicacion(null);
+            when(avistamientoRepository.buscarDeLaAlerta(ID_ALERTA, EstadoAvistamiento.VISIBLE))
+                    .thenReturn(List.of(sinPunto));
+
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, false).get(0).getUbicacion()).isNull();
+            assertThat(avistamientoService.visiblesDeLaAlerta(ID_ALERTA, true).get(0).getUbicacion()).isNull();
+        }
+    }
+
     // ---------------------------------------------------------------------
 
     private static AvistamientoRepository.DistanciaALaAlerta filaDeDistancia(Long avistamientoId, double metros) {

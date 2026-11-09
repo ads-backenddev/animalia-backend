@@ -104,10 +104,12 @@ public class AlertaController {
      *
      * 200 para cualquier alerta que haya existido, en el estado que esté; 404
      * solo si el id nunca existió. Una RETIRADA o ELIMINADA llega reducida.
+     * Sus avistamientos van enteros solo para el dueño (C8).
      */
     @GetMapping("/{id}")
-    public ResponseEntity<AlertaDetalleResponse> detalle(@PathVariable Long id) {
-        return ResponseEntity.ok(alertaService.detalle(id));
+    public ResponseEntity<AlertaDetalleResponse> detalle(@PathVariable Long id,
+                                                        @AuthenticationPrincipal UsuarioPrincipal usuario) {
+        return ResponseEntity.ok(alertaService.detalle(id, usuario.getId()));
     }
 
     /**

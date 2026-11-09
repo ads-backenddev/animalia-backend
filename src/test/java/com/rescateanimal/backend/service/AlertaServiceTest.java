@@ -55,6 +55,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -625,15 +626,28 @@ class AlertaServiceTest {
             alerta.setEstado(estado);
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
             AvistamientoResponse visto = AvistamientoResponse.builder().id(70L).alertaId(5L).build();
-            when(avistamientoService.visiblesDeLaAlerta(5L)).thenReturn(List.of(visto));
+            when(avistamientoService.visiblesDeLaAlerta(5L, true)).thenReturn(List.of(visto));
 
-            AlertaDetalleResponse detalle = alertaService.detalle(5L);
+            AlertaDetalleResponse detalle = alertaService.detalle(5L, 1L);
 
             assertThat(detalle.getEstado()).isEqualTo(estado);
             assertThat(detalle.getDescripcion()).isEqualTo("Perro pequeño marrón");
             assertThat(detalle.getUbicacion()).isNotNull();
             assertThat(detalle.getAutor().getNombre()).isEqualTo("Ana");
             assertThat(detalle.getAvistamientos()).containsExactly(visto);
+        }
+
+        @Test
+        @DisplayName("Quien no es el dueño recibe los avistamientos en su versión reducida (C8)")
+        void avistamientosReducidosParaQuienNoEsElDueno() {
+            when(alertaRepository.findById(5L)).thenReturn(Optional.of(alertaExistente(5L)));
+            AvistamientoResponse reducido = AvistamientoResponse.builder().id(70L).alertaId(5L).build();
+            when(avistamientoService.visiblesDeLaAlerta(5L, false)).thenReturn(List.of(reducido));
+
+            AlertaDetalleResponse detalle = alertaService.detalle(5L, 99L);
+
+            assertThat(detalle.getAvistamientos()).containsExactly(reducido);
+            verify(avistamientoService, never()).visiblesDeLaAlerta(5L, true);
         }
 
         @ParameterizedTest(name = "{0}")
@@ -646,7 +660,7 @@ class AlertaServiceTest {
             alerta.setEstado(estado);
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
 
-            AlertaDetalleResponse detalle = alertaService.detalle(5L);
+            AlertaDetalleResponse detalle = alertaService.detalle(5L, 1L);
 
             assertThat(detalle.getId()).isEqualTo(5L);
             assertThat(detalle.getEstado()).isEqualTo(estado);
@@ -654,7 +668,7 @@ class AlertaServiceTest {
             assertThat(detalle).extracting("descripcion", "fotoUrl", "ubicacion", "autor", "fechaAvistamiento")
                     .containsOnlyNulls();
             assertThat(detalle.getAvistamientos()).isEmpty();
-            verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong());
+            verify(avistamientoService, never()).visiblesDeLaAlerta(anyLong(), anyBoolean());
         }
 
         /*
@@ -669,11 +683,11 @@ class AlertaServiceTest {
             Alerta alerta = alertaExistente(5L);
             alerta.getUsuario().setTelefono("600111222");
             when(alertaRepository.findById(5L)).thenReturn(Optional.of(alerta));
-            when(avistamientoService.visiblesDeLaAlerta(5L)).thenReturn(List.of());
+            when(avistamientoService.visiblesDeLaAlerta(5L, true)).thenReturn(List.of());
             when(alertaRepository.findAll(ArgumentMatchers.<Specification<Alerta>>any(), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(alerta)));
 
-            String detalle = JsonMapper.builder().build().writeValueAsString(alertaService.detalle(5L));
+            String detalle = JsonMapper.builder().build().writeValueAsString(alertaService.detalle(5L, 1L));
             String listado = JsonMapper.builder().build().writeValueAsString(
                     alertaService.listar(null, null, null, null, null, PageRequest.of(0, 20)));
 
@@ -701,7 +715,7 @@ class AlertaServiceTest {
         void inexistente() {
             when(alertaRepository.findById(anyLong())).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> alertaService.detalle(123L)).isInstanceOf(ResourceNotFoundException.class);
+            assertThatThrownBy(() -> alertaService.detalle(123L, 1L)).isInstanceOf(ResourceNotFoundException.class);
         }
     }
 

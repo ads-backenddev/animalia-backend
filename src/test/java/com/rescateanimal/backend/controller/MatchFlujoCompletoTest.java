@@ -526,6 +526,42 @@ class MatchFlujoCompletoTest {
     }
 
     @Test
+    @DisplayName("En el detalle de la alerta el dueño ve cada avistamiento entero; los demás, sin autor y a unos 100 m (C8)")
+    void detalleConAvistamientosParaElDuenoYParaLosDemas() throws Exception {
+        // Con más decimales de los que se publican, para que redondear se note.
+        HttpResponse<String> preciso = enviar("POST", "/api/avistamientos", tokenTestigo, """
+                {"alertaId":%d,"descripcion":"Junto a la fuente","fotoUrl":"%s",
+                 "ubicacion":{"latitud":40.41736,"longitud":-3.70412}}
+                """.formatted(alertaId, FotosDePrueba.subir(http, puerto, tokenTestigo)));
+        assertThat(preciso.statusCode()).isEqualTo(201);
+        long id = numero(preciso.body(), "$.id");
+        avistamientos.add(id);
+        String avistamiento = "$.avistamientos[?(@.id == " + id + ")]";
+
+        HttpResponse<String> delDueno = enviar("GET", "/api/alertas/" + alertaId, tokenDuenyo, null);
+        assertThat(delDueno.statusCode()).isEqualTo(200);
+        assertThat(JsonPath.<List<Double>>read(delDueno.body(), avistamiento + ".ubicacion.latitud"))
+                .containsExactly(40.41736);
+        assertThat(JsonPath.<List<Double>>read(delDueno.body(), avistamiento + ".ubicacion.longitud"))
+                .containsExactly(-3.70412);
+        assertThat(JsonPath.<List<Integer>>read(delDueno.body(), avistamiento + ".autor.id"))
+                .containsExactly(idTestigo.intValue());
+
+        // Cualquier otro, también quien lo registró: lo que decide es ser el dueño de la alerta.
+        for (String token : List.of(tokenCurioso, tokenTestigo)) {
+            HttpResponse<String> ajeno = enviar("GET", "/api/alertas/" + alertaId, token, null);
+            assertThat(ajeno.statusCode()).isEqualTo(200);
+            assertThat(JsonPath.<List<Double>>read(ajeno.body(), avistamiento + ".ubicacion.latitud"))
+                    .containsExactly(40.417);
+            assertThat(JsonPath.<List<Double>>read(ajeno.body(), avistamiento + ".ubicacion.longitud"))
+                    .containsExactly(-3.704);
+            assertThat(JsonPath.<List<Object>>read(ajeno.body(), avistamiento + ".autor"))
+                    .containsExactly((Object) null);
+            assertThat(ajeno.body()).doesNotContain("40.41736").doesNotContain("\"nombre\":\"testigo\"");
+        }
+    }
+
+    @Test
     @DisplayName("En /mios un descarte recuperado sale el primero: el orden es el de apertura del chat, no la fecha del registro")
     void misMatchesPorAperturaDelChat() throws Exception {
         long recuperado = avistamientos.get(0);
