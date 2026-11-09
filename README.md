@@ -198,7 +198,7 @@ pueden ejecutar sueltas con `-Dtest=NombreDelTest`.
 | `MAIL_FROM` | `no-reply@rescateanimal.es` | Remitente de los correos. **Obligatoria en producción**: una dirección de un dominio verificado en Resend |
 | `RESEND_API_KEY` | — | Clave de la API de Resend, con permiso solo de envío. **Solo y obligatoria en producción**; sin ella, o sin `MAIL_FROM`, la aplicación no arranca |
 | `SERVER_PORT` | `8080` | Puerto de la API |
-| `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción |
+| `SPRING_PROFILES_ACTIVE` | `default` | Usa `prod` para el perfil de producción. La imagen Docker ya lo fija (`ENV SPRING_PROFILES_ACTIVE=prod` en el `Dockerfile`): no hace falta ponerlo en Railway |
 | `FOTOS_DIR` | `./uploads` | Carpeta de las fotos subidas. **Obligatoria en producción**: el punto de montaje del volumen |
 | `APP_FOTOS_URL_PUBLICA` | `http://localhost:8080/fotos` | Base de las URLs de las fotos. **Obligatoria y `https` en producción** |
 | `FOTOS_LIMITE_DIARIO` | `25` | Subidas de fotos por usuario y día |
