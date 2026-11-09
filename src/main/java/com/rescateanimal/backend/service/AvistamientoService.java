@@ -35,6 +35,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.HashMap;
@@ -70,6 +71,8 @@ public class AvistamientoService {
 
     private final int tamanyoFeed;
     private final int limiteDiarioPorAlerta;
+    /** De dónde sale el instante del cupo; el día lo pone ZONA_CUPO (ver RelojConfig). */
+    private final Clock reloj;
 
     private final GeometryFactory geometryFactory =
             new GeometryFactory(new PrecisionModel(), SRID_WGS84);
@@ -81,7 +84,8 @@ public class AvistamientoService {
                                NotificacionService notificacionService,
                                LimiteAvistamientoDiarioRepository limiteAvistamientoDiarioRepository,
                                @Value("${app.avistamientos.tamanyo-feed}") int tamanyoFeed,
-                               @Value("${app.avistamientos.limite-diario-por-alerta}") int limiteDiarioPorAlerta) {
+                               @Value("${app.avistamientos.limite-diario-por-alerta}") int limiteDiarioPorAlerta,
+                               Clock reloj) {
         this.avistamientoRepository = avistamientoRepository;
         this.alertaRepository = alertaRepository;
         this.usuarioRepository = usuarioRepository;
@@ -90,6 +94,7 @@ public class AvistamientoService {
         this.limiteAvistamientoDiarioRepository = limiteAvistamientoDiarioRepository;
         this.tamanyoFeed = tamanyoFeed;
         this.limiteDiarioPorAlerta = limiteDiarioPorAlerta;
+        this.reloj = reloj;
     }
 
     // ---------------------------------------------------------------------
@@ -274,7 +279,7 @@ public class AvistamientoService {
      * LimiteAvistamientoDiarioRepository.
      */
     private void consumirCupo(Long autorId, Long alertaId) {
-        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        LocalDate hoy = LocalDate.ofInstant(reloj.instant(), ZONA_CUPO);
         limiteAvistamientoDiarioRepository.crearContadorSiNoExiste(autorId, alertaId, hoy);
         if (limiteAvistamientoDiarioRepository.incrementarSiHayCupo(
                 autorId, alertaId, hoy, limiteDiarioPorAlerta) == 0) {

@@ -31,6 +31,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Arrays;
@@ -96,17 +97,21 @@ public class FotoService {
     private final LimiteFotoDiarioRepository limiteFotoDiarioRepository;
     private final AlmacenFotosService almacen;
     private final int limiteDiario;
+    /** De dónde sale el instante del cupo; el día lo pone ZONA_CUPO (ver RelojConfig). */
+    private final Clock reloj;
 
     public FotoService(FotoRepository fotoRepository,
                        UsuarioRepository usuarioRepository,
                        LimiteFotoDiarioRepository limiteFotoDiarioRepository,
                        AlmacenFotosService almacen,
-                       @Value("${app.fotos.limite-diario}") int limiteDiario) {
+                       @Value("${app.fotos.limite-diario}") int limiteDiario,
+                       Clock reloj) {
         this.fotoRepository = fotoRepository;
         this.usuarioRepository = usuarioRepository;
         this.limiteFotoDiarioRepository = limiteFotoDiarioRepository;
         this.almacen = almacen;
         this.limiteDiario = limiteDiario;
+        this.reloj = reloj;
     }
 
     @Transactional
@@ -309,7 +314,7 @@ public class FotoService {
      * atómicas en la base de datos: ver LimiteFotoDiarioRepository.
      */
     private void consumirCupo(Long usuarioId) {
-        LocalDate hoy = LocalDate.now(ZONA_CUPO);
+        LocalDate hoy = LocalDate.ofInstant(reloj.instant(), ZONA_CUPO);
         limiteFotoDiarioRepository.crearContadorSiNoExiste(usuarioId, hoy);
         if (limiteFotoDiarioRepository.incrementarSiHayCupo(usuarioId, hoy, limiteDiario) == 0) {
             log.info("Usuario {} ha agotado sus {} subidas de fotos del día", usuarioId, limiteDiario);

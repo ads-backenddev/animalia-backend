@@ -690,6 +690,12 @@ entorno: en Railway, que va en UTC, a la 01:00 o a las 02:00 de la madrugada pen
 época del año, y en el portátil de desarrollo a medianoche. Con la zona fija, esas `00:00` son
 medianoche peninsular en todas partes.
 
+*Nota posterior (bloque de cierre).* Ahora se prueba: el instante sale de un `Clock` inyectable
+(`RelojConfig`, el del sistema en UTC), y las pruebas fijan las 22:59:59 y las 23:00 UTC de un día de
+invierno, y las 21:59:59 y las 22:00 UTC de uno de verano. En los dos segundos casos UTC sigue en el
+día anterior y la fecha del cupo ya es la del siguiente. Vale para los tres cupos: matches de
+adopción, fotos y avistamientos por alerta.
+
 Es una **simplificación consciente**, no una solución general. Vale para España peninsular, que es
 el alcance geográfico del proyecto, y **no es correcta para Canarias**: allí se va una hora por
 detrás, así que un usuario canario ve su cuota reiniciarse a las 23:00 de su noche. Hacerlo bien

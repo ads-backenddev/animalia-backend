@@ -27,8 +27,11 @@ import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,7 +68,8 @@ class FotoServiceTest {
     @BeforeEach
     void preparar() {
         almacen = new AlmacenFotosService(carpeta.toString(), BASE, true);
-        servicio = new FotoService(fotoRepository, usuarioRepository, limiteRepository, almacen, LIMITE_DIARIO);
+        servicio = new FotoService(fotoRepository, usuarioRepository, limiteRepository, almacen, LIMITE_DIARIO,
+                Clock.systemUTC());
         when(usuarioRepository.getReferenceById(ID_USUARIO)).thenReturn(new Usuario());
         when(fotoRepository.save(any(Foto.class))).thenAnswer(i -> i.getArgument(0));
         // Con cupo, salvo en las pruebas del límite: el mock devolvería 0, que es "agotado".
@@ -253,6 +257,25 @@ class FotoServiceTest {
 
             assertThatThrownBy(() -> servicio.subir("no soy una imagen".getBytes(StandardCharsets.UTF_8), ID_USUARIO))
                     .isInstanceOf(LimiteFotosAlcanzadoException.class);
+        }
+
+        /* La medianoche de Madrid es las 23:00 UTC en invierno y las 22:00 UTC en verano. */
+        @ParameterizedTest(name = "{0} es el {1} en Madrid")
+        @CsvSource({
+                "2026-01-15T22:59:59Z, 2026-01-15",
+                "2026-01-15T23:00:00Z, 2026-01-16",
+                "2026-07-15T21:59:59Z, 2026-07-15",
+                "2026-07-15T22:00:00Z, 2026-07-16"
+        })
+        @DisplayName("El día del cupo cambia a medianoche de Madrid, en invierno y en verano, no a la de UTC")
+        void elDiaCambiaAMedianocheDeMadrid(Instant instante, LocalDate diaDeMadrid) {
+            FotoService aEsaHora = new FotoService(fotoRepository, usuarioRepository, limiteRepository, almacen,
+                    LIMITE_DIARIO, Clock.fixed(instante, ZoneOffset.UTC));
+
+            aEsaHora.subir(ImagenesDePrueba.jpeg(8, 8), ID_USUARIO);
+
+            verify(limiteRepository).crearContadorSiNoExiste(ID_USUARIO, diaDeMadrid);
+            verify(limiteRepository).incrementarSiHayCupo(ID_USUARIO, diaDeMadrid, LIMITE_DIARIO);
         }
     }
 

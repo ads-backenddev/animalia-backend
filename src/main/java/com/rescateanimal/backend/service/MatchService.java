@@ -34,6 +34,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -66,6 +67,8 @@ public class MatchService {
     private final NotificacionService notificacionService;
 
     private final int limiteDiario;
+    /** De dónde sale el instante de la cuota; el día lo pone ZONA_CUOTA (ver RelojConfig). */
+    private final Clock reloj;
 
     public MatchService(MatchRegistroRepository matchRegistroRepository,
                         LimiteMatchDiarioRepository limiteMatchDiarioRepository,
@@ -75,7 +78,8 @@ public class MatchService {
                         AlertaRepository alertaRepository,
                         UsuarioRepository usuarioRepository,
                         NotificacionService notificacionService,
-                        @Value("${app.matches.limite-diario}") int limiteDiario) {
+                        @Value("${app.matches.limite-diario}") int limiteDiario,
+                        Clock reloj) {
         this.matchRegistroRepository = matchRegistroRepository;
         this.limiteMatchDiarioRepository = limiteMatchDiarioRepository;
         this.chatRepository = chatRepository;
@@ -85,6 +89,7 @@ public class MatchService {
         this.usuarioRepository = usuarioRepository;
         this.notificacionService = notificacionService;
         this.limiteDiario = limiteDiario;
+        this.reloj = reloj;
     }
 
     // ---------------------------------------------------------------------
@@ -505,7 +510,7 @@ public class MatchService {
      * que no se ha tomado. Queda anotada en docs/api-rest.md, §16.
      */
     private void consumirCuotaDiaria(Usuario usuario) {
-        LocalDate hoy = LocalDate.now(ZONA_CUOTA);
+        LocalDate hoy = hoy();
 
         limiteMatchDiarioRepository.crearContadorSiNoExiste(usuario.getId(), hoy);
 
@@ -549,7 +554,7 @@ public class MatchService {
     /** Estado del límite diario, para que el cliente lo muestre antes de agotarlo (RF-24). */
     @Transactional(readOnly = true)
     public LimiteMatchResponse consultarLimite(Long usuarioId) {
-        LocalDate hoy = LocalDate.now(ZONA_CUOTA);
+        LocalDate hoy = hoy();
         int consumidos = limiteMatchDiarioRepository.findByUsuarioIdAndFecha(usuarioId, hoy)
                 .map(LimiteMatchDiario::getContador)
                 .orElse(0);
@@ -577,6 +582,11 @@ public class MatchService {
      */
     private LocalDateTime reinicioDelContador(LocalDate hoy) {
         return hoy.plusDays(1).atStartOfDay();
+    }
+
+    /** El día natural de ZONA_CUOTA en el instante del reloj. */
+    private LocalDate hoy() {
+        return LocalDate.ofInstant(reloj.instant(), ZONA_CUOTA);
     }
 
     private MatchResponse aMatchResponse(MatchRegistro registro, Long chatId) {
