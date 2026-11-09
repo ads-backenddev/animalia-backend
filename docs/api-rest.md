@@ -2770,8 +2770,8 @@ la vez abran dos chats.
 
 El último bloque antes de la app Android. Cambia el proveedor de correo, cierra los huecos de código
 del informe de seguridad en el marco del ENS (C1, C2, C6, C8, C9, D4 y C16) y deja fijado qué arranca
-en producción. Lo que afecta a cada endpoint está en su sección; aquí, el correo, el despliegue y la
-lista de variables de producción.
+en producción. Lo que afecta a cada endpoint está en su sección; aquí, el correo, el despliegue, la
+lista de variables de producción, la lista para el despliegue y lo que queda abierto.
 
 ### Correo: independiente del proveedor
 
@@ -2826,16 +2826,9 @@ carga la configuración de producción como al arrancar, sin base de datos ni re
 | Cabeceras del proxy | `server.forward-headers-strategy=native`: la IP del cliente no se falsifica con `X-Forwarded-For` | C1 |
 | Correo | `ResendEmailSender`; sin `RESEND_API_KEY` o sin `MAIL_FROM` no arranca | — |
 
-**Dos comprobaciones quedan para Railway antes de desplegar**, porque dependen de la plataforma y no se
-pueden probar en local:
-
-1. **Que el proxy de Railway conecte desde un rango privado** (10/8, 172.16/12, 192.168/16, 100.64/10,
-   fc00::/7…), que es lo que Tomcat da por proxy de confianza. Si no, Tomcat no leería
-   `X-Forwarded-For` y todos los clientes compartirían la dirección del proxy, también para el límite
-   de intentos; la lista se fija con `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`.
-2. **Que el PostgreSQL de Railway admita TLS.** Si no, con `require` la aplicación no arranca: es
-   preferible a mandar en claro las credenciales y los datos, pero hay que saberlo antes.
-   `DB_SSLMODE=disable` solo con constancia de que el tráfico va por la red privada.
+**Dos comprobaciones quedan para Railway**, la de C1 y la de D4, porque dependen de la plataforma y no
+se pueden probar en local. Están, con el resto de lo que hay que hacer al desplegar, en la *Lista para
+el despliegue*, más abajo.
 
 ### Variables de entorno de producción
 
@@ -2868,8 +2861,74 @@ Solo nombres. **Obligatoria** quiere decir que, si falta, la aplicación no arra
 | `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` | Opcional | Proxies de confianza, si el de Railway no está en los rangos privados (C1) |
 | `SPRING_PROFILES_ACTIVE` | La fija la imagen | `prod` |
 
-**Ya no se usan en producción**, y se pueden quitar de Railway: `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
+**Ya no se usan en producción**, y se quitan de Railway: `MAIL_HOST`, `MAIL_PORT`, `MAIL_USER`,
 `MAIL_PASSWORD` (el SMTP salió del perfil `prod`) y `MAIL_REMITENTE` (sustituida por `MAIL_FROM`).
+
+### Lista para el despliegue
+
+Lo que hay que hacer en Railway al desplegar este bloque, en este orden. Los pasos 3 y 4 son las dos
+comprobaciones que no se pueden hacer en local.
+
+1. **Crear** en el servicio de la API las dos variables del correo:
+
+   | Variable | Valor |
+   |---|---|
+   | `RESEND_API_KEY` | La clave de la API de Resend, con permiso solo de envío |
+   | `MAIL_FROM` | El remitente, de un dominio verificado en Resend |
+
+   Sin cualquiera de las dos, la aplicación no arranca (*Correo*, arriba).
+
+2. **Borrar** las cinco que el perfil `prod` ya no usa: `MAIL_REMITENTE`, `MAIL_HOST`, `MAIL_PORT`,
+   `MAIL_USER` y `MAIL_PASSWORD`. No impiden arrancar, pero `MAIL_PASSWORD` es un secreto que ya no sirve
+   para nada y que habría que seguir custodiando (D5 del informe ENS).
+
+3. **Comprobar C1 con el registro de auditoría de C2.** Ya desplegado, un login fallido —con un email
+   que no exista, que no crea nada— desde **dos clientes con IP públicas distintas**, por ejemplo la red
+   de casa y los datos del móvil. En el log de Railway, filtrando por el logger
+   `com.rescateanimal.backend.auditoria`, las dos líneas
+   `evento=LOGIN resultado=CREDENCIALES_INVALIDAS usuario=- ip=…` tienen que llevar **dos `ip=`
+   distintas**, y cada una la IP pública de su cliente.
+   - Si llevan la misma —una dirección privada: la del proxy—, el proxy de Railway no conecta desde los
+     rangos que Tomcat da por proxy de confianza (10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7…).
+     Tomcat no lee entonces `X-Forwarded-For`, y todos los clientes comparten un solo contador del
+     límite por IP: treinta peticiones de login, registro o recuperación en quince minutos, sumando las
+     de todos, dejan fuera a todo el mundo.
+     Se arregla dando la dirección del proxy en `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES` (una expresión
+     regular) y se repite la comprobación.
+   - Un login más, desde cualquiera de los dos, con la cabecera `X-Forwarded-For: 203.0.113.99` puesta
+     a mano: la línea tiene que llevar la IP real del cliente, no `203.0.113.99`. Si lleva la inventada,
+     el límite por IP se esquiva cambiando la cabecera en cada intento, que es el hueco original de C1.
+
+4. **Comprobar D4.** Que la aplicación arranca con `DB_SSLMODE` sin fijar (`require`) y
+   `/actuator/health` responde `UP`: la conexión con PostgreSQL va cifrada. Si no arranca porque el
+   PostgreSQL de Railway no admite TLS (el driver lo dice: el servidor no admite SSL), `DB_SSLMODE=disable`
+   solo si se cumplen las dos condiciones:
+   - `DB_URL` apunta a la **red privada** de Railway (`*.railway.internal`), nunca al proxy público.
+     Por el proxy público, la conexión no se abre sin TLS.
+   - Queda **escrita la justificación** —qué se comprobó, cuándo, y por qué en ese caso basta la red
+     privada— en esta sección y en D4 del informe ENS. Sin ella, `disable` es justo lo que D4 cerró.
+
+### Riesgos residuales y limitaciones conocidas
+
+Lo que este bloque deja abierto a sabiendas. También consta en el informe ENS.
+
+**C6, riesgo residual: el motivo de un bloqueo o de un rechazo no se guarda.** Para que el texto libre
+del administrador —que puede llevar nombres o cualquier otro dato personal— dejara de llegar al log, se
+dejó de escribir; y `NOTIFICACION` no guarda texto, por diseño (§11). Queda quién decidió, sobre quién,
+cuándo y cuántos caracteres tenía el motivo, pero no por qué: ante la reclamación de un usuario
+bloqueado o de una protectora rechazada, la decisión no se puede justificar con lo que hay guardado.
+**Pendiente de una tabla de auditoría de moderación**, con acceso solo para los administradores y un
+plazo de conservación fijado.
+
+**Limitación conocida: el registro no verifica que el email pertenezca al usuario.** No se envía correo
+de confirmación ni hay endpoint de verificación (*Correo*, arriba). Cualquiera puede abrir una cuenta con
+el email de otra persona: el dueño real de la dirección recibe `409 EMAIL_DUPLICADO` si intenta
+registrarse, y la plataforma da por buena una identidad que nadie ha comprobado. Lo atenúa que el enlace
+de recuperación va siempre a ese email, así que quien controla el buzón puede quedarse con la cuenta —y
+al restablecer la contraseña deja sin efecto todos los tokens emitidos antes (§17)—; que una protectora
+no entra hasta que el administrador la verifica; y que el registro queda en el registro de auditoría con
+su IP y pasa por el límite de intentos. Cerrarlo exige un correo de confirmación con un token de un solo
+uso y la cuenta pendiente hasta confirmarlo.
 
 ### Panel web de administración
 
