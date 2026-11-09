@@ -136,8 +136,11 @@ public class AdminService {
         }
 
         usuario.setActivo(false);
-        log.warn("El administrador {} ha bloqueado al usuario {}. Motivo: {}",
-                adminId, usuarioId, motivo);
+        // El motivo es texto libre del administrador y puede llevar nombres o
+        // cualquier otro dato personal: no se escribe en el log (informe ENS,
+        // C6). Queda que hubo uno, y de qué longitud.
+        log.warn("El administrador {} ha bloqueado al usuario {} (motivo de {} caracteres, no se registra)",
+                adminId, usuarioId, motivo == null ? 0 : motivo.length());
 
         retirarElCatalogoSiEsProtectora(usuario);
 
@@ -299,8 +302,9 @@ public class AdminService {
      */
     private void marcarRechazada(Protectora protectora, String motivo, Long adminId) {
         protectora.setEstado(EstadoProtectora.RECHAZADA);
-        log.warn("El administrador {} ha rechazado la protectora {}. Motivo: {}",
-                adminId, protectora.getId(), motivo);
+        // Sin el texto del motivo, por lo mismo que en bloquear (C6).
+        log.warn("El administrador {} ha rechazado la protectora {} (motivo de {} caracteres, no se registra)",
+                adminId, protectora.getId(), motivo == null ? 0 : motivo.length());
 
         notificar(protectora.getUsuario(), TipoNotificacion.PROTECTORA_RECHAZADA,
                 protectora.getId());

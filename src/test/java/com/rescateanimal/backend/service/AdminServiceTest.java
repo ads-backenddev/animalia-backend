@@ -31,6 +31,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -61,7 +63,7 @@ import static org.mockito.Mockito.when;
  * fichero es qué hace cada decisión una vez concedido el permiso: a quién avisa,
  * qué estado deja, y qué NO cambia cuando la operación se repite.
  */
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 @MockitoSettings(strictness = Strictness.LENIENT)
 class AdminServiceTest {
 
@@ -169,6 +171,19 @@ class AdminServiceTest {
             assertThat(respuesta.getActivo()).isFalse();
             verify(notificacionService).notificarDecisionAdministrativa(
                     usuario, TipoNotificacion.CUENTA_BLOQUEADA, null);
+        }
+
+        @Test
+        @DisplayName("El motivo es texto libre y no llega al log: quedan la decisión, quién la tomó y la longitud (C6)")
+        void elMotivoNoLlegaAlLog(CapturedOutput salida) {
+            when(usuarioRepository.findById(ID_USUARIO))
+                    .thenReturn(Optional.of(usuario(ID_USUARIO, Rol.CIUDADANO, true)));
+
+            admin.bloquear(ID_USUARIO, "Acoso a Lucia Perez por chat", ID_ADMIN);
+
+            assertThat(salida)
+                    .contains("El administrador 1 ha bloqueado al usuario 7 (motivo de 28 caracteres, no se registra)")
+                    .doesNotContain("Lucia Perez").doesNotContain("Acoso");
         }
 
         @Test
@@ -372,6 +387,19 @@ class AdminServiceTest {
             assertThat(respuesta.getEstado()).isEqualTo(EstadoProtectora.RECHAZADA);
             verify(notificacionService).notificarDecisionAdministrativa(
                     protectora.getUsuario(), TipoNotificacion.PROTECTORA_RECHAZADA, ID_PROTECTORA);
+        }
+
+        @Test
+        @DisplayName("Tampoco el motivo de un rechazo llega al log (C6)")
+        void elMotivoDelRechazoNoLlegaAlLog(CapturedOutput salida) {
+            when(protectoraRepository.buscarConCuenta(ID_PROTECTORA))
+                    .thenReturn(Optional.of(protectora(EstadoProtectora.PENDIENTE)));
+
+            admin.rechazarProtectora(ID_PROTECTORA, "La presidenta Marta Gil no responde", ID_ADMIN);
+
+            assertThat(salida)
+                    .contains("ha rechazado la protectora 20 (motivo de 35 caracteres, no se registra)")
+                    .doesNotContain("Marta Gil");
         }
 
         @Test

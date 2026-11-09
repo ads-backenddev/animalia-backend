@@ -25,8 +25,9 @@ public class RechazarProtectoraRequest {
     /**
      * Por qué se rechaza la solicitud. Obligatorio.
      *
-     * Con la misma limitación que el motivo del bloqueo: hoy solo llega al log,
-     * porque NOTIFICACION no transporta texto. Ver BloquearUsuarioRequest.motivo.
+     * Con la misma limitación que el motivo del bloqueo: no se guarda en ninguna
+     * parte —el log ya no lleva el texto (C6) y NOTIFICACION no transporta
+     * texto—. Ver BloquearUsuarioRequest.motivo.
      */
     @NotBlank(message = "el motivo del rechazo es obligatorio")
     @Size(max = 500, message = "el motivo no puede superar los 500 caracteres")

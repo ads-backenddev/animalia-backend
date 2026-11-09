@@ -1194,12 +1194,15 @@ Los tres tipos nuevos se añadieron al enum `TipoNotificacion` con su migración
 referencia va nula en las dos de cuenta porque el aviso es sobre la cuenta del propio destinatario, no
 sobre otra fila a la que apuntar.
 
-**El `motivo` no llega al usuario, y conviene saberlo.** Hoy acaba solo en el log del servidor, junto
-al id del administrador que decidió: `NOTIFICACION` no tiene ningún campo de texto —solo `tipo` y
-`referencia_id`—, así que el afectado recibe un `CUENTA_BLOQUEADA` sin explicación. Se exige
-igualmente en el body porque obliga a articular la decisión y porque el día que exista dónde
-guardarlo el contrato ya lo pide. Hacérselo llegar exige una columna de texto en `NOTIFICACION` o una
-tabla de auditoría de acciones del administrador, y ninguna de las dos está decidida.
+**El `motivo` no se guarda en ninguna parte, y conviene saberlo.** Hasta el bloque de cierre acababa
+en el log del servidor; como es texto libre del administrador y puede llevar nombres o cualquier otro
+dato personal, ya no se escribe (informe ENS, C6): el log dice qué administrador bloqueó o rechazó a
+quién y cuántos caracteres tenía el motivo, no su texto. `NOTIFICACION` no tiene ningún campo de
+texto —solo `tipo` y `referencia_id`—, así que el afectado recibe un `CUENTA_BLOQUEADA` sin
+explicación. Se exige igualmente en el body porque obliga a articular la decisión y porque el día que
+exista dónde guardarlo el contrato ya lo pide. Guardarlo exige una tabla de auditoría de acciones del
+administrador con acceso controlado, y hacérselo llegar al afectado, una columna de texto en
+`NOTIFICACION`; ninguna de las dos está decidida.
 
 Si la notificación falla, **la decisión se mantiene**: se crea en su propia transacción
 (`REQUIRES_NEW`) y el error se registra sin propagarse. La decisión del administrador vale por sí
@@ -1605,7 +1608,7 @@ bloque 5.
 | `ANIMAL_ADOPCION` no lleva `@Version`: confirmar la adopción y retirar el animal a la vez dejan ganar a la última escritura. Los dos desenlaces son estados legales, así que no corrompe nada — mismo criterio que la comprobación de duplicados de RF-25 | Baja prioridad, sin bloque asignado |
 | Índices funcionales de `ANIMAL_ADOPCION` sobre `lower(especie)` y `lower(zona_geografica)` | Cuando el catálogo tenga volumen que lo justifique (ver V4) |
 | `MATCH_REGISTRO` no tiene índice por `(tipo_publicacion, interesado)`. Las consultas del panel de RF-10 filtran por ahí, y el único índice existente empieza por `usuario_id`, así que no las sirve. Con los volúmenes del proyecto no se nota | Cuando el panel tenga volumen que lo justifique |
-| El `motivo` de un bloqueo o un rechazo no llega al usuario: solo queda en el log, porque `NOTIFICACION` no tiene campo de texto (§11). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
+| El `motivo` de un bloqueo o un rechazo no llega al usuario ni se guarda: `NOTIFICACION` no tiene campo de texto (§11), y desde el bloque de cierre tampoco se escribe en el log, por ser texto libre que puede llevar datos personales (C6). Exige una columna nueva o una tabla de auditoría de acciones del administrador | Sin bloque asignado; decisión de modelo pendiente |
 | No hay endpoint de alta de administradores, ni debe haberlo: la cuenta `ADMIN` se crea desde la base de datos, como la cuenta raíz de cualquier panel | Fuera de alcance |
 
 ---
