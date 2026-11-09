@@ -72,6 +72,7 @@ public class AdminService {
     private final AnimalAdopcionRepository animalAdopcionRepository;
     private final AnimalAdopcionService animalAdopcionService;
     private final NotificacionService notificacionService;
+    private final FotoService fotoService;
 
     // ---------------------------------------------------------------------
     // Usuarios (RF-11)
@@ -423,9 +424,17 @@ public class AdminService {
      * choca con el FOR SHARE con que el dueño la lee al deslizarla
      * (AvistamientoRepository.bloquearParaDeslizar): con un match en curso, la
      * moderación espera a que confirme; si la moderación va primero, el match
-     * espera y ve el ELIMINADO. No toma ninguna otra fila —ni la alerta, ni la
-     * foto, que se conserva—, así que no puede cerrar un ciclo con el match,
-     * que bloquea la alerta antes que el avistamiento (MatchService.deslizar).
+     * espera y ve el ELIMINADO.
+     *
+     * SU FOTO SE BORRA, como la de una alerta moderada (informe ENS, C9): si
+     * no la usa nada más, la fila de FOTO ahora y el archivo tras el commit
+     * (FotoService.retirarDeAvistamientoModerado). Antes se conservaba, y lo
+     * retirado seguía servido en /fotos para quien tuviera el enlace. Esa fila
+     * es lo último que toma la moderación, después del avistamiento, y no la
+     * toca nadie que bloquee el avistamiento —el match no toca FOTO—, así que
+     * sigue sin poder cerrar un ciclo con el match, que bloquea la alerta antes
+     * que el avistamiento (MatchService.deslizar). Ni la alerta ni su foto se
+     * tocan.
      *
      * @return true si esta llamada lo retiró, false si ya lo estaba.
      */
@@ -439,6 +448,11 @@ public class AdminService {
         }
 
         avistamiento.setEstado(EstadoAvistamiento.ELIMINADO);
+        String foto = avistamiento.getFotoUrl();
+        if (foto != null) {
+            avistamiento.setFotoUrl(null);
+            fotoService.retirarDeAvistamientoModerado(foto, avistamiento.getUsuario().getId(), avistamientoId);
+        }
         log.warn("El administrador {} ha retirado el avistamiento {} por incumplir las normas",
                 adminId, avistamientoId);
         return true;

@@ -65,6 +65,21 @@ public interface FotoRepository extends JpaRepository<Foto, String> {
     boolean usadaFueraDeLaAlerta(@Param("nombre") String nombre, @Param("alertaId") Long alertaId);
 
     /**
+     * ¿Usa esta foto algo que no sea este avistamiento: una alerta, otro
+     * avistamiento, un animal en adopción o un perfil? Es la pregunta antes de
+     * borrar la foto de un avistamiento moderado (C9), y la misma consulta que
+     * usadaFueraDeLaAlerta con la exclusión puesta en el avistamiento.
+     */
+    @Query(value = """
+            SELECT EXISTS (SELECT 1 FROM alerta WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM avistamiento
+                           WHERE id <> :avistamientoId AND substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM animal_adopcion WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+                OR EXISTS (SELECT 1 FROM usuario WHERE substring(foto_url FROM '[^/]*$') = :nombre)
+            """, nativeQuery = true)
+    boolean usadaFueraDelAvistamiento(@Param("nombre") String nombre, @Param("avistamientoId") Long avistamientoId);
+
+    /**
      * Las fotos subidas antes de limite a las que no apunta ningún foto_url: ni
      * un perfil ni una publicación. Son subidas que el cliente nunca llegó a
      * usar, y las recoge la limpieza diaria.

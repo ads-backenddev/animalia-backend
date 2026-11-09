@@ -179,7 +179,9 @@ del mismo usuario la use: entonces es la foto de un animal y se queda.
 
 **La foto de una alerta moderada también deja de existir** (§11): al pasar a `ELIMINADA`, la alerta
 deja de apuntar a ella y se borra igual que una de perfil. Se conserva si otra publicación o un
-perfil usan la misma foto, porque eso no está moderado. Es la única foto de un animal que se borra.
+perfil usan la misma foto, porque eso no está moderado. Desde el bloque de cierre (informe ENS, C9)
+pasa lo mismo con la foto de un **avistamiento moderado**; son las únicas fotos de un animal que se
+borran.
 Vale para las alertas moderadas desde el bloque de los endpoints de alerta (§22): las que ya estaban
 `ELIMINADA` antes conservan la suya.
 
@@ -622,13 +624,13 @@ esas filas son estas:
 | Editar, retirar o cerrar una alerta | La alerta (`FOR NO KEY UPDATE`) |
 | Moderar una alerta | La alerta (`FOR NO KEY UPDATE`) y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra |
 | Registrar un avistamiento | La alerta (`FOR SHARE`) y después la fila del cupo del autor en esa alerta y ese día (§5); el avistamiento es una fila nueva |
-| Moderar un avistamiento | Solo el avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`): ni la alerta ni su foto, que se conserva |
+| Moderar un avistamiento | El avistamiento, con el `UPDATE` de su estado (`FOR NO KEY UPDATE`), y, si su foto no la usa nadie más, la fila de esa foto en `FOTO`, que borra (C9). Ni la alerta ni su foto |
 | Match de adopción | El contador diario del usuario |
 
 Nadie bloquea un avistamiento y pide después su alerta: la única espera de una alerta hacia un
-avistamiento es la del propio match, y la moderación del avistamiento no pide nada más. La fila de
-`FOTO` que borra la moderación de una alerta es lo último que esa operación toma, y el match no la
-toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
+avistamiento es la del propio match, y la moderación del avistamiento no pide nada más que la foto de
+ese avistamiento. La fila de `FOTO` que borra cada moderación —la de una alerta, la de un
+avistamiento— es lo último que esa operación toma, y el match no la toca; el contador de matches solo lo toca la adopción, que no bloquea alertas ni avistamientos, y la
 fila del cupo de avistamientos solo la toma el registro, siempre después de la alerta. Sin dos
 bloqueos pedidos en orden contrario no hay ciclo posible. Está documentado también en
 `MatchService.deslizar`.
@@ -1234,6 +1236,12 @@ respuestas, avisos y chats anteriores— dejaría la sanción a medias. Se conse
 publicación o un perfil usan la misma foto —eso no está moderado—, y una foto externa anterior a
 `/api/fotos` no se puede borrar porque el backend no la aloja. Los avistamientos de la alerta y sus
 fotos no se tocan.
+
+**Lo mismo con la foto de un avistamiento moderado** (bloque de cierre, informe ENS C9). Antes el
+avistamiento pasaba a `ELIMINADO` y su foto seguía servida en `/fotos/…` para quien tuviera el enlace.
+Ahora deja de apuntar a ella y la foto se borra con las mismas reglas: se conserva si la usa otra cosa
+—la alerta, otro avistamiento, un animal o un perfil—, y una externa no se toca. La alerta y su foto
+no cambian.
 
 | `tipo` | Tabla | Estado terminal |
 |---|---|---|

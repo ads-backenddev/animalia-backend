@@ -88,6 +88,8 @@ class AdminServiceTest {
     private AnimalAdopcionService animalAdopcionService;
     @Mock
     private NotificacionService notificacionService;
+    @Mock
+    private FotoService fotoService;
 
     private AdminService admin;
 
@@ -95,7 +97,7 @@ class AdminServiceTest {
     void prepararServicio() {
         admin = new AdminService(usuarioRepository, protectoraRepository, reporteRepository,
                 alertaService, avistamientoRepository, animalAdopcionRepository,
-                animalAdopcionService, notificacionService);
+                animalAdopcionService, notificacionService, fotoService);
     }
 
     // ---------------------------------------------------------------------
@@ -590,6 +592,37 @@ class AdminServiceTest {
             assertThat(avistamiento.getEstado()).isEqualTo(EstadoAvistamiento.ELIMINADO);
             verify(avistamientoRepository, never()).delete(any(Avistamiento.class));
             verify(avistamientoRepository, never()).deleteById(any());
+            verify(fotoService, never()).retirarDeAvistamientoModerado(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("Con foto, el avistamiento deja de apuntar a ella y se pide borrarla con su autor (C9)")
+        void laFotoDelAvistamientoSeRetira() {
+            Avistamiento avistamiento = new Avistamiento();
+            avistamiento.setId(ID_PUBLICACION);
+            avistamiento.setEstado(EstadoAvistamiento.VISIBLE);
+            avistamiento.setUsuario(usuario(8L, Rol.CIUDADANO, true));
+            avistamiento.setFotoUrl("https://fotos.test/fotos/visto.jpg");
+            when(avistamientoRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(avistamiento));
+
+            admin.retirarPublicacion(TipoContenido.AVISTAMIENTO, ID_PUBLICACION, ID_ADMIN);
+
+            assertThat(avistamiento.getFotoUrl()).isNull();
+            verify(fotoService).retirarDeAvistamientoModerado("https://fotos.test/fotos/visto.jpg", 8L, ID_PUBLICACION);
+        }
+
+        @Test
+        @DisplayName("Uno ya ELIMINADO no se vuelve a tocar: ni su foto")
+        void unoYaEliminadoNoTocaLaFoto() {
+            Avistamiento avistamiento = new Avistamiento();
+            avistamiento.setId(ID_PUBLICACION);
+            avistamiento.setEstado(EstadoAvistamiento.ELIMINADO);
+            avistamiento.setFotoUrl("https://fotos.test/fotos/visto.jpg");
+            when(avistamientoRepository.findById(ID_PUBLICACION)).thenReturn(Optional.of(avistamiento));
+
+            admin.retirarPublicacion(TipoContenido.AVISTAMIENTO, ID_PUBLICACION, ID_ADMIN);
+
+            verify(fotoService, never()).retirarDeAvistamientoModerado(any(), any(), any());
         }
 
         @Test

@@ -425,6 +425,56 @@ class FotoServiceTest {
     }
 
     @Nested
+    @DisplayName("Retirar la foto de un avistamiento moderado (C9)")
+    class RetirarDeAvistamientoModerado {
+
+        private static final Long ID_AVISTAMIENTO = 9L;
+
+        @Test
+        @DisplayName("Sin otro uso, la fila se borra ya y el archivo tras el commit")
+        void filaYaArchivoTrasCommit() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            TransactionSynchronizationManager.initSynchronization();
+
+            servicio.retirarDeAvistamientoModerado(almacen.urlDe(nombre), ID_USUARIO, ID_AVISTAMIENTO);
+
+            verify(fotoRepository).usadaFueraDelAvistamiento(nombre, ID_AVISTAMIENTO);
+            verify(fotoRepository).deleteById(nombre);
+            assertThat(almacen.abrir(nombre)).as("antes del commit sigue en disco").isPresent();
+
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+            assertThat(almacen.abrir(nombre)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("Si la usa otra cosa —otro avistamiento, la alerta, un perfil—, se conserva")
+        void usadaFuera() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(true);
+            when(fotoRepository.usadaFueraDelAvistamiento(nombre, ID_AVISTAMIENTO)).thenReturn(true);
+
+            servicio.retirarDeAvistamientoModerado(almacen.urlDe(nombre), ID_USUARIO, ID_AVISTAMIENTO);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+
+        @Test
+        @DisplayName("Una foto externa o que no es del autor no se borra, y no es un error")
+        void externaOAjena() {
+            String nombre = almacen.guardar(new byte[]{1}, "jpg");
+            when(fotoRepository.existsByNombreAndUsuarioId(nombre, ID_USUARIO)).thenReturn(false);
+
+            servicio.retirarDeAvistamientoModerado("https://example.test/perro.jpg", ID_USUARIO, ID_AVISTAMIENTO);
+            servicio.retirarDeAvistamientoModerado(almacen.urlDe(nombre), ID_USUARIO, ID_AVISTAMIENTO);
+
+            verify(fotoRepository, never()).deleteById(any());
+            assertThat(almacen.abrir(nombre)).isPresent();
+        }
+    }
+
+    @Nested
     @DisplayName("Servir una foto")
     class Servir {
 

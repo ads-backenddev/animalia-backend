@@ -138,8 +138,9 @@ public class MatchService {
      *   borra además la fila de FOTO de la alerta, que es lo último que toma;
      *   el match no toca FOTO.
      * - El AVISTAMIENTO solo lo escribe su moderación
-     *   (AdminService.retirarAvistamiento): el UPDATE de su estado y nada más,
-     *   ni la alerta, ni FOTO —su foto no se borra—, ni el contador.
+     *   (AdminService.retirarAvistamiento): el UPDATE de su estado y, al final,
+     *   el borrado de la fila de su foto en FOTO (C9), que el match no toca. Ni
+     *   la alerta ni el contador.
      * - El CONTADOR solo lo toca un match de adopción, que no bloquea alertas
      *   ni avistamientos.
      * La única espera de una alerta hacia un avistamiento es la del propio
