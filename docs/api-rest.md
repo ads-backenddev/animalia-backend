@@ -1708,10 +1708,21 @@ replicada el límite efectivo se multiplicaría por el número de réplicas. Per
 haría escribir en cada intento fallido, que es justo lo que un ataque provoca en masa; lo razonable
 llegado el caso sería Redis, y eso es una dependencia de infraestructura que este proyecto no tiene.
 
-**La dirección se toma de `getRemoteAddr()`, no de `X-Forwarded-For`.** Esa cabecera la pone el
+**La dirección se toma de `getRemoteAddr()`, no de `X-Forwarded-For`.** Esa cabecera la empieza el
 cliente y se falsifica sola: fiarse de ella convertiría el límite por IP en un adorno, porque bastaría
-con mandar una distinta en cada intento. Si esto se despliega detrás de un proxy inverso habrá que
-leerla, pero **solo** tras configurar la lista de proxies de confianza.
+con mandar una distinta en cada intento.
+
+*Nota posterior (bloque de cierre, informe ENS C1).* En producción la aplicación está detrás del
+proxy de Railway, y lo que dice este apartado dejó de ser cierto sin que nadie lo viera: el perfil
+`prod` tenía `server.forward-headers-strategy=framework`, y con ella `getRemoteAddr()` era el
+**primer** valor de `X-Forwarded-For`, el que escribe el cliente. Se comprobó en local: 35 logins
+fallidos con una cabecera distinta en cada uno daban los 35 un `401`, ninguno un `429`. Ahora es
+`native`: el `RemoteIpValve` de Tomcat recorre la cabecera de derecha a izquierda, salta los proxies
+de confianza —los rangos privados, por defecto— y se queda con la primera dirección que no lo es, la
+que añadió el proxy. Lo inventado a la izquierda no cuenta, y el `429` vuelve a llegar en el intento
+31. Queda una comprobación en Railway: que su proxy conecte desde un rango privado. Si no, Tomcat no
+leería la cabecera y todos los clientes compartirían la dirección del proxy; la lista se fija entonces
+con `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES`.
 
 ### Fuera de alcance, pendientes
 

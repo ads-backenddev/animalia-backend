@@ -57,12 +57,19 @@ import java.time.Instant;
  * ventana no se renueva mientras dure el bloqueo (ver ControlIntentosService), de
  * modo que el castigo tiene techo y no depende de cuánto insista el atacante.
  *
- * LA IP SE TOMA DE getRemoteAddr() Y NO DE X-Forwarded-For, a propósito: esa
- * cabecera la pone el cliente y se falsifica sola, así que fiarse de ella
- * convierte el límite por IP en un adorno —basta con mandar una distinta en cada
- * intento—. Si algún día esto se despliega detrás de un proxy inverso, habrá que
- * leerla, pero solo tras configurar la lista de proxies de confianza que permite
- * distinguir el salto real del inventado.
+ * LA IP ES LA DE getRemoteAddr(), y lo que valga depende del entorno. En
+ * local es la del otro extremo de la conexión. En producción, detrás del proxy
+ * de Railway, la calcula el RemoteIpValve de Tomcat (forward-headers-strategy
+ * native, application-prod.properties): recorre X-Forwarded-For de derecha a
+ * izquierda, salta solo los proxies de confianza y se queda con la primera
+ * dirección que no lo es, la que añadió el proxy. Lo que el cliente escriba a
+ * la izquierda de la cabecera no cuenta.
+ *
+ * NO SE LEE X-Forwarded-For AQUÍ, y es a propósito: esa cabecera la empieza el
+ * cliente y se falsifica sola. Con la estrategia "framework" de Spring,
+ * getRemoteAddr() era su primer valor, y mandar uno distinto en cada intento
+ * esquivaba el límite por IP (informe ENS, C1; AutenticacionDetrasDeProxyTest
+ * lo comprueba).
  */
 @Slf4j
 @Component
