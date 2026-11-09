@@ -2875,5 +2875,9 @@ Solo nombres. **Obligatoria** quiere decir que, si falta, la aplicación no arra
 
 **Planificado, no construido.** El stack del proyecto preveía un panel web con Thymeleaf y Bootstrap 5
 para protectoras y administradores; no tiene ni una plantilla. Lo que sí existe son sus endpoints REST,
-`/api/protectoras/panel` (§9) y `/api/admin` (§11), que el panel —o la app— consumirán. La dependencia
-`spring-boot-starter-thymeleaf` sigue en el `pom.xml`.
+`/api/protectoras/panel` (§9) y `/api/admin` (§11), que el panel —o la app— consumirán.
+
+**La dependencia `spring-boot-starter-thymeleaf` se quitó del `pom.xml`**, porque nada la usaba: no
+había ni una plantilla, y el correo de recuperación tampoco la necesita, porque compone su HTML con un
+bloque de texto y escapa el nombre del usuario con `HtmlUtils` de Spring (*Correo*, arriba). Volverá,
+con su justificación, el día que se construya el panel.

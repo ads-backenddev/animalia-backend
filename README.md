@@ -20,7 +20,7 @@ adopción, con filtros por especie, tamaño y zona, y reciben valoraciones de lo
 | Seguridad | Spring Security + JWT (stateless), contraseñas con BCrypt |
 | Tiempo real | WebSockets con STOMP (mapa, chat, notificaciones) |
 | Correo | SMTP (Mailpit) fuera de producción; API HTTP de Resend en producción (`docs/api-rest.md` §23) |
-| Panel web de administración | Thymeleaf + Bootstrap 5: **planificado, no construido**. Hoy los paneles de protectora y de administración son endpoints REST (`/api/protectoras/panel`, `/api/admin`) |
+| Panel web de administración | Thymeleaf + Bootstrap 5: **planificado, no construido**. Hoy los paneles de protectora y de administración son endpoints REST (`/api/protectoras/panel`, `/api/admin`). Thymeleaf no está en el `pom.xml`: nada lo usaba, tampoco el correo (§23) |
 | Infraestructura | Docker + Docker Compose |
 
 ## Arquitectura

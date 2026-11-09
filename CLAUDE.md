@@ -14,7 +14,9 @@ con protectoras verificadas.
 - WebSockets con STOMP (mapa en tiempo real, chat, notificaciones)
 - Thymeleaf + Bootstrap 5 (panel web de protectora/administrador): planificado,
   no construido. Hoy esos paneles son endpoints REST (/api/protectoras/panel,
-  /api/admin); la dependencia sigue en el pom.xml.
+  /api/admin). La dependencia de Thymeleaf se quitó del pom.xml porque nada la
+  usaba —tampoco el correo, que compone su HTML sin plantillas—; vuelve con
+  su justificación el día que se construya el panel.
 - Docker + Docker Compose para desarrollo local
 
 ## Arquitectura — por capas, estricta
