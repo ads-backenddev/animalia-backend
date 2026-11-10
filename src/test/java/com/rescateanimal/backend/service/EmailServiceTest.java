@@ -46,6 +46,32 @@ class EmailServiceTest {
                 .doesNotContain("<b>Ana</b>");
     }
 
+    /*
+     * El caso peligroso no es la negrita, sino un enlace: sin escapar, quien se
+     * registrara con este nombre recibiría —o haría recibir a otro— un correo
+     * legítimo de la plataforma con un enlace suyo dentro.
+     */
+    @Test
+    @DisplayName("Un nombre con <b> y <a href> llega escapado al HTML: el único enlace es el de restablecer")
+    void unNombreConEnlaceNoLlegaComoEnlace() {
+        String nombre = "<b>Ana</b> <a href=\"https://suplantacion.example/\">pulsa aqui</a>";
+
+        new EmailService(emailSender, URL).enviarEnlaceRecuperacion(DESTINATARIO, nombre, "t");
+
+        ArgumentCaptor<CorreoSaliente> correo = ArgumentCaptor.forClass(CorreoSaliente.class);
+        verify(emailSender).enviar(correo.capture());
+        String html = correo.getValue().html();
+        assertThat(html)
+                .contains("Hola &lt;b&gt;Ana&lt;/b&gt; &lt;a href=&quot;https://suplantacion.example/&quot;&gt;"
+                        + "pulsa aqui&lt;/a&gt;:")
+                .doesNotContain("<b>")
+                .doesNotContain("<a href=\"https://suplantacion.example/\">");
+        assertThat(html.split("<a ", -1)).as("enlaces en el HTML").hasSize(2);
+        assertThat(html).contains("<a href=\"" + URL + "?token=t\">");
+        // En el texto plano no hay nada que interpretar: va tal cual.
+        assertThat(correo.getValue().texto()).contains("Hola " + nombre + ":");
+    }
+
     @Test
     @DisplayName("Si el proveedor no lo acepta, no sale ninguna excepción")
     void unRechazoNoSePropaga() {
